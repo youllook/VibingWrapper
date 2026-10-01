@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>VibingWrapper — 螢幕工具</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; user-select: none; }
+  canvas { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; }
+  body.color { cursor: none; }
+  body.region { cursor: crosshair; }
+</style>
+</head>
+<body tabindex="0">
+<canvas id="shot"></canvas>
+<canvas id="ui"></canvas>
+<script>
+/* Screen tools overlay (2026-09-29). Shows a frozen screenshot of the display and lets the user
+ * pick a colour (mode "color", Ctrl+Q) or drag a rectangle (mode "region", Ctrl+R).
+ * All drawing is in PHYSICAL pixels (screenshot pixels); mouse CSS px × scale → physical. */
+const shotC = document.getElementById('shot'), uiC = document.getElementById('ui');
+const sctx = shotC.getContext('2d'), u = uiC.getContext('2d');
+let job = null, px = null, W = 0, H = 0, S = 1;
+let pos = { x: 0, y: 0 }, drag = null, sel = null, toast = null, locked = false, raf = 0;
+
+const FONT = 'Microsoft JhengHei, system-ui, sans-serif';
+const hex2 = n => n.toString(16).padStart(2, '0');
+function pixel(x, y) {
+  x = Math.max(0, Math.min(W - 1, x)); y = Math.max(0, Math.min(H - 1, y));
+  const i = (y * W + x) * 4;
+  return [px[i], px[i + 1], px[i + 2]];
+}
+const hexOf = ([r, g, b]) => ('#' + hex2(r) + hex2(g) + hex2(b)).toUpperCase();
+
+window.capAPI.onStart(j => {
+  job = j; W = j.width; H = j.height; S = j.scale;
+  // BGRA → RGBA
+  const src = new Uint8Array(j.pixels.buffer || j.pixels, j.pixels.byteOffset || 0, W * H * 4);
+  px = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < px.length; i += 4) { px[i] = src[i + 2]; px[i + 1] = src[i + 1]; px[i + 2] = src[i]; px[i + 3] = 255; }
+  for (const c of [shotC, uiC]) { c.width = W; c.height = H; }
+  sctx.putImageData(new ImageData(px, W, H), 0, 0);
+  document.body.className = j.mode;
+  pos = { x: Math.round(j.cursor.x * S), y: Math.round(j.cursor.y * S) };
+  drag = sel = toast = null; locked = false;
+  draw();
+  setTimeout(() => { window.capAPI.ready(); document.body.focus(); }, 30);   // timer, not rAF: window is still hidden
+});
+
+/* ------------------------------ drawing ------------------------------ */
+function kick() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); }
+
+function draw() {
+  u.clearRect(0, 0, W, H);
+  if (!job) return;
+  if (job.mode === 'region') drawRegion();
+  if (job.mode === 'color' && !toast) drawReticle(pos.x, pos.y);
+  if (!toast) drawLoupe(pos.x, pos.y);
+  if (toast) drawToast();
+}
+
+function drawRegion() {
+  const r = sel;
+  u.fillStyle = 'rgba(0,0,0,.35)';
+  if (r) {
+    u.fillRect(0, 0, W, r.y); u.fillRect(0, r.y + r.height, W, H - r.y - r.height);
+    u.fillRect(0, r.y, r.x, r.height); u.fillRect(r.x + r.width, r.y, W - r.x - r.width, r.height);
+    u.strokeStyle = '#6fb8ff'; u.lineWidth = Math.max(1, S);
+    u.strokeRect(r.x + .5, r.y + .5, r.width - 1, r.height - 1);
+    label(`${r.width} × ${r.height}`, r.x, r.y > 30 * S ? r.y - 26 * S : r.y + 4 * S);
+  } else {
+    u.fillRect(0, 0, W, H);
+  }
+  if (!drag && !toast) {
+    // full-screen crosshair (dark outline + light core so it shows on any background)
+    for (const [c, w] of [['rgba(0,0,0,.6)', 3], ['rgba(255,255,255,.9)', 1]]) {
+      u.strokeStyle = c; u.lineWidth = w * S; u.beginPath();
+      u.moveTo(0, pos.y + .5); u.lineTo(W, pos.y + .5); u.moveTo(pos.x + .5, 0); u.lineTo(pos.x + .5, H); u.stroke();
+    }
+  }
+}
+
+function label(text, x, y) {
+  u.font = `${12 * S}px ${FONT}`;
+  const w = u.measureText(text).width + 12 * S, h = 20 * S;
+  x = Math.max(0, Math.min(W - w, x)); y = Math.max(0, Math.min(H - h, y));
+  u.fillStyle = 'rgba(10,16,34,.85)'; u.fillRect(x, y, w, h);
+  u.fillStyle = '#e6eeff'; u.textBaseline = 'middle'; u.fillText(text, x + 6 * S, y + h / 2);
+}
+
+// Colour mode hides the cursor, so mark the picked pixel: four short arms with a hollow centre
+// (the pixel itself and its neighbours stay visible).
+function drawReticle(cx, cy) {
+  const g = 4 * S, a = 11 * S, x = cx + .5, y = cy + .5;
+  for (const [c, w] of [['rgba(0,0,0,.65)', 3], ['rgba(255,255,255,.95)', 1]]) {
+    u.strokeStyle = c; u.lineWidth = w * S; u.beginPath();
+    u.moveTo(x - a, y); u.lineTo(x - g, y); u.moveTo(x + g, y); u.lineTo(x + a, y);
+    u.moveTo(x, y - a); u.lineTo(x, y - g); u.moveTo(x, y + g); u.lineTo(x, y + a);
+    u.stroke();
+  }
+}
+
+// 12× magnifier of an 11×11 pixel patch + colour readout; kept well clear of the picked point
+// (user: it blocked the view) and flipped to the other side near screen edges.
+const N = 11, Z = 12;
+function drawLoupe(cx, cy) {
+  const L = N * Z, pad = 36 * S, infoH = 44 * S;
+  let x = cx + pad, y = cy + pad;
+  if (x + L > W) x = cx - pad - L;
+  if (y + L + infoH > H) y = cy - pad - L - infoH;
+  u.save();
+  u.fillStyle = 'rgba(10,16,34,.9)'; u.fillRect(x - 2, y - 2, L + 4, L + infoH + 4);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const c = pixel(cx - 5 + i, cy - 5 + j);
+    u.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; u.fillRect(x + i * Z, y + j * Z, Z, Z);
+  }
+  u.strokeStyle = 'rgba(255,255,255,.12)'; u.lineWidth = 1;
+  for (let k = 1; k < N; k++) {
+    u.beginPath(); u.moveTo(x + k * Z + .5, y); u.lineTo(x + k * Z + .5, y + L);
+    u.moveTo(x, y + k * Z + .5); u.lineTo(x + L, y + k * Z + .5); u.stroke();
+  }
+  u.strokeStyle = '#000'; u.lineWidth = 3; u.strokeRect(x + 5 * Z, y + 5 * Z, Z, Z);
+  u.strokeStyle = '#fff'; u.lineWidth = 1; u.strokeRect(x + 5 * Z + .5, y + 5 * Z + .5, Z - 1, Z - 1);
+  const c = pixel(cx, cy), hx = hexOf(c);
+  u.fillStyle = hx; u.fillRect(x + 6 * S, y + L + 8 * S, 28 * S, 28 * S);
+  u.strokeStyle = 'rgba(255,255,255,.5)'; u.strokeRect(x + 6 * S + .5, y + L + 8 * S + .5, 28 * S - 1, 28 * S - 1);
+  u.fillStyle = '#e6eeff'; u.textBaseline = 'alphabetic';
+  u.font = `600 ${13 * S}px Consolas, monospace`; u.fillText(hx, x + 42 * S, y + L + 20 * S);
+  u.font = `${11 * S}px Consolas, monospace`; u.fillStyle = '#9fb2d8';
+  u.fillText(job.mode === 'region' ? `${cx}, ${cy}` : `${c[0]}, ${c[1]}, ${c[2]}`, x + 42 * S, y + L + 36 * S);
+  u.restore();
+}
+
+function drawToast() {
+  u.font = `${15 * S}px ${FONT}`;
+  const w = u.measureText(toast).width + 32 * S, h = 38 * S, x = (W - w) / 2, y = H * .42;
+  u.fillStyle = 'rgba(10,16,34,.9)'; u.fillRect(x, y, w, h);
+  u.fillStyle = '#e6eeff'; u.textBaseline = 'middle'; u.fillText(toast, x + 16 * S, y + h / 2);
+}
+
+/* ------------------------------ actions ------------------------------ */
+function done(msg) {
+  locked = true;
+  if (!msg) return window.capAPI.done();
+  toast = msg; draw();
+  setTimeout(() => { job = null; u.clearRect(0, 0, W, H); sctx.clearRect(0, 0, W, H); window.capAPI.done(); }, 450);
+}
+function pickColor() {
+  const hx = hexOf(pixel(pos.x, pos.y));
+  window.capAPI.color(hx);
+  done(`已複製 ${hx}`);
+}
+function rectOf(a, b) {
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+  return { x, y, width: Math.abs(a.x - b.x) + 1, height: Math.abs(a.y - b.y) + 1 };
+}
+
+const toPhys = e => ({ x: Math.max(0, Math.min(W - 1, Math.floor(e.clientX * S))), y: Math.max(0, Math.min(H - 1, Math.floor(e.clientY * S))) });
+addEventListener('mousemove', e => {
+  if (!job || locked) return;
+  pos = toPhys(e);
+  if (drag) sel = rectOf(drag, pos);
+  kick();
+});
+addEventListener('mousedown', e => {
+  if (!job || locked) return;
+  if (e.button === 2) return done();
+  if (e.button !== 0) return;
+  pos = toPhys(e);
+  if (job.mode === 'color') return pickColor();
+  drag = pos; sel = rectOf(drag, pos); kick();
+});
+addEventListener('mouseup', e => {
+  if (!job || locked || e.button !== 0 || !drag) return;
+  const r = rectOf(drag, toPhys(e)); drag = null;
+  if (r.width < 3 || r.height < 3) { sel = null; return kick(); }   // a click, not a drag
+  window.capAPI.region(r);
+  sel = r; done(`已複製並存檔 ${r.width} × ${r.height}`);
+});
+addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keydown', e => {
+  if (!job || locked) return;
+  const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (e.key === 'Escape') return done();
+  if (step) {
+    e.preventDefault();
+    pos = { x: Math.max(0, Math.min(W - 1, pos.x + step[0])), y: Math.max(0, Math.min(H - 1, pos.y + step[1])) };
+    if (drag) sel = rectOf(drag, pos);
+    return kick();
+  }
+  if (e.key === 'Enter' && job.mode === 'color') pickColor();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+/* AI state icon loops. The widget already sets transform-box/origin on .icon g. */
+.live.s-overcast .ai-overcast-orbit {
+  animation: ai-orbit 6s linear infinite;
+}
+.live.s-overcast .ai-overcast-core {
+  animation: ai-think 2.4s ease-in-out infinite;
+}
+.live.s-storm .ai-storm-bolt {
+  animation: ai-charge 1.15s ease-in-out infinite;
+}
+.live.s-storm .ai-storm-trace path {
+  stroke-dasharray: .16 .84;
+  animation: ai-trace .9s linear infinite;
+}
+.live.s-storm .ai-storm-node-a {
+  animation: ai-node 1.15s ease-in-out infinite;
+}
+.live.s-storm .ai-storm-node-b {
+  animation: ai-node 1.15s ease-in-out -.58s infinite;
+}
+.live.s-clearing .ai-clearing-streams {
+  opacity: .45;
+}
+.live.s-clearing .ai-clearing-flow-a path,
+.live.s-clearing .ai-clearing-flow-b path,
+.live.s-clearing .ai-clearing-flow-c path {
+  stroke-dasharray: .16 .84;
+  animation: ai-resolve 2.7s ease-in-out infinite;
+}
+.live.s-clearing .ai-clearing-flow-b path { animation-delay: -.9s; }
+.live.s-clearing .ai-clearing-flow-c path { animation-delay: -1.8s; }
+.live.s-clearing .ai-clearing-core {
+  animation: ai-arrive 2.7s ease-in-out infinite;
+}
+@keyframes ai-orbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes ai-think {
+  50% { transform: scale(.82) rotate(12deg); opacity: .68; }
+}
+@keyframes ai-charge {
+  50% { transform: scale(1.035); opacity: .72; }
+}
+@keyframes ai-trace {
+  to { stroke-dashoffset: -1; }
+}
+@keyframes ai-node {
+  50% { transform: scale(.66); opacity: .55; }
+}
+@keyframes ai-resolve {
+  0% { stroke-dashoffset: 1; opacity: 0; }
+  35% { opacity: .95; }
+  75%, 100% { stroke-dashoffset: 0; opacity: 0; }
+}
+@keyframes ai-arrive {
+  0%, 100% { transform: scale(.88); opacity: .62; }
+  45%, 70% { transform: scale(1); opacity: 1; }
+}

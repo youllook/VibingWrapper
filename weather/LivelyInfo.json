@@ -1,0 +1,12 @@
+{
+  "AppVersion": "1.0.0.0",
+  "Title": "即時天氣",
+  "Desc": "WebGL 天氣桌布：clear / overcast / storm / clearing，讀同目錄 state.json，鍵盤 1–4 手動切換",
+  "Author": "VibingWrapper",
+  "License": "",
+  "Contact": "",
+  "Type": 1,
+  "FileName": "index.html",
+  "Arguments": null,
+  "IsAbsolutePath": false
+}

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>動態桌布 — 調參數</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --ink: #e6eeff; --sub: #8ea3cc; --line: rgba(160,190,255,.22); --acc: #6fb8ff; --bg: #0e1630; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #070b1a; color: var(--ink); font: 13px/1.5 "Microsoft JhengHei", system-ui, sans-serif; }
+  body { display: flex; }
+  #view { flex: 1; min-width: 0; border: 0; height: 100%; background: #1b2230; }
+  aside { width: 340px; flex: none; height: 100%; overflow-y: auto; background: var(--bg); border-left: 1px solid var(--line); padding: 14px 16px 24px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  h2 { font-size: 12px; font-weight: 600; color: var(--sub); margin: 18px 0 8px; letter-spacing: .04em; }
+  .sub { color: var(--sub); font-size: 12px; }
+  button, select { font: inherit; color: var(--ink); background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
+  button:hover, select:hover { border-color: var(--acc); }
+  button.on { background: rgba(111,184,255,.22); border-color: var(--acc); }
+  .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  .row label { width: 110px; flex: none; color: var(--sub); font-family: Consolas, monospace; font-size: 12px; }
+  .row input[type=range] { flex: 1; accent-color: var(--acc); }
+  .row output { width: 38px; text-align: right; font-family: Consolas, monospace; font-size: 12px; }
+  .states { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .bar { height: 6px; background: rgba(255,255,255,.08); border-radius: 3px; flex: 1; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--acc); width: 0; }
+  .chk { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
+  textarea { width: 100%; height: 150px; font: 11px/1.45 Consolas, monospace; color: var(--ink); background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 7px; padding: 8px; resize: vertical; }
+  .hint { color: var(--sub); font-size: 11px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<iframe id="view" title="桌布預覽"></iframe>
+<aside>
+  <h1>動態桌布 · 調參數</h1>
+  <div class="row"><label>樣式</label><select id="style">
+    <option value="index.html">天氣</option><option value="index.html?sea=1">天氣＋海</option>
+    <option value="ocean.html">海（立體）</option>
+  </select></div>
+  <div class="sub" id="now">載入中…</div>
+
+  <h2>切換狀態（走真的狀態機：防抖＋轉場）</h2>
+  <div class="states" id="states"></div>
+
+  <h2>目前實際參數</h2>
+  <div id="live"></div>
+
+  <h2>編輯狀態目標值</h2>
+  <div class="row"><label>狀態</label><select id="editState"></select></div>
+  <div id="targets"></div>
+  <div class="hint">改的若是目前狀態，會從當下值平滑轉過去。</div>
+
+  <h2>手動覆寫（凍住參數，直接看畫面）</h2>
+  <label class="chk"><input type="checkbox" id="ovOn"> 開啟覆寫</label>
+  <div id="override"></div>
+
+  <div id="dayBox">
+  <h2>日夜（台灣真實日出日落）</h2>
+  <label class="chk"><input type="checkbox" id="realTime" checked> 跟隨現在時間</label>
+  <div class="row"><label>時間</label><input type="range" id="clock" min="0" max="24" step="0.05"><output id="clockOut"></output></div>
+  <div class="sub" id="sunInfo"></div>
+  </div>
+
+  <div id="moodBox">
+  <h2>這場雨（每次開始下雨隨機）</h2>
+  <div class="sub" id="moodInfo"></div>
+  <button id="reroll">重擲強度＋風向</button>
+  </div>
+
+  <h2>其他</h2>
+  <div class="row"><label>完整轉場秒數</label><input type="range" id="fullT" min="0.5" max="12" step="0.5"><output id="fullTOut"></output></div>
+  <label class="chk"><input type="checkbox" id="poll"> 讀取 state.json（關掉就不會被 Claude 的 hook 蓋過）</label>
+  <div class="row"><span id="strikeBox"><button id="strike">打雷一次</button> <button id="hold">定格電光 3 秒</button></span><button id="dbg">除錯 HUD</button></div>
+
+  <h2>匯出（調好貼給賈維斯寫回桌布）</h2>
+  <textarea id="out" readonly></textarea>
+  <div class="row"><button id="copy">複製</button><span class="sub" id="copied"></span></div>
+</aside>
+
+<script>
+const view = document.getElementById('view');
+const $ = id => document.getElementById(id);
+const LABEL = { cloudDensity: '雲量', cloudDarkness: '雲色深淺', rainAmount: '雨量', lightningRate: '閃電頻率/秒', skyBrightness: '天空亮度', sunRays: '陽光光束',
+  seaChop: '海面粗糙', beacon: '等你星', waveHeight: '浪高', choppiness: '浪尖銳度', windSpeed: '風速', foam: '白浪', cloudCover: '雲量', sunGlitter: '陽光碎光' };
+const STATE_NAMES = { clear: '晴', overcast: '陰', storm: '雷雨', clearing: '轉晴', waiting: '等你',
+  idle: '閒置', working: '思考', busy: '執行', output: '收尾', error: '錯誤' };
+// 4 styles (2026-09-30): weather / weather + sea / ocean (Fable) / 星網 (Fable). Each page exposes its own
+// test API (window.weather / ocean / network); sections a page lacks (clock, rain mood, lightning) are hidden.
+let W = null;   // the wallpaper page's test API
+let gen = 0;    // bumps on every page switch so the old tick loop stops
+const styleSel = document.getElementById('style');
+{ const q = new URLSearchParams(location.search).get('style'); if (q && [...styleSel.options].some(o => o.value === q)) styleSel.value = q; }
+styleSel.onchange = () => { W = null; view.src = styleSel.value; };
+view.src = styleSel.value;
+
+function slider(parent, key, [lo, hi], value, onInput) {
+  const row = document.createElement('div'); row.className = 'row';
+  const lab = document.createElement('label'); lab.textContent = key; lab.title = LABEL[key] || key;
+  const inp = document.createElement('input'); inp.type = 'range'; inp.min = lo; inp.max = hi; inp.step = (hi - lo) / 100; inp.value = value;
+  const out = document.createElement('output'); out.textContent = (+value).toFixed(2);
+  inp.oninput = () => { out.textContent = (+inp.value).toFixed(2); onInput(+inp.value); };
+  row.append(lab, inp, out); parent.appendChild(row);
+  return inp;
+}
+
+function exportText() {
+  const lines = Object.entries(W.STATES).map(([name, t]) =>
+    `  ${(name + ':').padEnd(9)} { ${Object.keys(W.PARAMS).map(p => `${p}: ${t[p].toFixed(2)}`).join(', ')} },`);
+  $('out').value = `const STATES = {\n${lines.join('\n')}\n};\n// FULL_TRANSITION = ${W.CONFIG.fullTransition} s`;
+}
+
+function renderTargets() {
+  const s = $('editState').value, box = $('targets'); box.innerHTML = '';
+  for (const p in W.PARAMS) slider(box, p, W.PARAMS[p], W.STATES[s][p], v => {
+    W.STATES[s][p] = v;
+    if (W.state === s) W.applyState(s);            // re-run the transition from the current values
+    exportText();
+  });
+}
+
+function init() {
+  const cw = view.contentWindow;
+  W = cw.weather || cw.ocean || cw.network;
+  if (!W) return setTimeout(init, 100);
+  const my = ++gen;
+  for (const id of ['states', 'live', 'editState', 'targets', 'override']) $(id).innerHTML = '';
+  $('ovOn').checked = false;
+  $('dayBox').hidden = !W.sky;
+  $('moodBox').hidden = !W.rainMood;
+  $('strikeBox').hidden = !W.strike;
+
+  // state buttons
+  const box = $('states');
+  for (const name of Object.keys(W.STATES)) {
+    const b = document.createElement('button'); b.textContent = STATE_NAMES[name] || name; b.title = name; b.dataset.s = name;
+    b.onclick = () => W.requestState(name);
+    box.appendChild(b);
+  }
+  // live bars
+  const live = $('live'), bars = {};
+  for (const p in W.PARAMS) {
+    const row = document.createElement('div'); row.className = 'row';
+    const lab = document.createElement('label'); lab.textContent = p; lab.title = LABEL[p];
+    const bar = document.createElement('div'); bar.className = 'bar'; const fill = document.createElement('i'); bar.appendChild(fill);
+    const out = document.createElement('output');
+    row.append(lab, bar, out); live.appendChild(row); bars[p] = [fill, out];
+  }
+  // target editor
+  for (const name of Object.keys(W.STATES)) { const o = document.createElement('option'); o.value = name; o.textContent = (STATE_NAMES[name] || name) + '  ' + name; $('editState').appendChild(o); }
+  $('editState').onchange = renderTargets;
+  renderTargets();
+  // override
+  const ov = {}, ovBox = $('override');
+  for (const p in W.PARAMS) { ov[p] = W.current[p]; slider(ovBox, p, W.PARAMS[p], ov[p], v => { ov[p] = v; if ($('ovOn').checked) W.setOverride({ ...ov }); }); }
+  $('ovOn').onchange = e => W.setOverride(e.target.checked ? { ...ov } : null);
+  // misc
+  $('fullT').value = W.CONFIG.fullTransition;   // (each page keeps its own default) $('fullTOut').textContent = W.CONFIG.fullTransition + 's';
+  $('fullT').oninput = e => { W.CONFIG.fullTransition = +e.target.value; $('fullTOut').textContent = e.target.value + 's'; exportText(); };
+  W.CONFIG.polling = false;   // demo default: don't let Claude's hooks overwrite what you're tuning
+  $('poll').checked = W.CONFIG.polling;
+  $('poll').onchange = e => { W.CONFIG.polling = e.target.checked; };
+  $('strike').onclick = () => W.strike && W.strike();
+  $('hold').onclick = () => W.strike && W.strike(3);
+  $('dbg').onclick = () => view.contentDocument.body.classList.toggle('debug');
+  $('copy').onclick = async () => { try { await navigator.clipboard.writeText($('out').value); $('copied').textContent = '已複製'; } catch { $('out').select(); document.execCommand('copy'); $('copied').textContent = '已複製'; } setTimeout(() => $('copied').textContent = '', 1500); };
+  exportText();
+
+  // day / night
+  const fmtH = h => String(Math.floor(h) % 24).padStart(2, '0') + ':' + String(Math.round((h % 1) * 60) % 60).padStart(2, '0');
+  const nowH = () => { const n = new Date(); return n.getHours() + n.getMinutes() / 60; };
+  if ($('realTime').checked) { $('clock').value = nowH(); $('clockOut').textContent = fmtH(nowH()); }
+  else W.CONFIG.clockHours = +$('clock').value;             // keep the chosen time when switching styles
+  $('clock').oninput = e => { $('realTime').checked = false; W.CONFIG.clockHours = +e.target.value; $('clockOut').textContent = fmtH(+e.target.value); };
+  $('realTime').onchange = e => { W.CONFIG.clockHours = e.target.checked ? null : +$('clock').value; };
+
+  $('reroll').onclick = () => { if (W.rollRainMood) { W.rollRainMood(); W.applyState(W.state); } };
+
+  // live readout
+  (function tick() {
+    if (my !== gen || !W) return;
+    const c = W.current;
+    for (const p in bars) { const [lo, hi] = W.PARAMS[p]; bars[p][0].style.width = ((c[p] - lo) / (hi - lo) * 100).toFixed(1) + '%'; bars[p][1].textContent = c[p].toFixed(2); }
+    for (const b of box.children) b.classList.toggle('on', b.dataset.s === W.state);
+    if (W.sky) {
+      const sk = W.sky();
+      $('sunInfo').textContent = `太陽仰角 ${sk.alt.toFixed(1)}°　夜 ${sk.night.toFixed(2)}　暮光 ${sk.twilight.toFixed(2)}`;
+      if ($('realTime').checked) { $('clock').value = nowH(); $('clockOut').textContent = fmtH(nowH()); }
+    }
+    if (W.rainMood) $('moodInfo').textContent = `強度 ×${W.rainMood.scale.toFixed(2)}　風向 ${W.rainMood.wind.toFixed(2)}（− 往左、+ 往右）`;
+    $('now').textContent = `狀態：${STATE_NAMES[W.state] || W.state}（${W.state}）${$('ovOn').checked ? '（覆寫中）' : ''}`;
+    requestAnimationFrame(tick);
+  })();
+}
+view.addEventListener('load', init);
+</script>
+</body>
+</html>

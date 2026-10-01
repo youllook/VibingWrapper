@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>VibingWrapper</title>
+<!-- 2026-10-01: the pet is now just this small strip — AI state + settings, top-right of the screen.
+     The ice / star-chart category map (比例生活) is archived in index.html; main.js PAGE switches back. -->
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none;
+    font-family: "Microsoft JhengHei UI", "Segoe UI", sans-serif; }
+  #bar { position: fixed; top: 8px; right: 8px; display: flex; align-items: flex-start; gap: 6px; }
+
+  /* ---- AI state: line icon + caption (icons by Codex, design/ai-icons/) ---- */
+  /* the AI icon is the centrepiece now: big icon, caption under it */
+  #ai { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 6px;
+    color: #e6eeff; font-size: 13px; letter-spacing: .1em; }
+  #ai svg { width: 64px; height: 64px; overflow: visible; }
+  #aiCap { paint-order: stroke; text-shadow: 0 0 4px rgba(8,14,40,.9), 0 0 2px rgba(8,14,40,.9); }
+  .icon { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .icon .halo { stroke: rgba(8,14,40,.55); stroke-width: 3.2px; }
+  .icon .ink  { stroke: #e6eeff; stroke-width: 1.3px; }
+  .icon g { transform-box: fill-box; transform-origin: center; }
+  .icon path, .icon circle { stroke-dasharray: 1; }
+  .icon.enter path, .icon.enter circle { animation: ic-draw .8s ease-out both; }
+  @keyframes ic-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+  .s-overcast .ai-overcast-orbit { animation: ai-orbit 6s linear infinite; }
+  .s-overcast .ai-overcast-core  { animation: ai-think 2.4s ease-in-out infinite; }
+  .s-storm .ai-storm-bolt        { animation: ai-charge 1.15s ease-in-out infinite; }
+  .s-storm .ai-storm-trace path  { stroke-dasharray: .16 .84; animation: ai-trace .9s linear infinite; }
+  .s-storm .ai-storm-node-a      { animation: ai-node 1.15s ease-in-out infinite; }
+  .s-storm .ai-storm-node-b      { animation: ai-node 1.15s ease-in-out -.58s infinite; }
+  .s-clearing .ai-clearing-streams { opacity: .45; }
+  .s-clearing .ai-clearing-flow-a path, .s-clearing .ai-clearing-flow-b path, .s-clearing .ai-clearing-flow-c path
+                                 { stroke-dasharray: .16 .84; animation: ai-resolve 2.7s ease-in-out infinite; }
+  .s-clearing .ai-clearing-flow-b path { animation-delay: -.9s; }
+  .s-clearing .ai-clearing-flow-c path { animation-delay: -1.8s; }
+  .s-clearing .ai-clearing-core  { animation: ai-arrive 2.7s ease-in-out infinite; }
+  .s-waiting .ai-waiting-star    { transform-origin: 12px 12px; animation: ai-wait-star 2.9s ease-in-out infinite; }
+  .s-waiting .ai-waiting-ring    { transform-origin: 12px 12px; animation: ai-wait-ring 2.9s ease-out infinite; }
+  @keyframes ai-orbit   { to { transform: rotate(360deg); } }
+  @keyframes ai-think   { 50% { transform: scale(.82) rotate(12deg); opacity: .68; } }
+  @keyframes ai-charge  { 50% { transform: scale(1.035); opacity: .72; } }
+  @keyframes ai-trace   { to { stroke-dashoffset: -1; } }
+  @keyframes ai-node    { 50% { transform: scale(.66); opacity: .55; } }
+  @keyframes ai-resolve { 0% { stroke-dashoffset: 1; opacity: 0; } 35% { opacity: .95; } 75%, 100% { stroke-dashoffset: 0; opacity: 0; } }
+  @keyframes ai-arrive  { 0%, 100% { transform: scale(.88); opacity: .62; } 45%, 70% { transform: scale(1); opacity: 1; } }
+  @keyframes ai-wait-star { 0%, 100% { opacity: .55; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.06); } }
+  @keyframes ai-wait-ring { 0% { opacity: 0; transform: scale(.45); } 35% { opacity: .7; } 100% { opacity: 0; transform: scale(1.05); } }
+
+  /* ---- Settings: gear + data-driven menu (SETTINGS below) ---- */
+  #settings { position: relative; font-size: 13px; color: #17324d; }
+  #gear { width: 26px; height: 26px; padding: 4px; border: 0; border-radius: 7px; cursor: pointer;
+    background: rgba(8,14,40,.28); color: #e6eeff; opacity: .55; transition: opacity .2s, background .2s; }
+  #gear:hover, #settings.open #gear { opacity: 1; background: rgba(255,255,255,.75); color: #17324d; }
+  #gear svg { width: 18px; height: 18px; display: block; }
+  #menu { display: none; position: absolute; top: 32px; right: 0; min-width: 176px; padding: 6px;
+    background: rgba(240,247,255,.95); border: 1px solid rgba(255,255,255,.9); border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(10,30,60,.25); }
+  #settings.open #menu { display: block; }
+  #menu .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+    padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: inherit;
+    font: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
+  #menu .item:hover { background: rgba(120,170,220,.2); }
+  #menu .item .val { color: #4a6a88; font-size: 12px; }
+  #menu .sep { height: 1px; margin: 4px 6px; background: rgba(23,50,77,.12); }
+  /* 一鍵隱藏: only a faint gear is left (the way back) */
+  body.stealth #ai { display: none; }
+  body.stealth #gear { opacity: .35; }
+</style>
+</head>
+<body>
+<div id="bar" class="ui-hit">
+  <div id="ai" title="Claude 狀態">
+    <svg viewBox="0 0 24 24"><g id="aiIcon" class="icon"><g class="halo"></g><g class="ink"></g></g></svg>
+    <span id="aiCap">AI</span>
+  </div>
+  <div id="settings">
+    <button id="gear" title="設定" aria-label="設定">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.3 4.3c.4-1.8 3-1.8 3.4 0a1.7 1.7 0 0 0 2.6 1.1c1.5-.9 3.3.8 2.4 2.4a1.7 1.7 0 0 0 1 2.5c1.8.4 1.8 3 0 3.4a1.7 1.7 0 0 0-1 2.6c.9 1.5-.9 3.3-2.4 2.4a1.7 1.7 0 0 0-2.6 1c-.4 1.8-3 1.8-3.4 0a1.7 1.7 0 0 0-2.5-1c-1.6.9-3.3-.9-2.4-2.4a1.7 1.7 0 0 0-1.1-2.6c-1.8-.4-1.8-3 0-3.4a1.7 1.7 0 0 0 1.1-2.5c-.9-1.6.8-3.3 2.4-2.4a1.7 1.7 0 0 0 2.5-1.1z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+    </button>
+    <div id="menu" role="menu"></div>
+  </div>
+</div>
+
+<script>
+const IS_APP = !!window.petAPI;
+
+/* ---- AI state (Claude hooks → weather state). 'clear' = idle ---- */
+const AI_ICONS = {
+  clear: '<g class="ai-clear-core"><path pathLength="1" d="M12 4.5c.7 4.3 3.2 6.8 7.5 7.5-4.3.7-6.8 3.2-7.5 7.5-.7-4.3-3.2-6.8-7.5-7.5 4.3-.7 6.8-3.2 7.5-7.5z"/></g><g class="ai-clear-stars"><path pathLength="1" d="M19 2.5v4M17 4.5h4M5 17.5v3M3.5 19h3"/></g>',
+  overcast: '<g class="ai-overcast-orbit"><path pathLength="1" d="M3.5 12c0-3.2 3.8-5.7 8.5-5.7s8.5 2.5 8.5 5.7-3.8 5.7-8.5 5.7S3.5 15.2 3.5 12z"/><circle pathLength="1" cx="3.5" cy="12" r="1.15"/><circle pathLength="1" cx="20.5" cy="12" r="1.15"/></g><g class="ai-overcast-core"><path pathLength="1" d="M12 8c.4 2.3 1.7 3.6 4 4-2.3.4-3.6 1.7-4 4-.4-2.3-1.7-3.6-4-4 2.3-.4 3.6-1.7 4-4z"/></g>',
+  storm: '<g class="ai-storm-links"><path pathLength="1" d="M5.8 7.6 9 10M15.4 14l2.8 2.3"/></g><g class="ai-storm-node-a"><circle pathLength="1" cx="5" cy="7" r="1.1"/></g><g class="ai-storm-node-b"><circle pathLength="1" cx="19" cy="17" r="1.1"/></g><g class="ai-storm-bolt"><path pathLength="1" d="M13.5 2.5 7 12h4.6l-1.1 9.5 6.8-11H13z"/><g class="ai-storm-trace"><path pathLength="1" d="M13.5 2.5 7 12h4.6l-1.1 9.5 6.8-11H13z"/></g></g>',
+  clearing: '<g class="ai-clearing-streams"><path pathLength="1" d="M2.5 8.5c4.6 0 7.8 1 11.4 2.5M2.5 12H14M2.5 15.5c4.6 0 7.8-1 11.4-2.5"/></g><g class="ai-clearing-flow-a"><path pathLength="1" d="M2.5 8.5c4.6 0 7.8 1 11.4 2.5"/></g><g class="ai-clearing-flow-b"><path pathLength="1" d="M2.5 12H14"/></g><g class="ai-clearing-flow-c"><path pathLength="1" d="M2.5 15.5c4.6 0 7.8-1 11.4-2.5"/></g><g class="ai-clearing-core"><path pathLength="1" d="M18 7.5c.4 2.5 2 4.1 4.5 4.5-2.5.4-4.1 2-4.5 4.5-.4-2.5-2-4.1-4.5-4.5 2.5-.4 4.1-2 4.5-4.5z"/></g>',
+  waiting: '<g class="ai-waiting-ring"><circle pathLength="1" cx="12" cy="12" r="8.5"/></g><g class="ai-waiting-star"><path pathLength="1" d="M12 5.5c.5 3.4 2.6 5.5 6 6-3.4.5-5.5 2.6-6 6-.5-3.4-2.6-5.5-6-6 3.4-.5 5.5-2.6 6-6z"/></g>',
+};
+const AI_NAMES = { clear: '待命', overcast: '思考中', storm: '執行中', clearing: '收尾', waiting: '等你' };
+const aiIcon = document.getElementById('aiIcon'), aiCap = document.getElementById('aiCap');
+let aiState = null;
+function setAi(s) {
+  s = AI_ICONS[s] ? s : 'clear';
+  if (s === aiState) return;
+  aiState = s;
+  aiIcon.querySelector('.halo').innerHTML = AI_ICONS[s];
+  aiIcon.querySelector('.ink').innerHTML = AI_ICONS[s];
+  aiIcon.setAttribute('class', 'icon s-' + s);
+  aiIcon.getBoundingClientRect();                         // restart the draw-in
+  aiIcon.classList.add('enter');
+  clearTimeout(aiIcon._t); aiIcon._t = setTimeout(() => aiIcon.classList.remove('enter'), 950);
+  aiCap.textContent = 'AI · ' + AI_NAMES[s];
+}
+setAi('clear');
+if (IS_APP) { window.petAPI.getAiState().then(setAi); window.petAPI.onAiState(setAi); }
+
+/* ---- Settings ---- */
+const WP_STYLES = { weather: '天氣', sea: '天氣＋海', ocean: '海' };   // click cycles in this order
+let wpStyle = 'weather', iconsKey = 'Ctrl+Alt+D';
+const SETTINGS = IS_APP ? [
+  { label: '桌布', value: () => WP_STYLES[wpStyle] || '天氣',
+    run: () => { const k = Object.keys(WP_STYLES); window.petAPI.setWallpaperStyle(k[(k.indexOf(wpStyle) + 1) % k.length]).then(s => { wpStyle = s; renderMenu(); }); } },
+  { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },   // right side = the hotkey, as a reminder
+  // 一鍵隱藏 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
+  { label: '一鍵隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
+  { label: '　變更快捷鍵', value: () => bossMsg, run: () => startBossCapture() },
+  { sep: true },
+  { label: '重新啟動', run: () => window.petAPI.restart() },
+] : [{ label: '重新整理', run: () => location.reload() }];
+
+const settingsEl = document.getElementById('settings'), menuEl = document.getElementById('menu');
+// while hidden the menu offers just the way back
+const STEALTH_MENU = [{ label: '取消隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } }];
+function renderMenu() {
+  menuEl.replaceChildren(...(boss.hidden ? STEALTH_MENU : SETTINGS).map(s => {
+    if (s.sep) { const d = document.createElement('div'); d.className = 'sep'; return d; }
+    const b = document.createElement('button');
+    b.className = 'item'; b.setAttribute('role', 'menuitem');
+    b.textContent = s.label;
+    if (s.value) { const v = document.createElement('span'); v.className = 'val'; v.textContent = s.value(); b.append(v); }
+    b.addEventListener('click', ev => { ev.stopPropagation(); s.run(); renderMenu(); });
+    return b;
+  }));
+}
+function setMenu(open) {
+  if (open) bossMsg = ''; else if (capturing) endBossCapture('');
+  settingsEl.classList.toggle('open', open); if (open) renderMenu();
+}
+
+/* 一鍵隱藏: 變更快捷鍵 records the next key combination pressed (the old key is paused meanwhile) */
+let boss = { key: 'Control+Alt+B', registered: true }, bossMsg = '', capturing = false;
+const prettyKey = acc => acc.replace('Control', 'Ctrl').replace('Super', 'Win');
+const bossLabel = () => prettyKey(boss.key) + (boss.registered ? '' : ' 被占用');
+function startBossCapture() { capturing = true; bossMsg = '請按新組合…'; if (IS_APP) window.petAPI.bossCapture(true); }
+function endBossCapture(msg) { capturing = false; bossMsg = msg; if (IS_APP) window.petAPI.bossCapture(false); renderMenu(); }
+const PUNCT = { Space: 'Space', Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', Backslash: '\\' };
+const keyName = code => /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit\d$/.test(code) ? code.slice(5) : /^F\d{1,2}$/.test(code) ? code : PUNCT[code] || null;
+window.addEventListener('keydown', ev => {
+  if (!capturing) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  if (ev.key === 'Escape') return endBossCapture('');
+  const k = keyName(ev.code);
+  if (!k) return;                                       // a modifier on its own: keep waiting
+  const mods = [ev.ctrlKey && 'Control', ev.altKey && 'Alt', ev.shiftKey && 'Shift', ev.metaKey && 'Super'].filter(Boolean);
+  if (!mods.length && !/^F\d/.test(k)) { bossMsg = '要加 Ctrl／Alt／Shift'; renderMenu(); return; }
+  window.petAPI.setBossKey([...mods, k].join('+')).then(r => { boss = r; endBossCapture(r.ok ? '已更新' : '被占用，沒換'); });
+}, true);
+window.addEventListener('blur', () => { if (capturing) endBossCapture(''); });
+document.getElementById('gear').addEventListener('click', ev => { ev.stopPropagation(); setMenu(!settingsEl.classList.contains('open')); });
+settingsEl.addEventListener('click', ev => ev.stopPropagation());
+document.addEventListener('click', () => setMenu(false));
+window.addEventListener('keydown', ev => { if (ev.key === 'Escape') setMenu(false); });
+
+if (IS_APP) {
+  window.petAPI.getWallpaperStyle().then(s => { wpStyle = s || 'weather'; });
+  window.petAPI.iconsHotkey().then(ok => { iconsKey = ok ? 'Ctrl+Alt+D' : '熱鍵被占用'; });
+  const setBoss = s => { if (!s) return; boss = s; document.body.classList.toggle('stealth', !!s.hidden); if (settingsEl.classList.contains('open')) renderMenu(); };
+  window.petAPI.bossKey().then(setBoss); window.petAPI.onBossState(setBoss);
+
+  /* click-through everywhere except the strip and its open menu (main.js starts with
+     setIgnoreMouseEvents(true, { forward: true }), so mouse moves still reach us) */
+  let interactive = false;
+  const hit = on => { if (on !== interactive) { interactive = on; window.petAPI.setInteractive(on); } };
+  document.addEventListener('mousemove', ev => {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    hit(!!(el && el.closest('.ui-hit')));
+  });
+  document.addEventListener('mouseleave', () => { hit(false); });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI state icon set</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-width: 980px; min-height: 100vh; padding: 46px 34px 56px;
+    color: #e6eeff; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(circle at 12% 19%, rgba(255,255,255,.55) 0 1px, transparent 1.3px),
+      radial-gradient(circle at 81% 24%, rgba(199,243,239,.48) 0 1px, transparent 1.4px),
+      radial-gradient(circle at 67% 76%, rgba(255,255,255,.42) 0 1px, transparent 1.3px),
+      radial-gradient(circle at 30% 83%, rgba(207,224,255,.4) 0 1px, transparent 1.3px),
+      radial-gradient(ellipse at 50% 0%, #172044 0, #0b1026 54%, #070b1b 100%);
+    background-size: 173px 151px, 211px 187px, 257px 223px, 307px 269px, 100% 100%;
+  }
+  header { width: min(1180px, 100%); margin: 0 auto 26px; }
+  h1 { margin: 0 0 7px; font-size: 22px; font-weight: 500; letter-spacing: .03em; }
+  header p { margin: 0; color: #9eacd1; }
+  .states { width: min(1180px, 100%); margin: auto; display: grid; grid-template-columns: repeat(4, minmax(210px, 1fr)); gap: 16px; }
+  .state { min-height: 272px; padding: 20px 16px 18px; border: 1px solid rgba(207,224,255,.14); border-radius: 18px; background: rgba(18,27,60,.62); box-shadow: inset 0 1px rgba(255,255,255,.035), 0 18px 50px rgba(0,0,0,.16); }
+  .state h2 { margin: 0; font-size: 12px; font-weight: 600; color: #8192bd; letter-spacing: .16em; text-transform: uppercase; }
+  .samples { height: 205px; display: flex; align-items: flex-end; justify-content: center; gap: 15px; }
+  figure { width: 66px; margin: 0; text-align: center; }
+  .stage { height: 92px; display: flex; align-items: center; justify-content: center; }
+  .icon { display: block; overflow: visible; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .icon .halo { stroke: rgba(3,7,22,.86); stroke-width: 4.2px; }
+  .icon .ink { stroke: #e6eeff; stroke-width: 1.8px; }
+  .icon g { transform-box: fill-box; transform-origin: center; }
+  .icon path, .icon circle { stroke-dasharray: 1; }
+  figcaption { color: #c9d5f5; font-size: 11px; white-space: nowrap; }
+  .size { display: block; margin-top: 4px; color: #6677a6; font-size: 10px; letter-spacing: .05em; }
+  .caption { margin: 3px 0 0; text-align: center; color: #dce7ff; font-size: 12px; letter-spacing: .08em; }
+
+  /* Paste-ready animation CSS (mirrors icons.css). */
+  .live.s-overcast .ai-overcast-orbit { animation: ai-orbit 6s linear infinite; }
+  .live.s-overcast .ai-overcast-core { animation: ai-think 2.4s ease-in-out infinite; }
+  .live.s-storm .ai-storm-bolt { animation: ai-charge 1.15s ease-in-out infinite; }
+  .live.s-storm .ai-storm-trace path { stroke-dasharray: .16 .84; animation: ai-trace .9s linear infinite; }
+  .live.s-storm .ai-storm-node-a { animation: ai-node 1.15s ease-in-out infinite; }
+  .live.s-storm .ai-storm-node-b { animation: ai-node 1.15s ease-in-out -.58s infinite; }
+  .live.s-clearing .ai-clearing-streams { opacity: .45; }
+  .live.s-clearing .ai-clearing-flow-a path,
+  .live.s-clearing .ai-clearing-flow-b path,
+  .live.s-clearing .ai-clearing-flow-c path { stroke-dasharray: .16 .84; animation: ai-resolve 2.7s ease-in-out infinite; }
+  .live.s-clearing .ai-clearing-flow-b path { animation-delay: -.9s; }
+  .live.s-clearing .ai-clearing-flow-c path { animation-delay: -1.8s; }
+  .live.s-clearing .ai-clearing-core { animation: ai-arrive 2.7s ease-in-out infinite; }
+  @keyframes ai-orbit { to { transform: rotate(360deg); } }
+  @keyframes ai-think { 50% { transform: scale(.82) rotate(12deg); opacity: .68; } }
+  @keyframes ai-charge { 50% { transform: scale(1.035); opacity: .72; } }
+  @keyframes ai-trace { to { stroke-dashoffset: -1; } }
+  @keyframes ai-node { 50% { transform: scale(.66); opacity: .55; } }
+  @keyframes ai-resolve {
+    0% { stroke-dashoffset: 1; opacity: 0; }
+    35% { opacity: .95; }
+    75%, 100% { stroke-dashoffset: 0; opacity: 0; }
+  }
+  @keyframes ai-arrive {
+    0%, 100% { transform: scale(.88); opacity: .62; }
+    45%, 70% { transform: scale(1); opacity: 1; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI state machine · icon set</h1>
+  <p>Constellation signals at their intended 24 px, 36 px, and 64 px preview sizes.</p>
+</header>
+<main class="states" id="states"></main>
+<script>
+const AI_ICONS = {
+  clear: '<g class="ai-clear-core"><path pathLength="1" d="M12 4.5c.7 4.3 3.2 6.8 7.5 7.5-4.3.7-6.8 3.2-7.5 7.5-.7-4.3-3.2-6.8-7.5-7.5 4.3-.7 6.8-3.2 7.5-7.5z"/></g><g class="ai-clear-stars"><path pathLength="1" d="M19 2.5v4M17 4.5h4M5 17.5v3M3.5 19h3"/></g>',
+  overcast: '<g class="ai-overcast-orbit"><path pathLength="1" d="M3.5 12c0-3.2 3.8-5.7 8.5-5.7s8.5 2.5 8.5 5.7-3.8 5.7-8.5 5.7S3.5 15.2 3.5 12z"/><circle pathLength="1" cx="3.5" cy="12" r="1.15"/><circle pathLength="1" cx="20.5" cy="12" r="1.15"/></g><g class="ai-overcast-core"><path pathLength="1" d="M12 8c.4 2.3 1.7 3.6 4 4-2.3.4-3.6 1.7-4 4-.4-2.3-1.7-3.6-4-4 2.3-.4 3.6-1.7 4-4z"/></g>',
+  storm: '<g class="ai-storm-links"><path pathLength="1" d="M5.8 7.6 9 10M15.4 14l2.8 2.3"/></g><g class="ai-storm-node-a"><circle pathLength="1" cx="5" cy="7" r="1.1"/></g><g class="ai-storm-node-b"><circle pathLength="1" cx="19" cy="17" r="1.1"/></g><g class="ai-storm-bolt"><path pathLength="1" d="M13.5 2.5 7 12h4.6l-1.1 9.5 6.8-11H13z"/><g class="ai-storm-trace"><path pathLength="1" d="M13.5 2.5 7 12h4.6l-1.1 9.5 6.8-11H13z"/></g></g>',
+  clearing: '<g class="ai-clearing-streams"><path pathLength="1" d="M2.5 8.5c4.6 0 7.8 1 11.4 2.5M2.5 12H14M2.5 15.5c4.6 0 7.8-1 11.4-2.5"/></g><g class="ai-clearing-flow-a"><path pathLength="1" d="M2.5 8.5c4.6 0 7.8 1 11.4 2.5"/></g><g class="ai-clearing-flow-b"><path pathLength="1" d="M2.5 12H14"/></g><g class="ai-clearing-flow-c"><path pathLength="1" d="M2.5 15.5c4.6 0 7.8-1 11.4-2.5"/></g><g class="ai-clearing-core"><path pathLength="1" d="M18 7.5c.4 2.5 2 4.1 4.5 4.5-2.5.4-4.1 2-4.5 4.5-.4-2.5-2-4.1-4.5-4.5 2.5-.4 4.1-2 4.5-4.5z"/></g>'
+};
+
+const STATES = [
+  { key: 'clear', title: 'clear', caption: 'AI', classes: '' },
+  { key: 'overcast', title: 'overcast', caption: 'AI · 思考中', classes: 'live s-overcast' },
+  { key: 'storm', title: 'storm', caption: 'AI · 執行中', classes: 'live s-storm' },
+  { key: 'clearing', title: 'clearing', caption: 'AI · 收尾', classes: 'live s-clearing' }
+];
+const SIZES = [24, 36, 64];
+
+function renderIcon(state, size) {
+  const cls = ['icon', state.classes].filter(Boolean).join(' ');
+  const art = AI_ICONS[state.key];
+  return `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" role="img" aria-label="${state.caption}"><g class="halo">${art}</g><g class="ink">${art}</g></svg>`;
+}
+
+document.querySelector('#states').innerHTML = STATES.map(state => `
+  <section class="state">
+    <h2>${state.title}</h2>
+    <div class="samples">
+      ${SIZES.map(size => `<figure><div class="stage">${renderIcon(state, size)}</div><figcaption>${state.caption}<span class="size">${size} px</span></figcaption></figure>`).join('')}
+    </div>
+    <p class="caption">${state.caption}</p>
+  </section>`).join('');
+</script>
+</body>
+</html>

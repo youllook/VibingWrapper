@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="rim" x1="36" y1="22" x2="222" y2="239" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6f93ad"/>
+      <stop offset="0.48" stop-color="#16334e"/>
+      <stop offset="1" stop-color="#081a2d"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="48" y1="31" x2="212" y2="222" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#112943"/>
+      <stop offset="0.48" stop-color="#315d78"/>
+      <stop offset="1" stop-color="#8fb5b8"/>
+    </linearGradient>
+    <radialGradient id="daybreak" cx="0" cy="0" r="1" gradientTransform="translate(205 58) rotate(135) scale(123)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e5d8a5" stop-opacity=".78"/>
+      <stop offset=".35" stop-color="#a9c7c4" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#4c7586" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cloud" x1="78" y1="118" x2="145" y2="181" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4f7f7"/>
+      <stop offset=".58" stop-color="#c9d7da"/>
+      <stop offset="1" stop-color="#91a9b1"/>
+    </linearGradient>
+    <linearGradient id="cloudShade" x1="94" y1="147" x2="109" y2="184" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b7c8cd"/>
+      <stop offset="1" stop-color="#718b98"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="106" y1="61" x2="144" y2="133" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".55" stop-color="#f2fbff"/>
+      <stop offset="1" stop-color="#bde9f1"/>
+    </linearGradient>
+    <clipPath id="tileClip">
+      <rect x="18" y="18" width="220" height="220" rx="48"/>
+    </clipPath>
+  </defs>
+
+  <!-- Dark outer keyline keeps the silhouette crisp on light and dark shells. -->
+  <rect x="10" y="10" width="236" height="236" rx="57" fill="#071624"/>
+  <rect x="13" y="13" width="230" height="230" rx="54" fill="url(#rim)"/>
+  <rect x="18" y="18" width="220" height="220" rx="48" fill="url(#sky)"/>
+
+  <g clip-path="url(#tileClip)">
+    <rect x="18" y="18" width="220" height="220" fill="url(#daybreak)"/>
+
+    <!-- Quiet astronomical details and a dawn edge suggest the live day/night cycle. -->
+    <circle cx="54" cy="57" r="2.4" fill="#d8eff5" opacity=".74"/>
+    <circle cx="79" cy="41" r="1.6" fill="#d8eff5" opacity=".58"/>
+    <circle cx="45" cy="91" r="1.4" fill="#d8eff5" opacity=".46"/>
+    <path d="M184 64a22 22 0 0 1 16-18" fill="none" stroke="#f3e6b4" stroke-width="3" stroke-linecap="round" opacity=".58"/>
+    <path d="M194 77l14-8M177 51l6-14M208 93l13-2" fill="none" stroke="#f3e6b4" stroke-width="3" stroke-linecap="round" opacity=".48"/>
+
+    <!-- An orbital gesture makes the star feel like an active AI, not decoration. -->
+    <path d="M73 106C81 76 105 55 136 53c25-2 48 10 62 29" fill="none" stroke="#d9f3f8" stroke-width="3" stroke-linecap="round" opacity=".48"/>
+    <path d="M84 126c18 18 46 25 71 17 16-5 29-15 38-29" fill="none" stroke="#d9f3f8" stroke-width="3" stroke-linecap="round" opacity=".34"/>
+    <circle cx="74" cy="106" r="5" fill="#bfe8ef"/>
+    <circle cx="197" cy="83" r="4" fill="#f2e5b4"/>
+
+    <!-- Four-point AI sparkle, the primary identifying mark. -->
+    <path d="M128 54c3 22 8 30 27 39-19 8-24 17-27 40-4-23-9-32-28-40 19-9 24-17 28-39Z" fill="#8ed5e2" opacity=".22"/>
+    <path d="M128 60c3 19 7 26 23 33-16 7-20 14-23 34-3-20-7-27-23-34 16-7 20-14 23-33Z" fill="url(#spark)"/>
+    <circle cx="128" cy="93" r="4.5" fill="#ffffff"/>
+
+    <!-- One calm cloud carries both rain and a restrained lightning glint. -->
+    <path d="M47 161c0-15 12-27 27-27 3 0 6 0 8 1 7-17 24-29 44-29 23 0 42 16 46 38 3-1 7-2 11-2 15 0 27 11 27 25 0 15-12 27-28 27H72c-14 0-25-10-25-24v-9Z" fill="url(#cloudShade)" opacity=".5"/>
+    <path d="M40 153c0-14 12-26 27-26 4 0 7 1 10 2 8-18 25-29 45-29 24 0 44 17 47 40 4-2 8-3 13-3 16 0 29 12 29 27 0 16-13 28-30 28H67c-15 0-27-11-27-25v-14Z" fill="url(#cloud)"/>
+    <path d="M49 169c35 10 106 11 153-5-1 16-10 24-25 24H66c-9 0-15-7-17-19Z" fill="#9eb3ba" opacity=".42"/>
+
+    <!-- Weather in motion: cool rain and a single warm electric accent. -->
+    <path d="M76 202l-9 17M108 203l-9 18M141 201l-9 17" fill="none" stroke="#8fdae8" stroke-width="6" stroke-linecap="round"/>
+    <path d="M172 195l-9 16h10l-9 20 27-27h-12l8-9Z" fill="#f5d983"/>
+  </g>
+
+  <rect x="18" y="18" width="220" height="220" rx="48" fill="none" stroke="#d8edf2" stroke-width="2" opacity=".42"/>
+  <path d="M54 26h148" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity=".13"/>
+</svg>

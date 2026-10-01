@@ -1,0 +1,15 @@
+{
+  "name": "vibing-wrapper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VibingWrapper：跟著 Claude Code 工作節奏變天的動態桌布（天空、海、船隊）＋桌面小工具",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node scripts/make-icon.js",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5"
+  }
+}

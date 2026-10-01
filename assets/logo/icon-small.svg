@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="32" height="32" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="s" x1="6" y1="3" x2="27" y2="29" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#173451"/>
+      <stop offset=".62" stop-color="#39728a"/>
+      <stop offset="1" stop-color="#8fb8b8"/>
+    </linearGradient>
+    <linearGradient id="c" x1="8" y1="18" x2="22" y2="26" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f5f8f7"/>
+      <stop offset="1" stop-color="#9db4ba"/>
+    </linearGradient>
+  </defs>
+  <rect x=".75" y=".75" width="30.5" height="30.5" rx="7.75" fill="#071725"/>
+  <rect x="2" y="2" width="28" height="28" rx="6.5" fill="url(#s)" stroke="#a8ccd3" stroke-width="1.5"/>
+
+  <!-- Oversized solid sparkle survives the 16 px raster. -->
+  <path d="M19 4.5c.6 3.2 1.4 4.4 4.3 5.5-2.9 1.2-3.7 2.4-4.3 5.6-.6-3.2-1.4-4.4-4.3-5.6 2.9-1.1 3.7-2.3 4.3-5.5Z" fill="#ffffff"/>
+
+  <path d="M5.5 22.4c0-2.1 1.8-3.8 4.1-3.8.7 0 1.3.1 1.9.4 1.1-1.8 3.1-3 5.4-3 3.3 0 6 2.2 6.5 5.2.6-.2 1.2-.3 1.8-.3 2.3 0 4.2 1.7 4.2 3.8 0 2.2-1.9 3.9-4.4 3.9H9.7c-2.3 0-4.2-1.7-4.2-3.8v-2.4Z" fill="url(#c)"/>
+  <path d="M9.5 27.2l-1.1 2M14.3 27.2l-1.1 2" fill="none" stroke="#8de2f0" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M22.8 24.8l-1.4 2.2h1.5l-1.5 2.8 4-4h-1.7l1-1Z" fill="#ffe189"/>
+</svg>

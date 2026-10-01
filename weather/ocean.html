@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>海桌布</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* wallpaper: always the bottom layer, nothing selectable / draggable / clickable (same as index.html) */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #22384a;
+               user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+  /* rendered at RES_SCALE of the window, stretched back up by CSS */
+  canvas { display: block; width: 100vw; height: 100vh; pointer-events: none; }
+  #hud { position: fixed; left: 10px; bottom: 8px; font: 12px/1.5 Consolas, monospace; color: rgba(255,255,255,.75);
+         background: rgba(0,0,0,.3); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
+  body.debug #hud { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+/* =====================================================================================
+ * 海桌布 (demo 3: open ocean) — 2026-09-30 — sibling of weather/index.html and network.html
+ *
+ * One WebGL1 fragment shader: a low camera a few metres above open water, horizon at ~43 %
+ * of the screen height, sky above. The surface is a height field made of trochoidal
+ * (Gerstner-style, one-step inverted) waves — sharp crests, round troughs — plus smaller
+ * direction-varied waves and a little noise wrinkle. Each water pixel ray-marches the coarse
+ * field (bounded steps + secant refinement) and takes finite-difference normals from the full
+ * field. Shading: Fresnel reflection of an analytic sky (gradient + sun/moon + cheap clouds),
+ * a teal body colour brighter up the lit back of a crest, sun / moon glitter, horizon fog,
+ * steepness-driven crest foam, rain rings on the surface and lightning flashes in rough weather.
+ *
+ * State machine is the same one as index.html: a state is a set of TARGET values for
+ * continuous parameters; a change always starts from the CURRENT values and eases with
+ * smoothstep over 4 s × (largest normalised parameter distance). Requests inside 300 ms
+ * collapse to the last one. Wave phase is integrated in JS, so nothing ever jumps.
+ *
+ * Input: the same state.json polled every second; keys 1–5 switch manually, `d` toggles the HUD.
+ * Budget: 30 fps cap, 0.5× resolution, one draw call, no post-processing, stops while hidden.
+ * ===================================================================================== */
+
+/* ------------------------------ config ------------------------------ */
+const FPS = 30;
+const RES_SCALE = 0.5;
+const CONFIG = { fullTransition: 4.0, polling: true, clockHours: null, sway: 1.0 };   // clockHours: test override (0–24), null = real time; sway: camera bob amount (0 = rigid)
+const DEBOUNCE_MS = 300;
+const POLL_MS = 1000;
+const HORIZON_Y = 0.43;                      // horizon height on screen (0 bottom … 1 top)
+const CAM_H = 3.6;                           // camera height above the mean water level (m)
+const FOV = 1.15;                            // tan-space scale of the image plane (≈ 60° vertical)
+// the boats (2026-09-30, user: 放條不大的船，晚上有燈光 載浮載沉 → 做一個session一艘船): one small cabin boat per
+// Claude Code session, riding the same waves. Slot i of state.json "sessions" always gets home spot i.
+const BOAT = { omega: 2.6, zeta: 0.75, fade: 2.5 };   // heave spring; seconds for a boat to sail in / fade out
+const HOMES = [[0.32, 85], [0.76, 115], [0.14, 130], [0.47, 100], [0.88, 72]];   // [screen x, depth m]: spread out, off the star column (58 %), different sizes
+
+// parameter ranges (used to normalise distances)
+const PARAMS = {
+  waveHeight:    [0, 1],                     // swell amplitude (1 ≈ 3.5 m crest to trough)
+  choppiness:    [0, 1],                     // crest sharpness (Gerstner steepness)
+  windSpeed:     [0, 1],                     // small-wave amplitude, wave speed, wrinkle drift
+  foam:          [0, 1],                     // whitecaps on steep crests + streaks in the troughs
+  rainAmount:    [0, 1],                     // rings on the surface, streaks in the air, grey veil
+  lightningRate: [0, 0.5],                   // strikes per second (probability rate)
+  skyBrightness: [0, 1],                     // 1 blue sky … 0 dark grey overcast
+  cloudCover:    [0, 1],                     // cloud coverage
+  sunGlitter:    [0, 1],                     // strength of the sun's sparkle path on the water
+  beacon:        [0, 1],                     // 等你: one pulsing star + its reflection
+};
+const STATES = {
+  clear:    { waveHeight: 0.28, choppiness: 0.30, windSpeed: 0.30, foam: 0.08, rainAmount: 0.00, lightningRate: 0.00, skyBrightness: 1.00, cloudCover: 0.30, sunGlitter: 0.65, beacon: 0 },
+  overcast: { waveHeight: 0.50, choppiness: 0.55, windSpeed: 0.60, foam: 0.30, rainAmount: 0.00, lightningRate: 0.00, skyBrightness: 0.62, cloudCover: 0.85, sunGlitter: 0.15, beacon: 0 },
+  storm:    { waveHeight: 1.00, choppiness: 1.00, windSpeed: 1.00, foam: 1.00, rainAmount: 1.00, lightningRate: 0.30, skyBrightness: 0.28, cloudCover: 1.00, sunGlitter: 0.00, beacon: 0 },
+  clearing: { waveHeight: 0.55, choppiness: 0.40, windSpeed: 0.45, foam: 0.40, rainAmount: 0.08, lightningRate: 0.00, skyBrightness: 0.85, cloudCover: 0.50, sunGlitter: 1.00, beacon: 0 },
+  // 等你: the sea nearly still, the sky dims, one star pulses slowly (not an alarm)
+  waiting:  { waveHeight: 0.14, choppiness: 0.15, windSpeed: 0.12, foam: 0.00, rainAmount: 0.00, lightningRate: 0.00, skyBrightness: 0.50, cloudCover: 0.55, sunGlitter: 0.10, beacon: 1 },
+};
+const KEYS = { '1': 'clear', '2': 'overcast', '3': 'storm', '4': 'clearing', '5': 'waiting' };
+
+// wave table: [wavelength m, amplitude m at waveHeight 1, direction deg (atan2(z, x); −90 = toward the camera),
+//              steepness 0..1 (Gerstner Q·A·k at full chop), phase offset]. First SWELL waves drive the ray march;
+//              the rest are DETAIL waves, only in the normals, faded out with distance (aliasing).
+const WAVES = [
+  [46.0, 0.78, -96, 0.55, 0.0],
+  [27.0, 0.46, -68, 0.60, 1.7],
+  [17.0, 0.28, -118, 0.62, 3.1],
+  [11.0, 0.17, -82, 0.66, 0.6],
+  [6.5, 0.085, -58, 0.60, 2.2],
+  [4.2, 0.055, -128, 0.60, 4.0],
+  [2.6, 0.034, -100, 0.55, 1.1],
+  [1.6, 0.020, -44, 0.55, 5.2],
+  [1.0, 0.012, -142, 0.50, 2.9],
+  [0.6, 0.007, -86, 0.50, 0.3],
+];
+const SWELL = 4;
+
+/* ------------------------------ state machine (as index.html) ------------------------------ */
+const smooth = t => t * t * (3 - 2 * t);
+let current = { ...STATES.clear };          // actual values, updated every frame
+let from = { ...current }, to = { ...current };
+let tStart = 0, tDur = 0;                   // seconds (performance clock)
+let stateName = 'clear', pending = null, debounceT = 0;
+let override = null;                        // testing: { param: value } pinned on top of the state machine
+
+function now() { return performance.now() / 1000; }
+
+// advance the actual values to time t
+function step(t) {
+  const k = tDur > 0 ? Math.min(1, (t - tStart) / tDur) : 1;
+  const e = smooth(k);
+  for (const p in PARAMS) current[p] = from[p] + (to[p] - from[p]) * e;
+}
+
+// begin a transition to `name` from wherever the parameters are right now
+function applyState(name) {
+  if (!STATES[name]) return;
+  const t = now();
+  step(t);                                  // freeze the true current values
+  from = { ...current };
+  to = { ...STATES[name] };
+  let dist = 0;
+  for (const p in PARAMS) {
+    const [lo, hi] = PARAMS[p];
+    dist = Math.max(dist, Math.abs(to[p] - from[p]) / (hi - lo));
+  }
+  tStart = t;
+  tDur = CONFIG.fullTransition * dist;      // 0 → already there
+  stateName = name;
+}
+
+// all inputs go through here: several changes within 300 ms → only the last one counts
+function requestState(name) {
+  if (!STATES[name]) return;
+  pending = name;
+  clearTimeout(debounceT);
+  // stateName only changes when a state is applied, so storm → clear → storm inside 300 ms is a no-op
+  debounceT = setTimeout(() => { if (pending !== stateName) applyState(pending); pending = null; }, DEBOUNCE_MS);
+}
+
+/* ------------------------------ inputs ------------------------------ */
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
+addEventListener('keydown', e => {
+  if (KEYS[e.key]) requestState(KEYS[e.key]);
+  if (e.key === 'd') document.body.classList.toggle('debug');
+});
+
+let lastPolled = null, sessionsFile = null, sessionsOverride = null;   // sessionsOverride: ocean.setSessions([...]) for tests
+async function poll() {
+  if (!CONFIG.polling) return;
+  try {
+    const r = await fetch('state.json?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json(), s = j.state;
+      // only react to a change in the file, so keyboard overrides stick until the file changes
+      if (STATES[s] && s !== lastPolled) { lastPolled = s; requestState(s); }
+      // one boat per session (2026-09-30): 5 fixed slots, null = no session; older files without it → ambient boat
+      sessionsFile = Array.isArray(j.sessions) ? Array.from({ length: 5 }, (_, i) => STATES[j.sessions[i]] ? j.sessions[i] : null) : null;
+    }
+  } catch { /* unreadable → keep the current state */ }
+}
+setInterval(poll, POLL_MS);
+poll();
+
+/* ------------------------------ day / night (same model as index.html) ------------------------------ */
+// Sun altitude for Taipei from NOAA-style low-precision formulas. Day ≥ +4°, full night ≤ −9°.
+function sunAltitude(date, lat = 25.04, lon = 121.56) {
+  const rad = Math.PI / 180;
+  const n = date.getTime() / 86400000 + 2440587.5 - 2451545.0;          // days since J2000
+  const L = (280.46 + 0.9856474 * n) % 360;
+  const g = ((357.528 + 0.9856003 * n) % 360) * rad;
+  const lambda = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * rad;
+  const eps = (23.439 - 0.0000004 * n) * rad;
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda));
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lambda));
+  const gmst = (280.46061837 + 360.98564736629 * n) % 360;
+  const ha = (gmst + lon) * rad - ra;
+  return Math.asin(Math.sin(lat * rad) * Math.sin(dec) + Math.cos(lat * rad) * Math.cos(dec) * Math.cos(ha)) / rad;
+}
+function sky() {
+  let d = new Date();
+  if (CONFIG.clockHours != null) { d = new Date(d); d.setHours(0, 0, 0, 0); d = new Date(d.getTime() + CONFIG.clockHours * 3600000); }
+  const alt = sunAltitude(d);
+  const night = 1 - smooth(Math.min(1, Math.max(0, (alt + 9) / 13)));
+  const twilight = Math.exp(-Math.pow((alt + 1.5) / 5, 2));
+  const hours = d.getHours() + d.getMinutes() / 60;
+  const frac = Math.min(1, Math.max(0, (hours - 5.5) / 13));                 // ~sunrise → ~sunset
+  const sunX = 0.12 + 0.76 * frac;                                           // screen x of the sun (0 left … 1 right)
+  const sunUp = smooth(Math.min(1, Math.max(0, (alt + 2) / 6)));             // disc / glitter fade out as the sun sets
+  return { alt, night, twilight, sunX, sunUp };
+}
+
+/* ------------------------------ lightning (scheduled in JS) ------------------------------ */
+// A strike = one or two short pulses (100–300 ms each). uFlash lights the whole sky (and so the
+// reflections) plus a local glow around uFlashPos; ~60 % of strikes draw a bolt down to the horizon.
+let flashes = [];                           // { t0, dur, x, y, seed, bolt }
+function maybeStrike(t, dt) {
+  if (current.lightningRate <= 0) return;
+  if (Math.random() < current.lightningRate * dt) {
+    const x = 0.1 + Math.random() * 0.8, y = 0.62 + Math.random() * 0.3;
+    const seed = Math.random() * 100, bolt = Math.random() < 0.6;
+    flashes.push({ t0: t, dur: 0.1 + Math.random() * 0.2, x, y, seed, bolt });
+    if (Math.random() < 0.45) flashes.push({ t0: t + 0.12 + Math.random() * 0.12, dur: 0.1 + Math.random() * 0.15, x, y, seed, bolt });
+  }
+}
+// test: strike(); strike(3) holds one bolt on screen for 3 s so its look can be inspected
+function strike(hold) {
+  const t = now(), x = 0.2 + Math.random() * 0.6, y = 0.65 + Math.random() * 0.25;
+  const seed = Math.random() * 100;
+  if (hold) { flashes.push({ t0: t, dur: hold, x, y, seed, bolt: true, hold: true }); return; }
+  flashes.push({ t0: t, dur: 0.25, x, y, seed, bolt: true }, { t0: t + 0.18, dur: 0.15, x, y, seed, bolt: true });
+}
+function flashLevel(t) {
+  let level = 0, pos = [0.5, 0.75], seed = 0, bolt = false;
+  flashes = flashes.filter(f => t < f.t0 + f.dur);
+  for (const f of flashes) {
+    if (t < f.t0) continue;
+    const k = (t - f.t0) / f.dur;
+    const v = f.hold ? 1 : k < 0.15 ? k / 0.15 : Math.pow(1 - (k - 0.15) / 0.85, 2);   // fast rise, soft decay
+    if (v > level) { level = v; pos = [f.x, f.y]; seed = f.seed; bolt = f.bolt; }
+  }
+  return [level, pos, seed, bolt];
+}
+
+/* ------------------------------ WebGL ------------------------------ */
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: false, alpha: false, depth: false, preserveDrawingBuffer: false, powerPreference: 'low-power' });
+
+const VS = `attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
+
+// Generate the height-field code from the wave table (constants → the compiler folds them).
+// One-step inverted Gerstner: y = A·sin(φ − s·cos φ) with φ = k·(D·p) − ω·T. The phase shift by
+// s·cos φ compresses the profile toward the crest (sharp) and stretches the trough (round);
+// s = steepness × chop × (½ + ½ waveHeight) so calm water keeps sinusoidal swell.
+function waveCode(first, last, ampExpr, fade) {
+  let s = '';
+  for (let i = first; i < last; i++) {
+    const [lam, A, deg, st, p0] = WAVES[i];
+    const k = 2 * Math.PI / lam, w = Math.sqrt(9.81 * k);
+    const a = deg * Math.PI / 180, dx = Math.cos(a), dz = Math.sin(a);
+    const f = (x, n = 5) => x.toFixed(n);
+    const amp = fade ? `${f(A)} * ${ampExpr} * clamp(1.0 - t * ${f(1 / (lam * 55), 6)}, 0.0, 1.0)` : `${f(A)} * ${ampExpr}`;
+    s += `  ph = dot(vec2(${f(dx)}, ${f(dz)}), p) * ${f(k)} - ${f(w)} * uPhase + ${f(p0, 2)};\n` +
+         `  h += ${amp} * sin(ph - ${f(st, 2)} * uSteep * cos(ph));\n`;
+  }
+  return s;
+}
+
+const FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec2  uRes;
+uniform float uTime, uPhase;         // seconds; wave phase time (integrated with the wind factor)
+uniform float uWaveH, uSmallAmp, uSteep, uWind, uFoam, uRain, uBright, uCloud, uGlitter, uBeacon;
+uniform float uMaxAmp;               // sum of amplitudes now (ray-march bounds)
+uniform float uNight, uTwilight, uSunUp;
+uniform vec3  uSunDir, uMoonDir, uSunCol, uMoonCol;
+uniform vec3  uZenith, uHorizon, uCloudLit, uCloudShade, uDeep, uShallow, uFoamCol;
+uniform float uFog;                  // fog density (1/m)
+uniform float uFlash, uBolt, uBoltSeed;
+uniform vec2  uFlashPos;             // screen uv of the strike
+uniform vec3  uFlashDir;             // world direction of the strike (for the sky glow / reflections)
+uniform vec3  uBeaconDir;            // world direction of the 等你 star
+uniform vec2  uDrift;                // cloud / wrinkle drift (integrated wind)
+uniform float uRoll, uPitch;         // camera sway
+uniform vec4  uBoatA[5];             // per boat, far → near: x, y − camera height, z (image-plane metres at its depth), alpha (0 = empty slot)
+uniform vec4  uBoatB[5];             // per boat: screen tilt (rad), lamps 0..1, work (flood light + wake) 0..1, facing −1..1
+uniform vec4  uBoatC[5];             // per boat: design (0 cabin boat, 1 tug, 2 sailing boat, 3 trawler, 4 launch), unused ×3
+
+const float CAM_H = ${CAM_H.toFixed(2)};
+const float HORIZON_Y = ${HORIZON_Y.toFixed(3)};
+const float FOV = ${FOV.toFixed(3)};
+
+// --- hash noise (no textures) ---
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 a = mod(i, 289.0), b = mod(i + 1.0, 289.0);   // wrap ids so hash() sees small numbers
+  return mix(mix(hash(a), hash(vec2(b.x, a.y)), u.x), mix(hash(vec2(a.x, b.y)), hash(b), u.x), u.y);
+}
+float fbm2(vec2 p) { return noise(p) * 0.6 + noise(p * 2.1 + 5.3) * 0.4; }
+float fbm3(vec2 p) { return noise(p) * 0.5 + noise(p * 2.1 + 5.3) * 0.3 + noise(p * 4.3 + 11.1) * 0.2; }
+float fbm4(vec2 p) { return noise(p) * 0.45 + noise(p * 2.1 + 5.3) * 0.27 + noise(p * 4.3 + 11.1) * 0.17 + noise(p * 8.7 + 23.7) * 0.11; }
+
+// --- height field ---
+// swell only: what the ray march sees
+float hLow(vec2 p) {
+  float h = 0.0, ph;
+${waveCode(0, SWELL, 'uWaveH', false)}  return h;
+}
+// everything: swell + detail waves (faded with distance t) + noise wrinkles; used for the normals
+float hHigh(vec2 p, float t) {
+  float h = 0.0, ph;
+${waveCode(0, SWELL, 'uWaveH', true)}${waveCode(SWELL, WAVES.length, 'uSmallAmp', true)}
+  float wf = clamp(1.0 - t * 0.02, 0.0, 1.0) * uSmallAmp;   // wind wrinkles, only close by
+  if (wf > 0.001) h += wf * 0.05 * (noise(p * 1.9 + uDrift * 3.0) - 0.5 + 0.5 * (noise(p * 4.7 - uDrift * 4.0) - 0.5));
+  return h;
+}
+
+// --- ray march the swell field: coarse samples (denser near the camera), then secant refinement ---
+float march(vec3 ro, vec3 rd, out bool hit) {
+  float M = uMaxAmp + 0.05;
+  float tn = (ro.y - M) / -rd.y;                       // above the highest crest: nothing to hit before this
+  float tf = min((ro.y + M) / -rd.y, 4000.0);
+  float tPrev = tn, hPrev = M * 2.0;
+  hit = false;
+  float t = tf;
+  for (int i = 1; i <= 22; i++) {
+    float f = float(i) / 22.0;
+    float ti = mix(tn, tf, f * f);
+    vec3 p = ro + rd * ti;
+    float dh = p.y - hLow(p.xz);
+    if (dh < 0.0) {
+      float a = tPrev, b = ti, ha = hPrev, hb = dh;
+      for (int j = 0; j < 5; j++) {
+        float m = mix(a, b, clamp(ha / (ha - hb), 0.05, 0.95));
+        vec3 pm = ro + rd * m;
+        float hm = pm.y - hLow(pm.xz);
+        if (hm < 0.0) { b = m; hb = hm; } else { a = m; ha = hm; }
+      }
+      t = mix(a, b, clamp(ha / (ha - hb), 0.0, 1.0));
+      hit = true;
+      break;
+    }
+    tPrev = ti; hPrev = dh;
+  }
+  return t;
+}
+
+// --- rain rings: expanding ripples, one per cell, perturb the normal ---
+vec2 rainRipple(vec2 q, float t) {
+  vec2 g = q * 4.0;
+  vec2 id = floor(g), f = fract(g) - 0.5;
+  float hs = hash(id + 0.7);
+  vec2 c = (vec2(hash(id + 1.3), hash(id + 7.7)) - 0.5) * 0.5;
+  float age = fract(t * 1.1 + hs);
+  vec2 d = f - c;
+  float r = length(d) + 1e-4;
+  float ring = sin(r * 40.0 - age * 30.0) * exp(-age * 4.5) * smoothstep(0.32, 0.04, r);
+  return d / r * ring;
+}
+
+// --- sky ---
+// cheap version (used in reflections): gradient + sun / moon glow + flash + 2-octave clouds
+vec3 skyLite(vec3 d) {
+  float up = clamp(d.y, 0.0, 1.0);
+  vec3 c = mix(uHorizon, uZenith, pow(up, 0.5));
+  float sd = max(dot(d, uSunDir), 0.0);
+  c += uSunCol * (0.10 * pow(sd, 5.0) + 0.22 * pow(sd, 48.0)) * uSunUp * (1.0 - 0.6 * uCloud);
+  float md = max(dot(d, uMoonDir), 0.0);
+  c += uMoonCol * (0.35 * pow(md, 10.0) + 2.5 * pow(md, 900.0)) * uNight * (1.0 - 0.8 * uCloud);
+  if (uCloud > 0.02 && d.y > 0.01) {
+    vec2 q = d.xz / (d.y + 0.10) * 0.28 + uDrift;
+    float n = fbm2(q);
+    float th = mix(0.78, 0.22, uCloud);
+    float cov = smoothstep(th, th + 0.22, n) * smoothstep(0.0, 0.10, d.y);
+    vec3 cc = mix(uCloudLit, uCloudShade, smoothstep(th, th + 0.5, n));
+    c = mix(c, cc, cov);
+  }
+  c += vec3(0.72, 0.78, 1.0) * uFlash * (0.10 + 0.55 * pow(max(dot(d, uFlashDir), 0.0), 6.0));
+  return c;
+}
+// what both the far sea and the lowest sky converge to (no clouds: continuity across the horizon line)
+vec3 horizonCol(vec3 d) {
+  vec3 hd = normalize(vec3(d.x, 0.0, d.z));
+  vec3 c = uHorizon;
+  float sd = max(dot(hd, uSunDir), 0.0);
+  c += uSunCol * (0.10 * pow(sd, 5.0) + 0.22 * pow(sd, 48.0)) * uSunUp * (1.0 - 0.6 * uCloud);
+  float md = max(dot(hd, uMoonDir), 0.0);
+  c += uMoonCol * 0.35 * pow(md, 10.0) * uNight * (1.0 - 0.8 * uCloud);
+  c += vec3(0.72, 0.78, 1.0) * uFlash * (0.10 + 0.55 * pow(max(dot(hd, uFlashDir), 0.0), 6.0));
+  return c;
+}
+// full version for sky pixels: sun / moon discs, 4-octave clouds, stars
+vec3 skyFull(vec3 d) {
+  float up = clamp(d.y, 0.0, 1.0);
+  vec3 c = mix(uHorizon, uZenith, pow(up, 0.5));
+  float sd = max(dot(d, uSunDir), 0.0);
+  float md = max(dot(d, uMoonDir), 0.0);
+  c += uSunCol * (0.10 * pow(sd, 5.0) + 0.22 * pow(sd, 48.0)) * uSunUp * (1.0 - 0.6 * uCloud);
+  c += uMoonCol * 0.35 * pow(md, 10.0) * uNight * (1.0 - 0.8 * uCloud);
+  // clouds on a plane: perspective — big overhead, flattened at the horizon
+  vec2 q = d.xz / (d.y + 0.10) * 0.28 + uDrift;
+  float n = fbm4(q);
+  float th = mix(0.78, 0.22, uCloud);
+  float dens = smoothstep(th, th + 0.5, n);
+  float cov = smoothstep(th, th + 0.18, n) * smoothstep(0.0, 0.10, d.y);
+  // stars behind everything (night only, hidden by clouds)
+  if (uNight > 0.01 && cov < 0.98) {
+    vec2 sp = d.xz / (d.y + 0.15) * 90.0;
+    vec2 cell = floor(sp), f = fract(sp);
+    float h = hash(cell + 3.7);
+    float st = 0.0;
+    if (h > 0.90) {
+      vec2 pos = vec2(hash(cell + 11.1), hash(cell + 27.3)) * 0.7 + 0.15;
+      float b = pow(hash(cell + 41.9), 3.0);
+      float tw = 0.75 + 0.25 * sin(uTime * (1.5 + 3.0 * h) + h * 60.0);
+      st = smoothstep(0.16, 0.0, length(f - pos)) * (0.3 + 0.7 * b) * tw;
+    }
+    c += vec3(0.9, 0.93, 1.0) * st * uNight * (1.0 - cov) * (1.0 - smoothstep(0.6, 0.95, uCloud)) * smoothstep(0.02, 0.3, d.y);
+  }
+  // sun: a blown-out glare rather than a clean disc; hidden by thick cloud
+  float open = (1.0 - cov) * (1.0 - cov) * (1.0 - 0.97 * smoothstep(0.45, 0.95, uCloud));
+  c += uSunCol * (smoothstep(0.99985, 0.99996, sd) * 2.0 + pow(sd, 3000.0) * 1.2 + pow(sd, 300.0) * 0.22 + pow(sd, 40.0) * 0.08) * uSunUp * open;
+  c += uMoonCol * (smoothstep(0.99975, 0.99992, md) * 2.5 + pow(md, 900.0) * 1.5) * uNight * (1.0 - cov) * (1.0 - 0.8 * uCloud);
+  vec3 cc = mix(uCloudLit, uCloudShade, dens);
+  cc += uSunCol * pow(sd, 10.0) * 0.35 * (1.0 - dens) * uSunUp;          // silver / gold lining near the sun
+  c = mix(c, cc, cov);
+  c += vec3(0.72, 0.78, 1.0) * uFlash * (0.10 + 0.55 * pow(max(dot(d, uFlashDir), 0.0), 6.0));
+  return c;
+}
+
+// --- the boats: side-view sprites in metres (x along the hull, +x = bow; y up from the waterline) ---
+// Five designs (2026-09-30, user: 稍微不一樣的船造型), one per session slot. Each returns (albedo, coverage);
+// px = size of one render pixel in metres at the boat's depth (edges are antialiased with it).
+float seg(vec2 p, vec2 a, vec2 b) { vec2 ab = b - a; float h = clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0); return length(p - a - ab * h); }
+float box(vec2 q, vec2 lo, vec2 hi) { return min(min(q.x - lo.x, hi.x - q.x), min(q.y - lo.y, hi.y - q.y)); }   // > 0 inside
+// lamp spots per design: masthead, two windows, red side light, work flood (all in boat metres)
+void boatLamps(float kind, out vec2 mast, out vec2 wa, out vec2 wb, out vec2 red, out vec2 flood) {
+  if (kind < 0.5)      { mast = vec2(-0.6, 4.05); wa = vec2(-1.2, 1.55); wb = vec2(-0.05, 1.55); red = vec2(2.75, 1.05); flood = vec2(-2.3, 2.35); }
+  else if (kind < 1.5) { mast = vec2(0.0, 4.25);  wa = vec2(-0.5, 2.40); wb = vec2(0.4, 2.40);   red = vec2(2.9, 1.40);  flood = vec2(-3.0, 2.30); }
+  else if (kind < 2.5) { mast = vec2(0.2, 7.05);  wa = vec2(-0.7, 0.88); wb = vec2(0.4, 0.88);   red = vec2(3.3, 0.80);  flood = vec2(0.2, 3.20); }
+  else if (kind < 3.5) { mast = vec2(1.3, 4.05);  wa = vec2(0.95, 1.85); wb = vec2(1.7, 1.85);   red = vec2(2.9, 1.20);  flood = vec2(-2.25, 3.65); }
+  else                 { mast = vec2(-1.0, 2.40); wa = vec2(-0.45, 1.02); wb = vec2(0.5, 1.02);  red = vec2(3.0, 0.90);  flood = vec2(-2.0, 1.70); }
+}
+float boatWindows(vec2 q, float px, float kind) {
+  vec2 m, wa, wb, r, fl; boatLamps(kind, m, wa, wb, r, fl);
+  vec2 sz = kind > 3.5 ? vec2(0.55, 0.15) : (kind > 1.5 && kind < 2.5) ? vec2(0.22, 0.13) : vec2(0.26, 0.22);
+  float win = max(min(sz.x - abs(q.x - wa.x), sz.y - abs(q.y - wa.y)), min(sz.x - abs(q.x - wb.x), sz.y - abs(q.y - wb.y)));
+  return smoothstep(-px, px, win);
+}
+vec4 boatSprite(vec2 q, float px, float kind) {
+  vec3 c = vec3(0.1); float a = 0.0, k;
+  float mw = max(0.10, px * 1.1), tw = max(0.06, px * 0.9);       // mast / thin-line half widths (never thinner than a pixel)
+  vec3 wood = vec3(0.28, 0.26, 0.23);
+  if (kind < 0.5) {
+    // 0 · cabin boat (the original): dark hull, sheer, wheelhouse aft of centre, short mast
+    float deck = 0.72 + 0.05 * q.x + 0.02 * q.x * q.x;
+    float hull = min(min(q.x - (-3.4 + 0.12 * (q.y + 1.0)), 3.0 + 0.25 * (q.y + 1.0) - q.x), min(q.y + 1.0, deck - q.y));
+    a = smoothstep(-px, px, hull); c = vec3(0.10, 0.11, 0.13);
+    c = mix(c, vec3(0.80, 0.80, 0.76), smoothstep(-px, px, 0.14 - (deck - q.y)) * a);
+    k = smoothstep(-px, px, box(q, vec2(-1.8, deck - 0.1), vec2(0.6, 2.15))); c = mix(c, vec3(0.78, 0.76, 0.70), k); a = max(a, k);
+    c = mix(c, vec3(0.32, 0.33, 0.36), k * smoothstep(-px, px, q.y - 1.95));
+    k = smoothstep(-px, px, min(mw - abs(q.x + 0.6), min(q.y - 2.0, 4.0 - q.y))); c = mix(c, wood, k); a = max(a, k);
+  } else if (kind < 1.5) {
+    // 1 · tug: chunky high hull with a red bulwark, long deckhouse, tall wheelhouse, funnel, stub mast
+    float deck = 1.05 + 0.04 * q.x + 0.015 * q.x * q.x;
+    float hull = min(min(q.x - (-3.6 + 0.10 * (q.y + 1.0)), 3.2 + 0.20 * (q.y + 1.0) - q.x), min(q.y + 1.0, deck - q.y));
+    a = smoothstep(-px, px, hull); c = vec3(0.11, 0.10, 0.10);
+    c = mix(c, vec3(0.52, 0.15, 0.11), smoothstep(-px, px, 0.45 - (deck - q.y)) * a);
+    c = mix(c, vec3(0.85, 0.83, 0.78), smoothstep(-px, px, 0.08 - abs(deck - 0.45 - q.y)) * a);   // white rubbing strake
+    k = smoothstep(-px, px, box(q, vec2(-2.6, deck - 0.1), vec2(1.6, 1.9))); c = mix(c, vec3(0.80, 0.78, 0.72), k); a = max(a, k);
+    k = smoothstep(-px, px, box(q, vec2(-1.0, 1.85), vec2(0.9, 2.9))); c = mix(c, vec3(0.84, 0.82, 0.76), k); a = max(a, k);
+    c = mix(c, vec3(0.30, 0.31, 0.34), k * smoothstep(-px, px, q.y - 2.75));
+    k = smoothstep(-px, px, box(q, vec2(-2.25, 1.85), vec2(-1.65, 3.3))); c = mix(c, vec3(0.52, 0.15, 0.11), k);
+    c = mix(c, vec3(0.12, 0.11, 0.11), k * smoothstep(-px, px, q.y - 3.0)); a = max(a, k);
+    k = smoothstep(-px, px, min(mw - abs(q.x), min(q.y - 2.8, 4.2 - q.y))); c = mix(c, wood, k); a = max(a, k);
+  } else if (kind < 2.5) {
+    // 2 · sailing boat: white hull with a blue stripe, low cabin, tall mast, boom with a furled sail, reefed main along the mast
+    float deck = 0.55 + 0.04 * q.x + 0.012 * q.x * q.x;
+    float hull = min(min(q.x - (-3.8 + 0.15 * (q.y + 0.8)), 3.6 + 0.30 * (q.y + 0.8) - q.x), min(q.y + 0.8, deck - q.y));
+    a = smoothstep(-px, px, hull); c = vec3(0.86, 0.86, 0.83);
+    c = mix(c, vec3(0.15, 0.25, 0.45), smoothstep(-px, px, 0.11 - abs(deck - 0.28 - q.y)) * a);
+    k = smoothstep(-px, px, box(q, vec2(-1.5, deck - 0.1), vec2(1.2, 1.15))); c = mix(c, vec3(0.78, 0.76, 0.70), k); a = max(a, k);
+    k = smoothstep(-px, px, box(q, vec2(-2.5, 1.45), vec2(0.15, 1.85))); c = mix(c, vec3(0.92, 0.90, 0.84), k); a = max(a, k);   // furled sail on the boom
+    float wdt = 0.65 - 0.14 * (q.y - 1.9);
+    k = smoothstep(-px, px, min(min(0.2 - q.x, q.x - (0.2 - wdt)), min(q.y - 1.9, 5.6 - q.y)));                                 // reefed main, hugging the mast
+    c = mix(c, vec3(0.93, 0.91, 0.85), k); a = max(a, k);
+    k = smoothstep(-px, px, tw - seg(q, vec2(0.2, 1.5), vec2(-2.6, 1.45))); c = mix(c, vec3(0.62, 0.60, 0.56), k); a = max(a, k);   // boom
+    k = smoothstep(-px, px, min(mw - abs(q.x - 0.2), min(q.y - 1.1, 7.0 - q.y))); c = mix(c, vec3(0.62, 0.60, 0.56), k); a = max(a, k);
+  } else if (kind < 3.5) {
+    // 3 · trawler: green hull with a cream gunwale, wheelhouse forward, A-frame gantry and crane boom at the stern
+    float deck = 0.9 + 0.04 * q.x + 0.015 * q.x * q.x;
+    float hull = min(min(q.x - (-3.6 + 0.10 * (q.y + 1.0)), 3.2 + 0.25 * (q.y + 1.0) - q.x), min(q.y + 1.0, deck - q.y));
+    a = smoothstep(-px, px, hull); c = vec3(0.10, 0.19, 0.15);
+    c = mix(c, vec3(0.88, 0.85, 0.72), smoothstep(-px, px, 0.14 - (deck - q.y)) * a);
+    k = smoothstep(-px, px, box(q, vec2(0.4, deck - 0.1), vec2(2.2, 2.5))); c = mix(c, vec3(0.72, 0.68, 0.58), k); a = max(a, k);
+    c = mix(c, vec3(0.30, 0.31, 0.34), k * smoothstep(-px, px, q.y - 2.35));
+    k = smoothstep(-px, px, min(mw - abs(q.x - 1.3), min(q.y - 2.4, 4.0 - q.y))); c = mix(c, wood, k); a = max(a, k);
+    float g = min(tw * 1.3 - seg(q, vec2(-3.3, deck - 0.1), vec2(-2.45, 3.6)), tw * 1.3 - seg(q, vec2(-1.3, deck - 0.1), vec2(-2.05, 3.6)));
+    g = max(max(g, box(q, vec2(-2.7, 3.45), vec2(-1.8, 3.72))), tw - seg(q, vec2(-2.25, 3.6), vec2(-0.4, 2.4)));
+    k = smoothstep(-px, px, g); c = mix(c, vec3(0.30, 0.28, 0.25), k); a = max(a, k);
+  } else {
+    // 4 · launch / pilot boat: sleek white hull with a raked bow, orange cabin with a raked windshield, radar arch
+    float deck = 0.6 + 0.07 * q.x + 0.01 * q.x * q.x;
+    float hull = min(min(q.x - (-3.2 + 0.10 * (q.y + 0.7)), 3.4 + 0.60 * (q.y + 0.7) - q.x), min(q.y + 0.7, deck - q.y));
+    a = smoothstep(-px, px, hull); c = vec3(0.82, 0.84, 0.86);
+    c = mix(c, vec3(0.20, 0.22, 0.26), smoothstep(-px, px, 0.09 - abs(deck - 0.22 - q.y)) * a);
+    k = smoothstep(-px, px, box(q, vec2(-1.4, deck - 0.1), vec2(1.4 - max(q.y - deck, 0.0) * 0.9, 1.45)));
+    c = mix(c, vec3(0.85, 0.45, 0.15), k); a = max(a, k);
+    c = mix(c, vec3(0.90, 0.90, 0.90), k * smoothstep(-px, px, q.y - 1.32));
+    k = smoothstep(-px, px, max(mw * 0.8 - seg(q, vec2(-1.0, 1.4), vec2(-1.0, 2.3)), box(q, vec2(-1.45, 2.22), vec2(-0.55, 2.36))));
+    c = mix(c, vec3(0.25, 0.26, 0.28), k); a = max(a, k);
+  }
+  c = mix(c, vec3(0.16, 0.20, 0.25), boatWindows(q, px, kind) * a);   // glass by day (glows when the lamps are on)
+  return vec4(c, a);
+}
+mat2 rot2(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+
+// lightning bolt in screen space: a jagged line from the flash point down to the horizon
+float bolt(vec2 p, vec2 top, float bottom, float seed, float amp) {
+  if (p.y > top.y || p.y < bottom) return 0.0;
+  float k = top.y - p.y;
+  float x = top.x + k * (hash(vec2(seed, 1.7)) - 0.5) * 0.7;
+  float a = amp, f = 7.0;
+  for (int i = 0; i < 4; i++) { x += (noise(vec2(p.y * f, seed * 13.1 + float(i) * 7.3)) - 0.5) * a; f *= 2.2; a *= 0.5; }
+  float d = abs(p.x - x);
+  float core = smoothstep(0.0032, 0.0008, d);
+  float glow = exp(-d * 70.0) * 0.45;
+  float ends = smoothstep(0.0, 0.05, k) * smoothstep(0.0, 0.08, p.y - bottom);
+  return (core + glow) * ends;
+}
+
+// rain streaks in the air: slanted columns of cells scrolling down, one thin drop per cell
+float rainStreaks(vec2 p, float density, float cols, float rows, float speed, float slant, float seed) {
+  vec2 q = vec2(p.x + p.y * slant, p.y);
+  float colId = floor(q.x * cols);
+  float hc = hash(vec2(colId, seed));
+  float y = q.y * rows + uTime * speed * rows * (0.8 + 0.4 * hc) + hc * 17.0;
+  vec2 id = vec2(colId, floor(y) + seed * 7.13);
+  if (hash(id) > density) return 0.0;
+  float xo = 0.2 + 0.6 * hash(id + 3.3);
+  float dpx = abs(fract(q.x * cols) - xo) * (uRes.y / cols);
+  float line = clamp(1.0 - dpx / 0.8, 0.0, 1.0);
+  float len = 0.3 + 0.5 * hash(id + 9.1);
+  float fy = fract(y);
+  float body = smoothstep(0.0, 0.05, fy) * (1.0 - smoothstep(len * 0.5, len, fy));
+  return line * body * mix(1.0, 0.3, clamp(fy / len, 0.0, 1.0)) * (0.5 + 0.5 * hash(id + 21.7));
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;                     // 0..1, y up
+  float aspect = uRes.x / uRes.y;
+  vec2 sp = vec2((uv.x - 0.5) * aspect, uv.y - HORIZON_Y + uPitch) * FOV;
+  float cr = cos(uRoll), sr = sin(uRoll);
+  sp = vec2(sp.x * cr - sp.y * sr, sp.x * sr + sp.y * cr);
+  vec3 rd = normalize(vec3(sp.x, sp.y, 1.0));
+  vec3 ro = vec3(0.0, CAM_H, 0.0);
+  vec3 col;
+  float t = 0.0;
+  bool isWater = false;
+  float hitZ = 1e9;                                   // z of the water hit (boat occlusion)
+  vec3 rW = vec3(0.0);                                // water reflection vector (light glints, boat mirror)
+  float fresW = 0.0;                                  // water Fresnel weight at this pixel
+
+  if (rd.y >= -0.0005) {
+    // ---------------- sky ----------------
+    col = skyFull(rd);
+    if (uFlash > 0.001 && uBolt > 0.5) {
+      vec2 fp = vec2(uFlashPos.x * aspect, uFlashPos.y);
+      vec2 pp = vec2(uv.x * aspect, uv.y);
+      float b = bolt(pp, fp, HORIZON_Y, uBoltSeed, 0.07)
+              + 0.6 * bolt(pp, fp + vec2(0.0, -(fp.y - HORIZON_Y) * 0.4), HORIZON_Y + 0.05, uBoltSeed + 3.1, 0.09);
+      col = mix(col, vec3(0.95, 0.97, 1.0), clamp(b * uFlash, 0.0, 1.0));
+    }
+    // haze band right above the horizon, converging on the same colour as the far sea
+    col = mix(col, horizonCol(rd), exp(-rd.y * 30.0));
+  } else {
+    // ---------------- water ----------------
+    isWater = true;
+    bool hit;
+    t = march(ro, rd, hit);
+    vec3 p = ro + rd * t;
+    float eps = 0.012 + t * 0.0022;                   // finite-difference footprint grows with distance
+    float h0 = hHigh(p.xz, t);
+    float hx = hHigh(p.xz + vec2(eps, 0.0), t);
+    float hz = hHigh(p.xz + vec2(0.0, eps), t);
+    vec3 n = vec3(h0 - hx, eps, h0 - hz);
+    float slope = length(n.xz) / max(n.y, 0.02);       // wave gradient (before the rain rings)
+    // rain rings (close by only)
+    float rr = uRain * clamp(1.0 - t * 0.05, 0.0, 1.0) * (1.0 - 0.55 * uWaveH);
+    if (rr > 0.001) {
+      vec2 g = rainRipple(p.xz, uTime) + 0.7 * rainRipple(p.xz * 1.6 + 13.0, uTime * 1.3);
+      n.xz += g * 0.012 * rr;
+    }
+    n = normalize(n);
+    vec3 v = -rd;
+    vec3 r = reflect(rd, n);
+    r.y = max(r.y, 0.015);                             // never reflect below the horizon
+    hitZ = p.z; rW = r;
+    float ndv = max(dot(n, v), 0.0);
+    float fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+    fres = clamp(fres, 0.0, 1.0);
+    fresW = fres;
+
+    // body colour: deep teal, brighter up the crest (light passing through the top of a wave),
+    // strongest when the sun is behind the wave
+    float hn = clamp(p.y / (0.55 * uMaxAmp + 0.02) * 0.5 + 0.5, 0.0, 1.0);
+    float back = 0.35 + 0.65 * pow(max(dot(v, -uSunDir) * 0.5 + 0.5, 0.0), 2.0);
+    float sunPow = uSunUp * (1.0 - 0.7 * uCloud) + 0.15;
+    vec3 body = uDeep + uShallow * (hn * hn * (0.55 + 0.45 * back) * sunPow + 0.12);
+    body *= 0.75 + 0.25 * max(dot(n, uSunDir), 0.0) * sunPow;
+
+    vec3 refl = skyLite(r);
+    col = mix(body, refl, fres);
+
+    // sun glitter: tight lobe → sparkles; a broader lobe makes the path
+    float sd = max(dot(r, uSunDir), 0.0);
+    float glit = pow(sd, 380.0) * 2.2 + pow(sd, 60.0) * 0.22 + pow(sd, 14.0) * 0.06 * (1.0 - uSunDir.y * 2.0);
+    col += uSunCol * glit * (0.35 + 1.4 * uGlitter) * uSunUp * (1.0 - 0.75 * uCloud) * (0.4 + 0.6 * fres * 4.0);
+    // moon path at night
+    float md = max(dot(r, uMoonDir), 0.0);
+    col += uMoonCol * (pow(md, 500.0) * 2.0 + pow(md, 50.0) * 0.16) * uNight * (1.0 - 0.8 * uCloud);
+
+    // foam: whitecaps where the crest is steep, plus streaks left in the troughs by the wind
+    if (uFoam > 0.005) {
+      // (2026-09-30 rework, user: 白浪白塊也一起修) whitecaps live on breaking crests only, under a lacy ~0.3 m texture
+      // with sea colour showing through; lace trails down the back of the wave; wind streaks are thin and run along
+      // the wave direction (toward the camera); nothing near the camera is ever a flat white area.
+      float hnF = clamp(p.y / (0.85 * uMaxAmp + 0.02) * 0.5 + 0.5, 0.0, 1.0);   // looser than hn: the foreground must not saturate
+      vec2 fp = p.xz - vec2(-0.4429, -4.2141) * uPhase;                                                   // foam rides with the main swell (half its phase speed)
+      float web = smoothstep(0.62, 0.90, 1.0 - abs(2.0 * fbm3(fp * 2.6 + uDrift * 2.0) - 1.0));   // ridged noise → thin lacy web
+      float cells = smoothstep(0.56, 0.74, fbm2(fp * 5.5 - uDrift * 3.0));                        // a few small bright cells
+      float fine = noise(fp * 13.0 - uDrift * 4.0);
+      float band = smoothstep(0.78, 0.97, hnF) * smoothstep(0.12, 0.38, slope * (0.5 + uSteep));   // only the breaking crest line
+      // close to the camera the foam is either a thin bright line or nothing: the coverage THRESHOLD rises near,
+      // not the opacity (a half-transparent veil is what read as mottling)
+      float nearK = smoothstep(4.0, 30.0, t);
+      float thr = mix(0.80, 0.52, nearK);
+      float web2 = smoothstep(0.55, 0.90, 1.0 - abs(2.0 * fbm2(fp * 7.0 + uDrift * 3.0) - 1.0));   // finer web breaks the lines up
+      float tex = max(web * (0.5 + 0.5 * web2), cells * 0.9 * nearK) * (0.6 + 0.4 * fine);          // blobs only far away
+      float caps = band * smoothstep(thr, thr + 0.16, tex);
+      float trail = smoothstep(0.55, 0.85, hnF) * smoothstep(thr + 0.05, thr + 0.15, web) * smoothstep(0.58, 0.78, noise(fp * vec2(1.4, 0.35) + uDrift)) * 0.7;   // lace fading down the back
+      float streak = noise(p.xz * vec2(5.0, 0.9) + uDrift * 1.5) * noise(p.xz * vec2(2.5, 0.6) + 3.0);
+      float streaks = smoothstep(0.60, 0.74, streak) * uFoam * uFoam * 0.4 * smoothstep(0.2, 0.7, hnF) * (0.5 + 0.5 * fine) * (0.35 + 0.65 * nearK);
+      float foamA = clamp((caps * (0.3 + 0.7 * uFoam) * 0.9 + trail * uFoam + streaks) * clamp(2.0 - t * 0.006, 0.0, 1.0), 0.0, 0.8);
+      // brighter than physically lit (user 2026-09-30: 白沫調亮一點) — under a dark storm sky it read grey, not 白浪
+      vec3 fc = min(uFoamCol * (1.0 + 0.3 * max(dot(n, uSunDir), 0.0) * sunPow) * 1.22, vec3(1.0)) + uSunCol * pow(sd, 20.0) * 0.2 * uSunUp;
+      col = mix(col, fc, foamA);
+    }
+
+    // 等你: the star's reflection — a sharp glint that shimmers with the waves, plus a wide soft path
+    if (uBeacon > 0.01) {
+      float bd = max(dot(r, uBeaconDir), 0.0);
+      float pulse = pow(0.5 + 0.5 * sin(uTime * 2.2 - 1.57), 2.0);
+      col += vec3(1.0, 0.91, 0.74) * (pow(bd, 900.0) * 2.2 + pow(bd, 80.0) * 0.28) * (0.5 + 0.5 * pulse) * uBeacon;
+    }
+
+    // distance fog into the horizon haze
+    col = mix(col, horizonCol(rd), 1.0 - exp(-t * uFog));
+  }
+
+  // ---------------- the fleet (2026-09-30): one boat per session — sprite, lamps, wake, mirror, glints ----------------
+  // Boats come far → near so a nearer one paints over a farther one. Each pays only inside its own small rect.
+  for (int i = 0; i < 5; i++) {
+    vec4 A = uBoatA[i];
+    if (A.w < 0.002) continue;                        // empty slot
+    vec2 qb = sp * A.z - A.xy;                        // metres in the image plane at this boat's depth
+    if (abs(qb.x) > 8.0 || qb.y < -12.0 || qb.y > 6.5) continue;
+    vec4 B = uBoatB[i];
+    float kind = uBoatC[i].x;
+    vec2 pMast, pWa, pWb, pRed, pFlood; boatLamps(kind, pMast, pWa, pWb, pRed, pFlood);
+    float fc = sign(B.w + 1e-4) * max(abs(B.w), 0.22);   // heading: side view squeezes toward bow-on while turning
+    float px = FOV / uRes.y * A.z;
+    float alpha = A.w;
+    // shading shared by hull, mirror and glints: sky ambient + sun from its side (+ moon, lightning), fogged like the sea there
+    vec3 amb = (uZenith + uHorizon) * 0.5;
+    vec3 sunL = uSunCol * uSunUp * (1.0 - 0.7 * uCloud) * max(dot(normalize(vec3(0.0, 0.35, -1.0)), uSunDir), 0.0);
+    vec3 light = amb * 0.9 + sunL * 0.8 + uMoonCol * 0.6 * uNight + vec3(0.65, 0.7, 0.9) * uFlash * 0.7;
+    float fogB = 1.0 - exp(-A.z * uFog * 0.8);
+    vec3 hazeB = horizonCol(rd);
+    bool covered = isWater && hitZ < A.z - 1.5;       // a nearer swell in front hides this part of the hull
+    vec2 q = rot2(-B.x) * qb; q.x /= fc;
+    if (!covered && qb.y > -1.5) {
+      vec4 sprite = boatSprite(q, px / abs(fc), kind);
+      float post = smoothstep(-px, px, min(max(0.07, px) - abs(q.x - pFlood.x), min(q.y - (pFlood.y - 1.6), pFlood.y - 0.05 - q.y)));   // post carrying the work light
+      sprite = vec4(mix(sprite.rgb, vec3(0.28, 0.26, 0.23), post), max(sprite.a, post));
+      vec3 bc = sprite.rgb * light;
+      float winA = boatWindows(q, px, kind);
+      bc = mix(bc, vec3(1.0, 0.72, 0.38) * 1.3, winA * B.y);                       // wheelhouse windows glow
+      bc += vec3(1.0, 0.92, 0.72) * 0.55 * exp(-length((q - pFlood - vec2(0.4, -1.3)) * vec2(0.6, 1.2)) / 0.9) * B.z;   // deck under the flood
+      bc = mix(bc, hazeB, fogB);
+      col = mix(col, bc, sprite.a * alpha);
+      // lamps: masthead white, port red, window spill (× lamps); work flood (× work)
+      float dm = length(q - pMast), dr = length(q - pRed), df = length(q - pFlood);
+      float dw = min(length(q - pWa), length(q - pWb));
+      vec3 lamps = (vec3(0.95, 0.97, 1.0) * (exp(-dm / 0.14) * 1.6 + exp(-dm / 0.7) * 0.10)
+                  + vec3(1.0, 0.15, 0.08) * (exp(-dr / 0.10) * 1.2 + exp(-dr / 0.5) * 0.06)
+                  + vec3(1.0, 0.72, 0.38) * exp(-dw / 0.8) * 0.12 * (1.0 - winA)) * B.y
+                 + vec3(1.0, 0.95, 0.80) * (exp(-df / 0.16) * 1.8 + exp(-df / 1.1) * 0.22) * B.z;
+      col += lamps * (1.0 - fogB * 0.6) * alpha;
+    }
+    // underway: bow wave and a wake astern, foam at the waterline in the boat's plane
+    if (isWater && B.z > 0.01 && abs(hitZ - A.z) < 6.0 && qb.y < 1.2) {
+      float n = 0.55 + 0.45 * noise(vec2(q.x * 1.3 - uTime * 1.6, q.y * 4.0 + float(i) * 7.0));
+      float bow = smoothstep(1.4, 0.0, length((q - vec2(3.6, 0.0)) * vec2(1.0, 2.2)));
+      float back = max(-3.4 - q.x, 0.0);
+      float stern = exp(-back / 9.0) * step(q.x, -3.0) * smoothstep(0.55 + back * 0.10, 0.0, abs(q.y + 0.05));
+      float wk = clamp((bow * 1.1 + stern * 0.9) * n, 0.0, 1.0) * B.z * alpha;
+      col = mix(col, mix(uFoamCol, hazeB, fogB), wk * 0.95);
+    }
+    // the boat's mirror image (user: 船白天也加上倒影): follow a ray half-way between the flat mirror and this
+    // pixel's true reflected ray to the boat's plane and sample the sprite there — the wave normals bend and
+    // break it up; Fresnel fades it toward the viewer; darker, fogged, hidden by the same nearer swells.
+    if (isWater && hitZ < A.z - 1.5 && qb.y < 0.5) {
+      vec3 p = ro + rd * t;
+      vec3 rM = normalize(mix(vec3(rd.x, -rd.y, rd.z), rW, 0.5));
+      if (rM.z > 0.01) {
+        float sR = (A.z - p.z) / rM.z;
+        vec2 qr = vec2(p.x + rM.x * sR - A.x, p.y + rM.y * sR - (A.y + CAM_H));
+        qr = rot2(-B.x) * qr; qr.x /= fc;
+        if (qr.y > -0.4 && abs(qr.x) < 4.5 && qr.y < 4.5) {
+          vec4 mir = boatSprite(qr, px * 1.5 / abs(fc), kind);
+          vec3 mc = mir.rgb * light * 0.6;
+          mc = mix(mc, hazeB, fogB);
+          float k = mir.a * clamp(fresW * 2.2 + 0.1, 0.0, 0.85) * (1.0 - 0.6 * uRain) * smoothstep(-12.0, -4.0, qb.y) * alpha;
+          col = mix(col, mc, k);
+        }
+      }
+    }
+    // glints of the lamps on the water in front of the boat: reflection vector vs. direction to each lamp
+    if (isWater && hitZ < A.z && (B.y > 0.01 || B.z > 0.01)) {
+      vec3 base = vec3(A.x, A.y + CAM_H, A.z);
+      vec3 p = ro + rd * t;
+      vec3 Lm = normalize(base + vec3(pMast.x * fc, pMast.y, 0.0) - p);
+      vec3 Lw = normalize(base + vec3((pWa.x + pWb.x) * 0.5 * fc, pWa.y, 0.0) - p);
+      vec3 Lr = normalize(base + vec3(pRed.x * fc, pRed.y, 0.0) - p);
+      vec3 Lf = normalize(base + vec3(pFlood.x * fc, pFlood.y, 0.0) - p);
+      float gm = max(dot(rW, Lm), 0.0), gw = max(dot(rW, Lw), 0.0), gr = max(dot(rW, Lr), 0.0), gf = max(dot(rW, Lf), 0.0);
+      vec3 gl = (vec3(0.95, 0.97, 1.0) * (pow(gm, 1200.0) * 1.2 + pow(gm, 200.0) * 0.05)
+               + vec3(1.0, 0.72, 0.38) * (pow(gw, 700.0) * 1.6 + pow(gw, 160.0) * 0.08)
+               + vec3(1.0, 0.15, 0.08) * pow(gr, 1200.0) * 0.6) * B.y
+              + vec3(1.0, 0.95, 0.80) * (pow(gf, 900.0) * 2.0 + pow(gf, 150.0) * 0.12) * B.z;
+      float wnd = smoothstep(8.0, 4.0, abs(qb.x)) * smoothstep(-12.0, -5.0, qb.y);   // soft window: no visible rect edge
+      col += gl * (1.0 - fogB * 0.7) * wnd * alpha;
+    }
+  }
+
+  // rain streaks in the air over everything (one near layer + a fine far shimmer)
+  if (uRain > 0.01) {
+    vec2 pp = vec2(uv.x * aspect, uv.y);
+    float slant = 0.25 + 0.06 * sin(uTime * 0.31);
+    float rd2 = uRain * uRain;                          // drizzle shows only a few drops
+    float rs = rainStreaks(pp, rd2 * 0.28, 90.0, 3.5, 2.2, slant, 1.0)
+             + 0.5 * rainStreaks(pp + 0.37, rd2 * 0.45, 200.0, 8.0, 1.2, slant * 0.9, 2.0);
+    col = mix(col, vec3(0.80, 0.84, 0.90) * (1.0 - 0.6 * uNight) * (0.5 + 0.5 * uBright), clamp(rs * 0.35, 0.0, 0.8));
+  }
+
+  // 等你 (2026-09-30): the star itself, in front of everything, same look as index.html
+  if (uBeacon > 0.01) {
+    vec2 bd = vec2(uv.x * aspect, uv.y) - vec2(0.58 * aspect, 0.80);
+    float br = length(bd);
+    float pulse = pow(0.5 + 0.5 * sin(uTime * 2.2 - 1.57), 2.0);   // ~2.9 s, eases in and out
+    float core = exp(-br * 110.0) * 1.6;
+    float halo = exp(-br * 16.0) * 0.30 + exp(-br * 5.0) * 0.08;
+    float spikes = exp(-abs(bd.x) * 320.0) * exp(-abs(bd.y) * 14.0) + exp(-abs(bd.y) * 320.0) * exp(-abs(bd.x) * 14.0);
+    col += vec3(1.0, 0.91, 0.74) * (core * (0.55 + 0.45 * pulse) + (halo + spikes * 0.7) * pulse) * uBeacon;
+  }
+
+  // soft shoulder + a little less saturation, like the sibling wallpapers
+  col = col / (1.0 + col * 0.22) * 1.16;
+  float g = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(g), col, 0.9);
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+// one full-screen triangle
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const loc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+const U = {};
+for (const n of ['uRes', 'uTime', 'uPhase', 'uWaveH', 'uSmallAmp', 'uSteep', 'uWind', 'uFoam', 'uRain', 'uBright', 'uCloud', 'uGlitter', 'uBeacon',
+  'uMaxAmp', 'uNight', 'uTwilight', 'uSunUp', 'uSunDir', 'uMoonDir', 'uSunCol', 'uMoonCol', 'uZenith', 'uHorizon', 'uCloudLit', 'uCloudShade',
+  'uDeep', 'uShallow', 'uFoamCol', 'uFog', 'uFlash', 'uBolt', 'uBoltSeed', 'uFlashPos', 'uFlashDir', 'uBeaconDir', 'uDrift', 'uRoll', 'uPitch', 'uBoatA', 'uBoatB', 'uBoatC']) U[n] = gl.getUniformLocation(prog, n);
+
+function resize() {
+  const w = Math.max(1, Math.round(innerWidth * RES_SCALE)), h = Math.max(1, Math.round(innerHeight * RES_SCALE));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); }
+}
+addEventListener('resize', resize);
+resize();
+
+/* ------------------------------ palette (computed on the CPU once per frame) ------------------------------ */
+const lerp = (a, b, k) => a + (b - a) * k;
+const mix3 = (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
+const scale3 = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+// screen uv → world direction of the (unrolled) camera, for the beacon and lightning glow
+function dirFromScreen(x, y) {
+  const aspect = canvas.width / canvas.height;
+  const v = [(x - 0.5) * aspect * FOV, (y - HORIZON_Y) * FOV, 1];
+  const l = Math.hypot(v[0], v[1], v[2]);
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+function palette(sk, cur) {
+  const b = cur.skyBrightness, cl = cur.cloudCover, night = sk.night, tw = sk.twilight, rain = cur.rainAmount;
+  let zenith = mix3([0.20, 0.22, 0.26], [0.22, 0.44, 0.78], b);
+  let horizon = mix3([0.36, 0.38, 0.42], [0.76, 0.84, 0.92], b);
+  zenith = mix3(zenith, scale3([0.30, 0.28, 0.50], 0.5 + 0.5 * b), tw * 0.5);
+  horizon = mix3(horizon, scale3([0.98, 0.62, 0.40], 0.55 + 0.45 * b), tw * 0.7);
+  zenith = mix3(zenith, scale3([0.015, 0.025, 0.06], 0.6 + 0.4 * b), night);
+  horizon = mix3(horizon, scale3([0.07, 0.08, 0.12], 0.7 + 0.3 * b), night);
+  const sunCol = scale3(mix3([1.0, 0.96, 0.88], [1.0, 0.62, 0.35], tw), (1 - night) * (0.5 + 0.5 * b));
+  const moonCol = scale3([0.60, 0.68, 0.85], 0.40 * night);
+  let cloudLit = mix3([0.40, 0.42, 0.46], [1.0, 0.99, 0.98], Math.pow(b, 0.8));
+  let cloudShade = mix3([0.15, 0.16, 0.19], [0.62, 0.65, 0.72], b);
+  cloudLit = mix3(cloudLit, scale3([1.0, 0.74, 0.58], 0.6 + 0.4 * b), tw * 0.6);
+  cloudShade = mix3(cloudShade, [0.42, 0.36, 0.46], tw * 0.4);
+  cloudLit = mix3(cloudLit, [0.13, 0.15, 0.21], night);
+  cloudShade = mix3(cloudShade, [0.05, 0.05, 0.08], night);
+  let deep = mix3([0.035, 0.045, 0.055], [0.015, 0.06, 0.11], b);
+  let shallow = mix3([0.08, 0.11, 0.12], [0.06, 0.36, 0.40], b);
+  shallow = mix3(shallow, [0.10, 0.12, 0.13], rain * 0.5);                    // rain: greyer sea
+  deep = scale3(deep, 1 - 0.85 * night); shallow = scale3(shallow, 1 - 0.85 * night);
+  deep = mix3(deep, scale3([0.75, 0.55, 0.40], 0.05), tw * 0.5);
+  const foamCol = scale3(mix3([0.70, 0.72, 0.75], [0.95, 0.96, 0.97], b), 1 - 0.8 * night);
+  const fog = 0.0022 + 0.007 * rain + 0.0025 * cl * (1 - b) + 0.0015 * night;
+  // sun: screen x → azimuth ±62° around the view; elevation capped so its path stays on the water
+  const az = (sk.sunX - 0.5) * 2 * 62 * Math.PI / 180, el = Math.max(-6, Math.min(26, sk.alt)) * Math.PI / 180;
+  const sunDir = [Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)];
+  const maz = 28 * Math.PI / 180, mel = 24 * Math.PI / 180;
+  const moonDir = [Math.sin(maz) * Math.cos(mel), Math.sin(mel), Math.cos(maz) * Math.cos(mel)];
+  return { zenith, horizon, sunCol, moonCol, cloudLit, cloudShade, deep, shallow, foamCol, fog, sunDir, moonDir };
+}
+
+/* ------------------------------ loop: 30 fps cap, stops while hidden ------------------------------ */
+let raf = 0, nextFrame = 0, lastT = now(), sceneTime = 0, phaseTime = 0;
+let drift = [0, 0];
+
+/* ------------------------------ the boat (2026-09-30) ------------------------------ */
+// The same wave table as the shader (swell + the two largest detail waves), evaluated at the hull:
+// heave from the centre, pitch from bow/stern, roll from the two sides. A damped spring (mass) follows
+// each target, so the boat lags the water a little and never snaps.
+function waveHeight(x, z, phase, waveH, steep, smallAmp, count) {
+  let h = 0;
+  for (let i = 0; i < count; i++) {
+    const [lam, A, deg, st, p0] = WAVES[i];
+    const k = 2 * Math.PI / lam, w = Math.sqrt(9.81 * k), a = deg * Math.PI / 180;
+    const ph = (Math.cos(a) * x + Math.sin(a) * z) * k - w * phase + p0;
+    const amp = i < SWELL ? A * waveH : A * smallAmp * Math.max(0, 1 - z / (lam * 55));
+    h += amp * Math.sin(ph - st * steep * Math.cos(ph));
+  }
+  return h;
+}
+// Per-boat look, one target set per session state (same smoothstep-from-current machine as the sky, per boat):
+//   amp / rate: drift around the home spot (m, rad/s) — its velocity also decides which way the boat faces
+//   lights: wheelhouse + navigation lamps on by day (night turns them on anyway)
+//   work: aft flood light + bow wave + wake (underway)
+//   blink: lamps follow the 等你 star's pulse (day and night) — this is the "which boat needs me" signal
+//   pitch: pitch gain (a working boat drives into the sea harder)
+const BPARAMS = { amp: [0, 8], rate: [0, 0.1], lights: [0, 1], work: [0, 1], blink: [0, 1], pitch: [0.5, 1.5] };
+const BOAT_STATES = {
+  clear:    { amp: 1.5, rate: 0.021, lights: 0.00, work: 0, blink: 0, pitch: 1.0 },   // idle: anchored, still
+  overcast: { amp: 4.0, rate: 0.050, lights: 0.95, work: 0, blink: 0, pitch: 1.0 },   // thinking: wheelhouse lit, creeping / turning
+  storm:    { amp: 8.0, rate: 0.100, lights: 0.95, work: 1, blink: 0, pitch: 1.4 },   // working: underway, flood light, wake
+  clearing: { amp: 2.0, rate: 0.030, lights: 0.15, work: 0, blink: 0, pitch: 1.0 },   // done: settling, lights easing off
+  waiting:  { amp: 0.5, rate: 0.015, lights: 0.00, work: 0, blink: 1, pitch: 1.0 },   // needs you: lamps blink with the star
+};
+const boats = HOMES.map((h, i) => ({ slot: i, active: false, alpha: 0, state: null, cur: { ...BOAT_STATES.clear }, from: null, to: null, tStart: 0, tDur: 0,
+  phase: i * 1.3, x: 0, y: 0, vy: 0, pitch: 0, vp: 0, roll: 0, vr: 0, facing: 1, fresh: true }));
+function stepBoat(b, t) {
+  if (!b.from) return;
+  const e = smooth(b.tDur > 0 ? Math.min(1, (t - b.tStart) / b.tDur) : 1);
+  for (const p in BPARAMS) b.cur[p] = b.from[p] + (b.to[p] - b.from[p]) * e;
+}
+function applyBoatState(b, name, t) {
+  stepBoat(b, t);
+  b.from = { ...b.cur }; b.to = { ...BOAT_STATES[name] };
+  let dist = 0;
+  for (const p in BPARAMS) { const [lo, hi] = BPARAMS[p]; dist = Math.max(dist, Math.abs(b.to[p] - b.from[p]) / (hi - lo)); }
+  b.tStart = t; b.tDur = CONFIG.fullTransition * dist; b.state = name;
+}
+// which boat shows what: the override, else the file's sessions; no sessions at all → one ambient boat in slot 0
+// that follows the combined sky state, so the sea is never empty
+function effectiveSlots() {
+  const s = sessionsOverride || sessionsFile;
+  if (s && s.some(x => x)) return s;
+  return [stateName, null, null, null, null];
+}
+function spring(v, pos, target, dt) {                 // second-order damped follower; returns [pos, v]
+  const w = BOAT.omega, z = BOAT.zeta;
+  v += ((target - pos) * w * w - 2 * z * w * v) * dt;
+  return [pos + v * dt, v];
+}
+function updateFleet(dt, t, steep, smallAmp) {
+  const aspect = canvas.width / canvas.height;
+  const eff = effectiveSlots();
+  const H = (x, z) => waveHeight(x, z, phaseTime, current.waveHeight, steep, smallAmp, SWELL + 2);
+  for (const b of boats) {
+    const want = BOAT_STATES[eff[b.slot]] ? eff[b.slot] : null;
+    if (want && !b.active) { b.active = true; if (b.alpha <= 0) { b.cur = { ...BOAT_STATES[want] }; b.from = null; b.state = want; b.fresh = true; } }
+    if (!want && b.active) b.active = false;
+    if (want && want !== b.state) applyBoatState(b, want, t);
+    b.alpha = Math.min(1, Math.max(0, b.alpha + (b.active ? 1 : -1) * dt / BOAT.fade));
+    if (b.alpha <= 0) continue;                        // empty slot: no work at all
+    stepBoat(b, t);
+    // drift around the home spot; the heading follows the drift velocity (a slow turn, never a flip)
+    b.phase += b.cur.rate * dt;
+    const off = b.cur.amp * Math.sin(b.phase), v = b.cur.amp * b.cur.rate * Math.cos(b.phase);
+    const ft = Math.abs(v) < 0.004 ? b.facing : Math.sign(v);
+    b.facing += (ft - b.facing) * Math.min(1, dt / 3);
+    const [sx, z] = HOMES[b.slot], a = smooth(b.alpha);
+    b.x = (sx - 0.5) * aspect * FOV * z + off - (1 - a) * 6 * b.facing;   // arrives from astern, leaves the same way
+    const h0 = H(b.x, z), hf = H(b.x + 3, z), hb = H(b.x - 3, z), hl = H(b.x, z + 1.2), hr = H(b.x, z - 1.2);
+    const tp = Math.atan2(hf - hb, 6) * b.cur.pitch, tr = Math.atan2(hr - hl, 2.4);
+    if (b.fresh) { b.y = h0; b.pitch = tp; b.roll = tr; b.vy = b.vp = b.vr = 0; b.fresh = false; }
+    [b.y, b.vy] = spring(b.vy, b.y, h0, dt);
+    [b.pitch, b.vp] = spring(b.vp, b.pitch, tp, dt);
+    [b.roll, b.vr] = spring(b.vr, b.roll, tr, dt);
+  }
+}
+const boatA = new Float32Array(20), boatB = new Float32Array(20), boatC = new Float32Array(20);
+const DESIGNS = ['cabin boat', 'tug', 'sailing boat', 'trawler', 'launch'];   // slot i sails design i (BOAT.design[i] overrides)
+// pack the visible boats far → near for the shader; lamps = max(ambient night/dusk/gloom, the state's lamps), then the blink
+function packFleet(sk) {
+  boatA.fill(0); boatB.fill(0); boatC.fill(0);
+  const lightsBase = Math.min(1, sk.night + 0.6 * sk.twilight + 0.9 * Math.max(0, 0.55 - current.skyBrightness));
+  // 等你 (2026-09-30, user): a waiting boat's lamps blink with the star's pulse — on even by day, dim ↔ bright
+  const pulse = Math.pow(0.5 + 0.5 * Math.sin(sceneTime * 2.2 - 1.57), 2);
+  const vis = boats.filter(b => b.alpha > 0).sort((p, q) => HOMES[q.slot][1] - HOMES[p.slot][1]);
+  vis.forEach((b, k) => {
+    const z = HOMES[b.slot][1];
+    let L = Math.max(lightsBase, b.cur.lights);
+    const blink = Math.max(L, 0.85) * (0.12 + 0.88 * pulse);
+    L += (blink - L) * b.cur.blink;
+    boatA.set([b.x, b.y - CAM_H, z, smooth(b.alpha)], k * 4);
+    boatB.set([b.pitch + 0.5 * b.roll, L, b.cur.work, b.facing], k * 4);
+    boatC[k * 4] = BOAT.design ? BOAT.design[b.slot] : b.slot;
+  });
+  return vis.length;
+}
+const FRAME_MS = 1000 / FPS;
+let fpsCount = 0, fpsT = now(), fps = 0;
+
+// everything that moves with time (called once per rendered frame)
+function advance(t, dt) {
+  step(t);
+  if (override) Object.assign(current, override);
+  sceneTime += dt;
+  phaseTime += dt * (0.8 + 0.5 * current.windSpeed);       // wind hurries the waves a little; the phase never jumps
+  const w = 0.004 + 0.02 * current.windSpeed;
+  drift[0] += w * dt * 0.8; drift[1] -= w * dt;
+  maybeStrike(t, dt);
+  const steep = Math.min(0.95, current.choppiness * (0.5 + 0.5 * current.waveHeight));
+  const smallAmp = (0.35 + 0.65 * current.windSpeed) * (0.5 + 0.5 * current.waveHeight);
+  updateFleet(dt, t, steep, smallAmp);
+}
+
+function render() {
+  const [flash, fpos, bseed, showBolt] = flashLevel(now());
+  const sk = sky();
+  const P = palette(sk, current);
+  const swellAmp = WAVES.slice(0, SWELL).reduce((s, w) => s + w[1], 0) * current.waveHeight;
+  const smallAmp = (0.35 + 0.65 * current.windSpeed) * (0.5 + 0.5 * current.waveHeight);
+  const detailAmp = WAVES.slice(SWELL).reduce((s, w) => s + w[1], 0) * smallAmp + 0.05 * smallAmp;
+  const steep = Math.min(0.95, current.choppiness * (0.5 + 0.5 * current.waveHeight));
+  const sway = CONFIG.sway * (0.15 + 0.85 * current.waveHeight);
+  const bdir = dirFromScreen(0.58, 0.80), fdir = dirFromScreen(fpos[0], fpos[1]);
+
+  gl.uniform2f(U.uRes, canvas.width, canvas.height);
+  gl.uniform1f(U.uTime, sceneTime);
+  gl.uniform1f(U.uPhase, phaseTime);
+  gl.uniform1f(U.uWaveH, current.waveHeight);
+  gl.uniform1f(U.uSmallAmp, smallAmp);
+  gl.uniform1f(U.uSteep, steep);
+  gl.uniform1f(U.uWind, current.windSpeed);
+  gl.uniform1f(U.uFoam, current.foam);
+  gl.uniform1f(U.uRain, current.rainAmount);
+  gl.uniform1f(U.uBright, current.skyBrightness);
+  gl.uniform1f(U.uCloud, current.cloudCover);
+  gl.uniform1f(U.uGlitter, current.sunGlitter);
+  gl.uniform1f(U.uBeacon, current.beacon);
+  gl.uniform1f(U.uMaxAmp, swellAmp + detailAmp);
+  gl.uniform1f(U.uNight, sk.night);
+  gl.uniform1f(U.uTwilight, sk.twilight);
+  gl.uniform1f(U.uSunUp, sk.sunUp);
+  gl.uniform3fv(U.uSunDir, P.sunDir);
+  gl.uniform3fv(U.uMoonDir, P.moonDir);
+  gl.uniform3fv(U.uSunCol, P.sunCol);
+  gl.uniform3fv(U.uMoonCol, P.moonCol);
+  gl.uniform3fv(U.uZenith, P.zenith);
+  gl.uniform3fv(U.uHorizon, P.horizon);
+  gl.uniform3fv(U.uCloudLit, P.cloudLit);
+  gl.uniform3fv(U.uCloudShade, P.cloudShade);
+  gl.uniform3fv(U.uDeep, P.deep);
+  gl.uniform3fv(U.uShallow, P.shallow);
+  gl.uniform3fv(U.uFoamCol, P.foamCol);
+  gl.uniform1f(U.uFog, P.fog);
+  gl.uniform1f(U.uFlash, flash);
+  gl.uniform1f(U.uBolt, showBolt ? 1 : 0);
+  gl.uniform1f(U.uBoltSeed, bseed);
+  gl.uniform2f(U.uFlashPos, fpos[0], fpos[1]);
+  gl.uniform3fv(U.uFlashDir, fdir);
+  gl.uniform3fv(U.uBeaconDir, bdir);
+  gl.uniform2f(U.uDrift, drift[0], drift[1]);
+  gl.uniform1f(U.uRoll, 0.006 * sway * Math.sin(sceneTime * 0.37));
+  gl.uniform1f(U.uPitch, 0.004 * sway * Math.sin(sceneTime * 0.53 + 1.0));
+  packFleet(sk);
+  gl.uniform4fv(U.uBoatA, boatA);
+  gl.uniform4fv(U.uBoatB, boatB);
+  gl.uniform4fv(U.uBoatC, boatC);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  return { flash, sk };
+}
+
+function frame(ms) {
+  raf = requestAnimationFrame(frame);
+  // accumulating time gate: averages FPS even when rAF ticks unevenly; after a stall it restarts
+  if (ms < nextFrame) return;
+  nextFrame += FRAME_MS;
+  if (nextFrame < ms) nextFrame = ms + FRAME_MS;
+  const t = now(), dt = Math.min(0.1, t - lastT);
+  lastT = t;
+
+  advance(t, dt);
+  const { flash, sk } = render();
+
+  fpsCount++;
+  if (t - fpsT >= 1) { fps = fpsCount / (t - fpsT); fpsCount = 0; fpsT = t; }
+  if (document.body.classList.contains('debug')) {
+    document.getElementById('hud').textContent =
+      `state ${stateName}${pending ? ' (→' + pending + ')' : ''}\n` +
+      Object.keys(PARAMS).map(p => `${p.padEnd(14)} ${current[p].toFixed(2)}`).join('\n') +
+      `\nflash ${flash.toFixed(2)}  fps ${fps.toFixed(1)}  res ${canvas.width}×${canvas.height}` +
+      `\nsun ${sk.alt.toFixed(1)}°  night ${sk.night.toFixed(2)}  twilight ${sk.twilight.toFixed(2)}` +
+      `\nboats ${effectiveSlots().map(s => s || '-').join(' ')}${sessionsOverride ? ' (override)' : sessionsFile ? '' : ' (ambient)'}  ` +
+      boats.filter(b => b.alpha > 0).map(b => `#${b.slot} ${b.state} ${(b.alpha * 100) | 0}%`).join(' ');
+  }
+}
+function start() { if (!raf) { lastT = now(); raf = requestAnimationFrame(frame); } }
+function stop() { cancelAnimationFrame(raf); raf = 0; }
+let hostPaused = false;
+document.addEventListener('visibilitychange', () => (document.hidden || hostPaused ? stop() : start()));
+// 2026-10-01: the host (tools/wallpaper.js) pauses us while a window covers the whole desktop
+window.wpPause = on => { hostPaused = !!on; if (hostPaused) stop(); else if (!document.hidden) start(); };
+if (!document.hidden) start();
+
+// cost measurement: median / p90 GPU time of one draw (readPixels sync before and after)
+function bench(frames = 60) {
+  const px = new Uint8Array(4), gpu = [];
+  const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  for (let i = 0; i < frames; i++) {
+    advance(now(), 1 / FPS);
+    sync(); const t0 = performance.now(); render(); sync(); gpu.push(performance.now() - t0);
+  }
+  gpu.sort((a, b) => a - b);
+  return { median: +gpu[frames >> 1].toFixed(2), p90: +gpu[Math.floor(frames * 0.9)].toFixed(2), res: canvas.width + 'x' + canvas.height };
+}
+
+// testing hooks
+window.ocean = {
+  requestState, applyState, strike, STATES, PARAMS, CONFIG, sky, bench, WAVES,
+  setOverride(o) { override = o; }, BOAT, HOMES, BOAT_STATES, DESIGNS, boats,
+  setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; },   // null = back to state.json
+  get sessions() { return effectiveSlots(); },
+  get current() { return { ...current }; }, get state() { return stateName; },
+};
+</script>
+</body>
+</html>
+<!--
+使用說明（demo 3：海桌布）
+· 讀同一個 weather/state.json（clear / overcast / storm / clearing / waiting），每秒輪詢一次，檔案值變了才反應。
+· 網址：http://127.0.0.1:47321/weather/ocean.html（App 內建 claude-bridge 伺服器要在跑）。
+· 試玩：按 1 clear、2 overcast、3 storm、4 clearing、5 waiting；按 d 顯示 HUD。
+  Console：ocean.requestState('storm')、ocean.bench() 量每幀 GPU 成本、ocean.CONFIG.clockHours = 18（測日夜）、ocean.strike(3)。
+-->

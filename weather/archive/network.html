@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>光點網路桌布</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* wallpaper: always the bottom layer, nothing selectable / draggable / clickable (same as index.html) */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0d13;
+               user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+  /* rendered at RES_SCALE of the window, stretched back up by CSS */
+  canvas { display: block; width: 100vw; height: 100vh; pointer-events: none; }
+  #hud { position: fixed; left: 10px; bottom: 8px; font: 12px/1.5 Consolas, monospace; color: rgba(255,255,255,.75);
+         background: rgba(0,0,0,.3); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
+  body.debug #hud { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+/* =====================================================================================
+ * 光點網路桌布 (demo 2) — 2026-09-30 — sibling of weather/index.html
+ *
+ * A fixed 3D network spread over the whole screen like a nebula — several density hubs of
+ * different sizes joined by filaments, with voids between them (k-nearest + a few long edges) —
+ * that shows the AI's state: idle / working / busy / output / error. Signals (bright dots) travel along
+ * edges; a node lights up when a signal passes and decays in the shader.
+ *
+ * State machine is the same one as index.html: a state is a set of TARGET values for
+ * continuous parameters; a change always starts from the CURRENT values and eases with
+ * smoothstep over 4 s × (largest normalised parameter distance). Requests inside 300 ms
+ * collapse to the last one.
+ *
+ * Input: the same state.json (weather names, see WEATHER_TO_STATE) polled every second;
+ * keys 1–5 switch manually, `d` toggles the HUD.
+ *
+ * Budget: 30 fps cap, 0.6× resolution, 4 draw calls (background triangle, edges LINES,
+ * nodes POINTS, signals POINTS), no depth buffer, no post-processing, additive blending.
+ * Per frame the CPU touches only live signals (≤ SIGNAL_CAP) and the nodes they hit; the
+ * vertex shader does breathing / rotation / contraction / dead-mask / glow decay from
+ * uniforms, so nothing per-point runs in JS after init. Stops while document.hidden.
+ * ===================================================================================== */
+
+/* ------------------------------ config ------------------------------ */
+const FPS = 30;
+const RES_SCALE = 0.6;                       // render resolution × window (0.5–0.75)
+const CONFIG = {
+  fullTransition: 1.5,                       // seconds for a full-range change (4 → 1.5, user 2026-09-30: the network can react fast)
+  polling: true,
+  hopDie: 0.12,                              // chance a signal dies at each node it reaches
+  glowDecay: 2.6,                            // node glow: exp(-decay × seconds since hit)
+};
+const DEBOUNCE_MS = 100;                      // 300 → 100 (2026-09-30)
+const POLL_MS = 250;                          // state.json poll; localhost, cheap (1000 → 250, 2026-09-30)
+
+const POINTS = 4800;                         // 3000–5000 (upper bound; the density field decides the exact count)
+const KNN = 3;                               // nearest neighbours per point
+const LONG_EDGES = 140;                      // extra random long edges
+const SIGNAL_CAP = 400;
+const BREATH_AMOUNT = 0;                     // whole-network breathing scale × (0 = off; user 2026-09-30: the swelling looked odd, the sway is enough). 1 = original depth
+const TOPOLOGY_SEED = 7;                     // deterministic layout / topology
+// layout: a wide flattened volume (x, y, z half extents, in scene units — the camera sees ≈ ±2.4 × ±1.35 at z = 0)
+const LAYOUT = {
+  half: [2.2, 1.25, 0.7],
+  spacing: 0.07,                             // candidate grid spacing (points are grid cells accepted by the density field, then jittered)
+  hubs: { cols: 3, rows: 2, extra: 2, radius: [0.18, 0.50], jitter: 0.35 },   // one hub per frame cell + a few small extra ones, varied sizes
+  filament: { weight: 0.22, width: 0.11 },   // density along the links between neighbouring hubs
+  voids: { count: 4, radius: 0.42, depth: 0.9 },
+  field: 0.06,                               // faint background haze over the whole volume
+  leftCalm: 0.55,                            // density multiplier at the far left (desktop icons live there)
+};
+const CAMERA = { fov: 38, dist: 3.9, tilt: 0.22, sway: [0.10, 0.05], swayRate: 0.045, offset: [0.0, 0.0] };   // no full rotation: the scene sways slowly (rad) so the wide layout never turns edge-on
+const SIZES = { node: 5.0, signal: 7.5 };    // sprite diameter in css px at the ball's centre depth
+const COLORS = {
+  base:     [0.50, 0.58, 0.74],              // monochrome, low saturation (nodes + edges)
+  accent:   [1.00, 0.80, 0.50],              // signals + lit nodes (warm amber)
+  error:    [1.00, 0.40, 0.34],              // accent blends toward this with `tint`
+  bgTop:    [0.078, 0.092, 0.128],
+  bgBottom: [0.036, 0.040, 0.058],
+};
+const CONTRACT = { radius: 0.55, strength: 0.55, retarget: 9, weights: [1.0, 0.7, 0.45] };   // 3 gathering regions of different strength, each drifting between hubs; radius in scene units, seconds between drift targets
+
+// parameter ranges (used to normalise distances)
+const PARAMS = {
+  signalRate:     [0, 200],                  // signals spawned per second
+  signalSpeed:    [0, 2],                    // ball units per second along edges
+  breathRate:     [0, 0.5],                  // breaths per second
+  contraction:    [0, 1],                    // local contraction strength
+  edgeVisibility: [0, 1],                    // base edge alpha
+  deadRatio:      [0, 1],                    // fraction of points switched off
+  breakRatio:     [0, 1],                    // fraction of signals that die halfway along an edge
+  radiate:        [0, 1],                    // fraction of signals born in the gathered region and running outward
+  irregular:      [0, 1],                    // breathing irregularity
+  tint:           [0, 1],                    // accent colour: 0 amber → 1 error red
+};
+const STATES = {
+  idle:    { signalRate:   5, signalSpeed: 0.35, breathRate: 0.07, contraction: 0.00, edgeVisibility: 0.05,  deadRatio: 0.00, breakRatio: 0.0, radiate: 0, irregular: 0, tint: 0 },
+  working: { signalRate: 110, signalSpeed: 0.90, breathRate: 0.22, contraction: 0.80, edgeVisibility: 0.11,  deadRatio: 0.00, breakRatio: 0.0, radiate: 0, irregular: 0, tint: 0 },
+  busy:    { signalRate: 180, signalSpeed: 1.20, breathRate: 0.04, contraction: 0.85, edgeVisibility: 0.14,  deadRatio: 0.00, breakRatio: 0.0, radiate: 0, irregular: 0, tint: 0 },   // working, stronger (AI running tools); breath almost still (user 2026-09-30)
+  output:  { signalRate: 150, signalSpeed: 1.50, breathRate: 0.14, contraction: 0.00, edgeVisibility: 0.30,  deadRatio: 0.00, breakRatio: 0.0, radiate: 1, irregular: 0, tint: 0 },
+  waiting: { signalRate:   3, signalSpeed: 0.25, breathRate: 0.05, contraction: 0.00, edgeVisibility: 0.04,  deadRatio: 0.00, breakRatio: 0.0, radiate: 0, irregular: 0, tint: 0 },   // 等你: almost silent (2026-09-30)
+  error:   { signalRate:  70, signalSpeed: 0.60, breathRate: 0.28, contraction: 0.15, edgeVisibility: 0.10,  deadRatio: 0.35, breakRatio: 0.8, radiate: 0, irregular: 1, tint: 1 },
+};
+// state.json is written by the Claude Code hooks with WEATHER names
+const WEATHER_TO_STATE = { clear: 'idle', overcast: 'working', storm: 'busy', clearing: 'output', waiting: 'waiting' };
+const KEYS = { '1': 'idle', '2': 'working', '3': 'output', '4': 'error', '5': 'busy' };
+
+/* ------------------------------ state machine (as index.html) ------------------------------ */
+const smooth = t => t * t * (3 - 2 * t);
+let current = { ...STATES.idle };           // actual values, updated every frame
+let from = { ...current }, to = { ...current };
+let tStart = 0, tDur = 0;                   // seconds (performance clock)
+let stateName = 'idle', pending = null, debounceT = 0;
+let override = null;                        // testing: { param: value } pinned on top of the state machine
+let edgeFlash = 0;                          // one-shot: all edges light up when output begins, then decays
+
+function now() { return performance.now() / 1000; }
+
+// advance the actual values to time t
+function step(t) {
+  const k = tDur > 0 ? Math.min(1, (t - tStart) / tDur) : 1;
+  const e = smooth(k);
+  for (const p in PARAMS) current[p] = from[p] + (to[p] - from[p]) * e;
+}
+
+// begin a transition to `name` from wherever the parameters are right now
+function applyState(name) {
+  if (!STATES[name]) return;
+  const t = now();
+  step(t);                                  // freeze the true current values
+  from = { ...current };
+  to = { ...STATES[name] };
+  let dist = 0;
+  for (const p in PARAMS) {
+    const [lo, hi] = PARAMS[p];
+    dist = Math.max(dist, Math.abs(to[p] - from[p]) / (hi - lo));
+  }
+  tStart = t;
+  tDur = CONFIG.fullTransition * dist;      // 0 → already there
+  if (name === 'output' && stateName !== 'output') edgeFlash = 1;
+  stateName = name;
+}
+
+// all inputs go through here: several changes within 300 ms → only the last one counts
+function requestState(name) {
+  if (!STATES[name]) return;
+  pending = name;
+  clearTimeout(debounceT);
+  debounceT = setTimeout(() => { if (pending !== stateName) applyState(pending); pending = null; }, DEBOUNCE_MS);
+}
+
+/* ------------------------------ inputs ------------------------------ */
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
+addEventListener('keydown', e => {
+  if (KEYS[e.key]) requestState(KEYS[e.key]);
+  if (e.key === 'd') document.body.classList.toggle('debug');
+});
+
+let lastPolled = null;
+async function poll() {
+  if (!CONFIG.polling) return;
+  try {
+    const r = await fetch('state.json?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) {
+      const s = (await r.json()).state;
+      const name = WEATHER_TO_STATE[s] || (STATES[s] ? s : null);
+      // only react to a change in the file, so keyboard overrides stick until the file changes
+      if (name && s !== lastPolled) { lastPolled = s; requestState(name); }
+    }
+  } catch { /* unreadable → keep the current state */ }
+}
+setInterval(poll, POLL_MS);
+poll();
+
+/* ------------------------------ geometry: points + fixed topology ------------------------------ */
+// seeded RNG so the layout is the same on every start
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const rng = mulberry32(TOPOLOGY_SEED);
+
+// ---- density field: hubs (one per frame cell, varied sizes) + filaments between neighbouring hubs
+//      + faint field haze, carved by a few voids; the left side is calmer. Evaluated once at init. ----
+const HUBS = [];
+{
+  const [hx, hy, hz] = LAYOUT.half, H = LAYOUT.hubs;
+  const cw = 2 * hx * 0.86 / H.cols, ch = 2 * hy * 0.8 / H.rows;
+  for (let r = 0; r < H.rows; r++) for (let c = 0; c < H.cols; c++) {
+    const x = -hx * 0.86 + cw * (c + 0.5) + (rng() - 0.5) * cw * H.jitter * 2;
+    const y = -hy * 0.8 + ch * (r + 0.5) + (rng() - 0.5) * ch * H.jitter * 2;
+    const z = (rng() - 0.5) * hz * 1.2;
+    let rad = H.radius[0] + (H.radius[1] - H.radius[0]) * rng();
+    if (c === 0) rad *= 0.75;                // smaller hubs on the calm (left) side
+    HUBS.push({ x, y, z, r: rad, w: rad * rad * (0.8 + 0.4 * rng()) });
+  }
+  for (let i = 0; i < H.extra; i++) {        // small extra hubs anywhere (right half more likely)
+    const rad = H.radius[0] * (0.7 + 0.5 * rng());
+    HUBS.push({ x: (rng() * 1.6 - 0.6) * hx, y: (rng() * 2 - 1) * hy * 0.85, z: (rng() - 0.5) * hz * 1.2, r: rad, w: rad * rad * 1.2 });
+  }
+}
+const LINKS = [];                            // filaments: each hub → its 2 nearest hubs
+for (let i = 0; i < HUBS.length; i++) {
+  const d = HUBS.map((h, j) => [j === i ? Infinity : Math.hypot(h.x - HUBS[i].x, h.y - HUBS[i].y, h.z - HUBS[i].z), j]).sort((a, b) => a[0] - b[0]);
+  for (let k = 0; k < 2; k++) { const j = d[k][1]; if (!LINKS.some(l => (l[0] === i && l[1] === j) || (l[0] === j && l[1] === i))) LINKS.push([i, j]); }
+}
+const VOIDS = [];
+for (let i = 0; i < LAYOUT.voids.count; i++) VOIDS.push([(rng() - 0.5) * 2 * LAYOUT.half[0] * 0.8, (rng() - 0.5) * 2 * LAYOUT.half[1] * 0.8, (rng() - 0.5) * LAYOUT.half[2]]);
+function density(x, y, z) {
+  let d = 0;
+  for (const h of HUBS) { const q = ((x - h.x) ** 2 + (z - h.z) ** 2 + ((y - h.y) / 0.8) ** 2) / (h.r * h.r); d += h.w * Math.exp(-q); }
+  for (const [a, b] of LINKS) {
+    const A = HUBS[a], B = HUBS[b];
+    const ex = B.x - A.x, ey = B.y - A.y, ez = B.z - A.z, L2 = ex * ex + ey * ey + ez * ez;
+    const t = Math.max(0, Math.min(1, ((x - A.x) * ex + (y - A.y) * ey + (z - A.z) * ez) / L2));
+    const px = A.x + ex * t - x, py = A.y + ey * t - y, pz = A.z + ez * t - z;
+    d += LAYOUT.filament.weight * Math.exp(-(px * px + py * py + pz * pz) / (LAYOUT.filament.width ** 2)) * Math.sin(t * Math.PI) ** 0.5;
+  }
+  const [hx, hy, hz] = LAYOUT.half;
+  d += LAYOUT.field * Math.exp(-((x / hx) ** 2 + (y / hy) ** 2 + (z / hz) ** 2) * 1.6);
+  for (const v of VOIDS) d *= 1 - LAYOUT.voids.depth * Math.exp(-((x - v[0]) ** 2 + (y - v[1]) ** 2 + (z - v[2]) ** 2) / (LAYOUT.voids.radius ** 2));
+  const l = Math.min(1, Math.max(0, (x + hx) / (hx + 0.3)));
+  return d * (LAYOUT.leftCalm + (1 - LAYOUT.leftCalm) * l * l * (3 - 2 * l));
+}
+
+let N;
+let pos, seed;                               // rest position (scene units); seed x: dead-order (deadRatio threshold), y: phase / flicker
+{
+  // sparse grid + jitter: every grid cell in the volume is a candidate, accepted with probability ∝ density
+  const s = LAYOUT.spacing, [hx, hy, hz] = LAYOUT.half;
+  const cells = [], dens = [];
+  let sum = 0;
+  for (let x = -hx; x <= hx; x += s) for (let y = -hy; y <= hy; y += s) for (let z = -hz; z <= hz; z += s) {
+    const d = density(x, y, z);
+    if (d < 1e-3) continue;
+    cells.push(x, y, z); dens.push(d); sum += d;
+  }
+  const acc = [];
+  for (let i = 0; i < dens.length && acc.length < POINTS * 3; i++) {
+    if (rng() < POINTS * dens[i] / sum) acc.push(cells[i * 3] + (rng() - 0.5) * s * 0.9, cells[i * 3 + 1] + (rng() - 0.5) * s * 0.9, cells[i * 3 + 2] + (rng() - 0.5) * s * 0.9);
+  }
+  N = acc.length / 3;
+  pos = new Float32Array(acc);
+  seed = new Float32Array(N * 2);
+  for (let i = 0; i < N * 2; i++) seed[i] = rng();
+}
+
+{
+  // k nearest neighbours through a hash grid (cell ≈ 1.6 × spacing → 27 cells cover the neighbourhood)
+  const cs = LAYOUT.spacing * 1.6, [hx, hy, hz] = LAYOUT.half;
+  const gny = Math.ceil(2 * hy / cs) + 3, gnz = Math.ceil(2 * hz / cs) + 3;
+  const cellKey = (gx, gy, gz) => (gx * gny + gy) * gnz + gz;
+  const gof = (v, h) => ((v + h) / cs | 0) + 1;
+  const buckets = new Map();
+  for (let i = 0; i < N; i++) {
+    const c = cellKey(gof(pos[i * 3], hx), gof(pos[i * 3 + 1], hy), gof(pos[i * 3 + 2], hz));
+    let b = buckets.get(c); if (!b) buckets.set(c, b = []); b.push(i);
+  }
+  const edgeSet = new Set(), edges = [];
+  const addEdge = (a, b) => { if (a === b) return; const k = a < b ? a * N + b : b * N + a; if (edgeSet.has(k)) return; edgeSet.add(k); edges.push(a, b); };
+  const bestI = new Int32Array(KNN), bestD = new Float64Array(KNN);
+  for (let i = 0; i < N; i++) {
+    bestD.fill(Infinity); bestI.fill(-1);
+    const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+    const gx = gof(x, hx), gy = gof(y, hy), gz = gof(z, hz);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      const b = buckets.get(cellKey(gx + dx, gy + dy, gz + dz));
+      if (!b) continue;
+      for (const j of b) {
+        if (j === i) continue;
+        const ex = pos[j * 3] - x, ey = pos[j * 3 + 1] - y, ez = pos[j * 3 + 2] - z;
+        const d = ex * ex + ey * ey + ez * ez;
+        if (d >= bestD[KNN - 1]) continue;
+        let k = KNN - 1;
+        while (k > 0 && bestD[k - 1] > d) { bestD[k] = bestD[k - 1]; bestI[k] = bestI[k - 1]; k--; }
+        bestD[k] = d; bestI[k] = j;
+      }
+    }
+    for (let k = 0; k < KNN; k++) if (bestI[k] >= 0) addEdge(i, bestI[k]);
+  }
+  // long edges: random pairs at least half a unit apart (they mostly bridge hubs)
+  for (let n = 0; n < LONG_EDGES;) {
+    const a = (rng() * N) | 0, b = (rng() * N) | 0;
+    const dx = pos[a * 3] - pos[b * 3], dy = pos[a * 3 + 1] - pos[b * 3 + 1], dz = pos[a * 3 + 2] - pos[b * 3 + 2];
+    if (dx * dx + dy * dy + dz * dz < 0.25) continue;
+    addEdge(a, b); n++;
+  }
+  var E = edges.length / 2;
+  var edgeIdx = new Uint16Array(edges);     // LINES index buffer (N ≤ 65535)
+
+  // adjacency in CSR form: adjStart[i]..adjStart[i+1] → adj (neighbour), adjLen (edge length)
+  const deg = new Int32Array(N + 1);
+  for (let e = 0; e < E; e++) { deg[edges[e * 2] + 1]++; deg[edges[e * 2 + 1] + 1]++; }
+  for (let i = 0; i < N; i++) deg[i + 1] += deg[i];
+  var adjStart = deg;
+  var adj = new Int32Array(E * 2), adjLen = new Float32Array(E * 2);
+  const fill = new Int32Array(N);
+  for (let e = 0; e < E; e++) {
+    const a = edges[e * 2], b = edges[e * 2 + 1];
+    const dx = pos[a * 3] - pos[b * 3], dy = pos[a * 3 + 1] - pos[b * 3 + 1], dz = pos[a * 3 + 2] - pos[b * 3 + 2];
+    const len = Math.max(0.01, Math.sqrt(dx * dx + dy * dy + dz * dz));
+    let p = adjStart[a] + fill[a]++; adj[p] = b; adjLen[p] = len;
+    p = adjStart[b] + fill[b]++; adj[p] = a; adjLen[p] = len;
+  }
+}
+
+/* ------------------------------ signals (the only per-frame CPU work) ------------------------------ */
+// Node brightness scheme: a per-node dynamic attribute aHit = (hitTime, strength). The vertex shader
+// computes glow = strength × exp(-decay × (uTime − hitTime)), so decay costs nothing on the CPU and
+// only nodes hit THIS frame are written: their indices are collected, sorted, merged into runs and
+// uploaded with one bufferSubData per run (typically a handful of small uploads per frame).
+const hit = new Float32Array(N * 2);
+for (let i = 0; i < N; i++) hit[i * 2] = -1e4;
+const dirtyFlag = new Uint8Array(N);
+let dirty = [];
+let sceneTime = 0;                          // seconds, pauses while hidden, rebased hourly (float precision in the shader)
+
+const S = {                                 // struct-of-arrays, compacted by swap-remove
+  n: 0,
+  a: new Int32Array(SIGNAL_CAP), b: new Int32Array(SIGNAL_CAP),
+  t: new Float32Array(SIGNAL_CAP), len: new Float32Array(SIGNAL_CAP), spd: new Float32Array(SIGNAL_CAP),
+  age: new Float32Array(SIGNAL_CAP), die: new Float32Array(SIGNAL_CAP), rad: new Uint8Array(SIGNAL_CAP),
+};
+const SIG_STRIDE = 12;                      // ax ay az  bx by bz  sax say  sbx sby  t bright
+const sigBuf = new Float32Array(SIGNAL_CAP * SIG_STRIDE);
+let spawnAcc = 0;
+
+const NC = 3;                               // gathering regions (see CONTRACT.weights)
+const centres = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], centreTargets = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+const centreHub = [-1, -1, -1], retargetT = [0, 0, 0];
+const centreFlat = new Float32Array(NC * 3);
+function pickCentre(k) {                     // a random hub no other region is using, plus some jitter
+  let h;
+  do h = (Math.random() * HUBS.length) | 0; while (centreHub.some((v, i) => i !== k && v === h) && HUBS.length > NC);
+  centreHub[k] = h;
+  const j = HUBS[h].r * 0.5;
+  centreTargets[k][0] = HUBS[h].x + (Math.random() - 0.5) * j;
+  centreTargets[k][1] = HUBS[h].y + (Math.random() - 0.5) * j;
+  centreTargets[k][2] = HUBS[h].z + (Math.random() - 0.5) * j;
+}
+function dist2Centre(i, k) {
+  const c = centres[k];
+  const dx = pos[i * 3] - c[0], dy = pos[i * 3 + 1] - c[1], dz = pos[i * 3 + 2] - c[2];
+  return dx * dx + dy * dy + dz * dz;
+}
+const alive = i => seed[i * 2] >= current.deadRatio;
+const WSUM = CONTRACT.weights.reduce((a, b) => a + b, 0);
+
+function hitNode(i, strength) {
+  hit[i * 2] = sceneTime; hit[i * 2 + 1] = strength;
+  if (!dirtyFlag[i]) { dirtyFlag[i] = 1; dirty.push(i); }
+}
+
+// next edge out of `from` (adjacency slot index), avoiding the edge we came from; outward = away from the centre
+function pickNext(from, prev, outward) {   // outward: 0 = random walk, k+1 = away from region k
+  const s = adjStart[from], e = adjStart[from + 1], cnt = e - s;
+  if (cnt === 0) return -1;
+  if (outward) {
+    let best = -1, bd = -1;
+    for (let j = s; j < e; j++) {
+      if (adj[j] === prev && cnt > 1) continue;
+      const d = dist2Centre(adj[j], outward - 1) * (0.85 + 0.3 * Math.random());
+      if (d > bd) { bd = d; best = j; }
+    }
+    return best;
+  }
+  let j = s + ((Math.random() * cnt) | 0);
+  if (adj[j] === prev && cnt > 1) j = s + ((Math.random() * cnt) | 0);
+  return j;
+}
+
+function spawn() {
+  if (S.n >= SIGNAL_CAP) return;
+  const outward = Math.random() < current.radiate;
+  // born in a gathered region: always when radiating (output), mostly while contracting (working);
+  // which region: weighted by its strength
+  const inRegion = outward || Math.random() < current.contraction * 0.75;
+  let origin = -1, region = 0;
+  if (inRegion) {
+    let r = Math.random() * WSUM;
+    for (region = 0; region < NC - 1 && r >= CONTRACT.weights[region]; region++) r -= CONTRACT.weights[region];
+    const r2 = CONTRACT.radius * CONTRACT.radius * 0.5;
+    for (let k = 0; k < 16; k++) { const i = (Math.random() * N) | 0; if (dist2Centre(i, region) < r2 && alive(i)) { origin = i; break; } }
+  }
+  if (origin < 0) for (let k = 0; k < 4; k++) { const i = (Math.random() * N) | 0; if (alive(i)) { origin = i; break; } }
+  if (origin < 0) return;
+  const dir = outward && origin >= 0 ? region + 1 : 0;
+  const j = pickNext(origin, -1, dir);
+  if (j < 0) return;
+  const n = S.n++;
+  S.a[n] = origin; S.b[n] = adj[j]; S.len[n] = adjLen[j]; S.t[n] = 0;
+  S.spd[n] = 0.7 + 0.6 * Math.random(); S.age[n] = 0; S.rad[n] = dir;
+  S.die[n] = Math.random() < current.breakRatio ? (Math.random() * 3 | 0) + 0.3 + 0.5 * Math.random() : 99;   // break: after 0–2 whole edges, halfway along the next
+  hitNode(origin, 0.6);
+}
+
+function removeSignal(i) {
+  const l = --S.n;
+  if (i !== l) { S.a[i] = S.a[l]; S.b[i] = S.b[l]; S.t[i] = S.t[l]; S.len[i] = S.len[l]; S.spd[i] = S.spd[l]; S.age[i] = S.age[l]; S.die[i] = S.die[l]; S.rad[i] = S.rad[l]; }
+}
+
+function simulate(dt) {
+  // gathering region: pick one when contraction starts from nothing, then drift slowly between targets
+  const active = current.contraction > 0.02 || current.radiate > 0.02;
+  for (let c = 0; c < NC; c++) {
+    if (!active) { retargetT[c] = 0; continue; }
+    if (retargetT[c] <= 0) {
+      pickCentre(c); retargetT[c] = CONTRACT.retarget * (0.7 + 0.6 * Math.random()) * (1 + c * 0.3);
+      if (current.contraction < 0.03 && current.radiate < 0.03) for (let i = 0; i < 3; i++) centres[c][i] = centreTargets[c][i];   // still invisible → just jump there
+    }
+    retargetT[c] -= dt;
+    const k = Math.min(1, dt * 0.25);
+    for (let i = 0; i < 3; i++) { centres[c][i] += (centreTargets[c][i] - centres[c][i]) * k; centreFlat[c * 3 + i] = centres[c][i]; }
+  }
+
+  // spawn
+  spawnAcc += current.signalRate * dt;
+  if (spawnAcc > 40) spawnAcc = 40;          // no burst after a stall
+  while (spawnAcc >= 1) { spawnAcc -= 1; spawn(); }
+
+  // advance
+  const speed = current.signalSpeed;
+  for (let i = 0; i < S.n;) {
+    S.age[i] += dt;
+    let t = S.t[i] + dt * speed * S.spd[i] / S.len[i];
+    let dead = t >= S.die[i];
+    while (!dead && t >= 1) {                // arrived at node b
+      S.die[i] -= 1;                         // die is measured in edges travelled
+      const b = S.b[i];
+      hitNode(b, 1);
+      if (!alive(b) || Math.random() < CONFIG.hopDie) { dead = true; break; }
+      const j = pickNext(b, S.a[i], S.rad[i]);
+      if (j < 0) { dead = true; break; }
+      const left = (t - 1) * S.len[i];       // distance already travelled past the node
+      S.a[i] = b; S.b[i] = adj[j]; S.len[i] = adjLen[j];
+      t = left / S.len[i];
+    }
+    if (dead) { removeSignal(i); continue; }
+    S.t[i] = t; i++;
+  }
+
+  // pack live signals for the GPU (both endpoints + seeds so the shader can apply the exact node transform)
+  for (let i = 0; i < S.n; i++) {
+    const o = i * SIG_STRIDE, a = S.a[i] * 3, b = S.b[i] * 3, sa = S.a[i] * 2, sb = S.b[i] * 2;
+    sigBuf[o] = pos[a]; sigBuf[o + 1] = pos[a + 1]; sigBuf[o + 2] = pos[a + 2];
+    sigBuf[o + 3] = pos[b]; sigBuf[o + 4] = pos[b + 1]; sigBuf[o + 5] = pos[b + 2];
+    sigBuf[o + 6] = seed[sa]; sigBuf[o + 7] = seed[sa + 1]; sigBuf[o + 8] = seed[sb]; sigBuf[o + 9] = seed[sb + 1];
+    sigBuf[o + 10] = S.t[i];
+    let br = Math.min(1, S.age[i] * 6);
+    const die = S.die[i];
+    if (die < 99) { const k = (S.t[i] - (die - 0.25)) / 0.25; if (k > 0) br *= (1 - Math.min(1, k)) * (Math.random() < 0.5 ? 0.4 : 1); }   // sputter, then break
+    sigBuf[o + 11] = br;
+  }
+}
+
+/* ------------------------------ WebGL ------------------------------ */
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: false, alpha: false, depth: false, preserveDrawingBuffer: false, powerPreference: 'low-power' });
+
+// shared node transform: contraction toward uCentre (rest space), breathing scale with a tiny per-point phase
+const XFORM = `
+uniform mat4  uMVP;
+uniform vec2  uOffset;      // NDC shift of the whole ball
+uniform float uTime, uBreath, uContract, uRadius, uDist;
+uniform vec3  uCentres[${NC}];
+uniform float uWeights[${NC}];
+// 1 at a region's centre → 0 at its edge, weighted per region (the sum is what the fragment shaders brighten)
+float gather(vec3 p) {
+  float g = 0.0;
+  for (int i = 0; i < ${NC}; i++) g += (1.0 - smoothstep(0.0, uRadius, length(uCentres[i] - p))) * uWeights[i];
+  return min(g, 1.0) * uContract;
+}
+vec3 xform(vec3 p, vec2 sd) {
+  vec3 pull = vec3(0.0);
+  for (int i = 0; i < ${NC}; i++) pull += (uCentres[i] - p) * (1.0 - smoothstep(0.0, uRadius, length(uCentres[i] - p))) * uWeights[i];
+  p += pull * uContract * ${CONTRACT.strength.toFixed(3)};
+  return p * uBreath * (1.0 + 0.012 * sin(uTime * 1.3 + sd.y * 50.0));
+}
+vec4 project(vec3 p) { vec4 c = uMVP * vec4(p, 1.0); c.xy += uOffset * c.w; return c; }
+float depthCue(float w) { return clamp((uDist + 1.0 - w) / 2.0, 0.0, 1.0); }   // 1 near … 0 far
+float hash1(float n) { return fract(sin(n) * 43758.5453); }
+`;
+
+const VS_NODE = XFORM + `
+attribute vec3 aPos;
+attribute vec2 aSeed;
+attribute vec2 aHit;        // (hit time, strength) — dynamic, written only for touched nodes
+uniform float uDead, uFlick, uGlowDecay, uPointPx;
+varying float vGlow, vAlive, vDepth, vGather;
+void main() {
+  vec4 c = project(xform(aPos, aSeed));
+  vGather = gather(aPos);
+  gl_Position = c;
+  float glow = aHit.y * exp(-uGlowDecay * (uTime - aHit.x));
+  vGlow = glow;
+  float alive = step(uDead, aSeed.x);
+  float flick = step(0.93, hash1(aSeed.y * 91.7 + floor(uTime * 5.0 + aSeed.x * 9.0)));   // dead nodes blink now and then
+  vAlive = max(alive, flick * uFlick);
+  vDepth = depthCue(c.w);
+  gl_PointSize = max(1.5, uPointPx * (1.0 + glow * 1.4) * uDist / c.w);
+}`;
+
+const FS_NODE = `
+precision mediump float;
+uniform vec3 uBase, uAccent;
+uniform float uAlpha;
+varying float vGlow, vAlive, vDepth, vGather;
+void main() {
+  vec2 q = gl_PointCoord * 2.0 - 1.0;
+  float d = dot(q, q);
+  if (d > 1.0) discard;
+  float a = 1.0 - d; a *= a;
+  float g = clamp(vGlow, 0.0, 1.0);
+  vec3 col = mix(uBase, uAccent, max(g, vGather * 0.35));            // the gathered region warms up a little
+  float k = (uAlpha * (0.45 + 0.55 * vDepth) * (1.0 + vGather * 1.2) + g * 0.9) * mix(0.05, 1.0, vAlive);
+  gl_FragColor = vec4(col * a * k, 1.0);
+}`;
+
+const FS_EDGE = `
+precision mediump float;
+uniform vec3 uBase, uAccent;
+uniform float uAlpha;       // base edge alpha (+ flash)
+varying float vGlow, vAlive, vDepth, vGather;
+void main() {
+  float g = clamp(vGlow, 0.0, 1.0);
+  vec3 col = mix(uBase, uAccent, g * 0.7);
+  float k = (uAlpha * (0.5 + 0.5 * vDepth) * (1.0 + vGather) + g * 0.30 * (0.4 + 0.6 * vDepth)) * vAlive;
+  gl_FragColor = vec4(col * k, 1.0);
+}`;
+
+const VS_SIGNAL = XFORM + `
+attribute vec3 aA, aB;      // rest positions of the edge's two nodes
+attribute vec2 aSA, aSB;    // their seeds (same transform as the nodes → the dot stays on the line)
+attribute vec2 aTB;         // (t along the edge, brightness)
+uniform float uSignalPx;
+varying float vBright;
+void main() {
+  vec3 p = mix(xform(aA, aSA), xform(aB, aSB), aTB.x);
+  vec4 c = project(p);
+  gl_Position = c;
+  vBright = aTB.y * (0.55 + 0.45 * depthCue(c.w));
+  gl_PointSize = max(2.0, uSignalPx * uDist / c.w);
+}`;
+
+const FS_SIGNAL = `
+precision mediump float;
+uniform vec3 uAccent;
+varying float vBright;
+void main() {
+  vec2 q = gl_PointCoord * 2.0 - 1.0;
+  float d = dot(q, q);
+  if (d > 1.0) discard;
+  float a = 1.0 - d; a *= a;
+  float core = smoothstep(0.30, 0.0, d);
+  gl_FragColor = vec4((uAccent * a * 0.85 + vec3(1.0, 0.98, 0.94) * core * 0.55) * vBright, 1.0);
+}`;
+
+const VS_BG = `attribute vec2 p; varying vec2 v; void main() { v = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }`;
+const FS_BG = `
+precision mediump float;
+uniform vec3 uTop, uBottom;
+varying vec2 v;
+void main() {
+  vec3 c = mix(uBottom, uTop, smoothstep(0.0, 1.0, v.y));
+  c *= 1.0 - 0.22 * length(v - vec2(0.55, 0.5));       // soft vignette
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs, attribs, uniforms) {
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
+  attribs.forEach((a, i) => gl.bindAttribLocation(p, i, a));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  for (const n of uniforms) u[n] = gl.getUniformLocation(p, n);
+  return { p, u };
+}
+const U_XFORM = ['uMVP', 'uOffset', 'uTime', 'uBreath', 'uContract', 'uRadius', 'uDist', 'uCentres', 'uWeights'];
+const P_NODE   = program(VS_NODE, FS_NODE, ['aPos', 'aSeed', 'aHit'], [...U_XFORM, 'uDead', 'uFlick', 'uGlowDecay', 'uPointPx', 'uBase', 'uAccent', 'uAlpha']);
+const P_EDGE   = program(VS_NODE, FS_EDGE, ['aPos', 'aSeed', 'aHit'], [...U_XFORM, 'uDead', 'uFlick', 'uGlowDecay', 'uPointPx', 'uBase', 'uAccent', 'uAlpha']);
+const P_SIGNAL = program(VS_SIGNAL, FS_SIGNAL, ['aA', 'aB', 'aSA', 'aSB', 'aTB'], [...U_XFORM, 'uSignalPx', 'uAccent']);
+const P_BG     = program(VS_BG, FS_BG, ['p'], ['uTop', 'uBottom']);
+
+// buffers: static per-point data uploaded once; hit + signal buffers dynamic
+const bufPos = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+const bufSeed = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufSeed); gl.bufferData(gl.ARRAY_BUFFER, seed, gl.STATIC_DRAW);
+const bufHit = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufHit); gl.bufferData(gl.ARRAY_BUFFER, hit, gl.DYNAMIC_DRAW);
+const bufEdges = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufEdges); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, edgeIdx, gl.STATIC_DRAW);
+const bufSig = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufSig); gl.bufferData(gl.ARRAY_BUFFER, sigBuf.byteLength, gl.DYNAMIC_DRAW);
+const bufTri = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufTri); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+function bindNodeAttribs() {
+  for (let i = 0; i < 3; i++) gl.enableVertexAttribArray(i);
+  for (let i = 3; i < 5; i++) gl.disableVertexAttribArray(i);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufPos);  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufSeed); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufHit);  gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
+}
+function bindSignalAttribs() {
+  for (let i = 0; i < 5; i++) gl.enableVertexAttribArray(i);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufSig);
+  const st = SIG_STRIDE * 4;
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, st, 0);
+  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, st, 12);
+  gl.vertexAttribPointer(2, 2, gl.FLOAT, false, st, 24);
+  gl.vertexAttribPointer(3, 2, gl.FLOAT, false, st, 32);
+  gl.vertexAttribPointer(4, 2, gl.FLOAT, false, st, 40);
+}
+
+// upload only the nodes hit this frame, merged into runs
+function uploadHits() {
+  if (dirty.length === 0) return 0;
+  dirty.sort((a, b) => a - b);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufHit);
+  let runs = 0, s = dirty[0], e = s;
+  for (let k = 1; k <= dirty.length; k++) {
+    const i = dirty[k];
+    if (k < dirty.length && i - e <= 24) { e = i; continue; }
+    gl.bufferSubData(gl.ARRAY_BUFFER, s * 8, hit.subarray(s * 2, (e + 1) * 2)); runs++;
+    if (k < dirty.length) { s = i; e = i; }
+  }
+  for (const i of dirty) dirtyFlag[i] = 0;
+  dirty = [];
+  return runs;
+}
+
+/* ------------------------------ matrices (column-major) ------------------------------ */
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0,  0, f, 0, 0,  0, 0, (far + near) * nf, -1,  0, 0, 2 * far * near * nf, 0];
+}
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; }
+  return o;
+}
+const rotY = a => { const c = Math.cos(a), s = Math.sin(a); return [c, 0, -s, 0,  0, 1, 0, 0,  s, 0, c, 0,  0, 0, 0, 1]; };
+const rotX = a => { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0,  0, c, s, 0,  0, -s, c, 0,  0, 0, 0, 1]; };
+const translate = (x, y, z) => [1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  x, y, z, 1];
+
+function resize() {
+  const w = Math.max(1, Math.round(innerWidth * RES_SCALE)), h = Math.max(1, Math.round(innerHeight * RES_SCALE));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); }
+}
+addEventListener('resize', resize);
+resize();
+
+/* ------------------------------ render ------------------------------ */
+let breathPhase = 0, breathScale = 1, breathWobble = 0;
+let lastRuns = 0;
+
+function render() {
+  const aspect = canvas.width / canvas.height;
+  const P = perspective(CAMERA.fov * Math.PI / 180, aspect, 0.5, 10);
+  const MVP = mul(mul(mul(P, translate(0, 0, -CAMERA.dist)), rotX(CAMERA.tilt + CAMERA.sway[1] * Math.sin(sceneTime * CAMERA.swayRate * 0.7 + 1.0))), rotY(CAMERA.sway[0] * Math.sin(sceneTime * CAMERA.swayRate)));
+  const tint = current.tint;
+  const accent = [0, 1, 2].map(i => COLORS.accent[i] + (COLORS.error[i] - COLORS.accent[i]) * tint);
+  const base = [0, 1, 2].map(i => COLORS.base[i] * (1 - 0.25 * tint) + COLORS.error[i] * 0.25 * tint);
+
+  gl.disable(gl.BLEND);
+  gl.useProgram(P_BG.p);
+  gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2); gl.disableVertexAttribArray(3); gl.disableVertexAttribArray(4);
+  gl.enableVertexAttribArray(0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufTri); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform3fv(P_BG.u.uTop, COLORS.bgTop); gl.uniform3fv(P_BG.u.uBottom, COLORS.bgBottom);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);              // additive: glow without post-processing
+
+  const setXform = pr => {
+    gl.uniformMatrix4fv(pr.u.uMVP, false, MVP);
+    gl.uniform2f(pr.u.uOffset, CAMERA.offset[0], CAMERA.offset[1]);
+    gl.uniform1f(pr.u.uTime, sceneTime);
+    gl.uniform1f(pr.u.uBreath, breathScale);
+    gl.uniform1f(pr.u.uContract, current.contraction);
+    gl.uniform1f(pr.u.uRadius, CONTRACT.radius);
+    gl.uniform1f(pr.u.uDist, CAMERA.dist);
+    gl.uniform3fv(pr.u.uCentres, centreFlat);
+    gl.uniform1fv(pr.u.uWeights, CONTRACT.weights);
+  };
+  const setNode = (pr, alpha, px) => {
+    setXform(pr);
+    gl.uniform1f(pr.u.uDead, current.deadRatio);
+    gl.uniform1f(pr.u.uFlick, Math.min(1, current.deadRatio * 4));
+    gl.uniform1f(pr.u.uGlowDecay, CONFIG.glowDecay);
+    gl.uniform1f(pr.u.uPointPx, px);
+    gl.uniform3fv(pr.u.uBase, base); gl.uniform3fv(pr.u.uAccent, accent);
+    gl.uniform1f(pr.u.uAlpha, alpha);
+  };
+
+  bindNodeAttribs();
+  // 1) edges
+  gl.useProgram(P_EDGE.p);
+  setNode(P_EDGE, Math.min(1, current.edgeVisibility + edgeFlash * 0.6), 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufEdges);
+  gl.drawElements(gl.LINES, E * 2, gl.UNSIGNED_SHORT, 0);
+  // 2) nodes
+  gl.useProgram(P_NODE.p);
+  setNode(P_NODE, 0.26, SIZES.node * RES_SCALE);
+  gl.drawArrays(gl.POINTS, 0, N);
+  // 3) signals
+  if (S.n > 0) {
+    gl.useProgram(P_SIGNAL.p);
+    setXform(P_SIGNAL);
+    gl.uniform1f(P_SIGNAL.u.uSignalPx, SIZES.signal * RES_SCALE);
+    gl.uniform3fv(P_SIGNAL.u.uAccent, accent);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufSig);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, sigBuf.subarray(0, S.n * SIG_STRIDE));
+    bindSignalAttribs();
+    gl.drawArrays(gl.POINTS, 0, S.n);
+  }
+}
+
+// everything that moves with time (called once per rendered frame)
+function advance(t, dt) {
+  step(t);
+  if (override) Object.assign(current, override);
+  sceneTime += dt;
+  if (sceneTime > 3600) {                    // rebase so (uTime − hitTime) keeps float precision for days
+    sceneTime -= 3600;
+    for (let i = 0; i < N; i++) hit[i * 2] -= 3600;
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufHit); gl.bufferSubData(gl.ARRAY_BUFFER, 0, hit);
+  }
+  // breathing: phase integrates the rate (a rate change never jumps); `irregular` adds a wobble to rate and depth
+  breathWobble += (Math.random() - 0.5 - breathWobble * 0.1) * dt * 6;
+  const irr = current.irregular;
+  breathPhase += dt * 2 * Math.PI * current.breathRate * (1 + irr * (0.8 * Math.sin(sceneTime * 2.3) + 1.5 * breathWobble));
+  const amp = BREATH_AMOUNT * (0.02 + 0.05 * current.breathRate / PARAMS.breathRate[1]);
+  breathScale = 1 + amp * Math.sin(breathPhase) * (1 + irr * 0.5 * Math.sin(sceneTime * 3.7));
+  edgeFlash *= Math.exp(-dt * 1.6);
+  simulate(dt);
+  lastRuns = uploadHits();
+}
+
+/* ------------------------------ loop: 30 fps cap, stops while hidden ------------------------------ */
+let raf = 0, nextFrame = 0, lastT = now();
+const FRAME_MS = 1000 / FPS;
+let fpsCount = 0, fpsT = now(), fps = 0;
+function frame(ms) {
+  raf = requestAnimationFrame(frame);
+  if (ms < nextFrame) return;
+  nextFrame += FRAME_MS;
+  if (nextFrame < ms) nextFrame = ms + FRAME_MS;
+  const t = now(), dt = Math.min(0.1, t - lastT);
+  lastT = t;
+
+  advance(t, dt);
+  render();
+
+  fpsCount++;
+  if (t - fpsT >= 1) { fps = fpsCount / (t - fpsT); fpsCount = 0; fpsT = t; }
+  if (document.body.classList.contains('debug')) {
+    document.getElementById('hud').textContent =
+      `state ${stateName}${pending ? ' (→' + pending + ')' : ''}\n` +
+      Object.keys(PARAMS).map(p => `${p.padEnd(15)} ${current[p].toFixed(2)}`).join('\n') +
+      `\nsignals ${S.n}/${SIGNAL_CAP}  hit runs ${lastRuns}  fps ${fps.toFixed(1)}` +
+      `\npoints ${N}  edges ${E}  res ${canvas.width}×${canvas.height}`;
+  }
+}
+function start() { if (!raf) { lastT = now(); raf = requestAnimationFrame(frame); } }
+function stop() { cancelAnimationFrame(raf); raf = 0; }
+let hostPaused = false;
+document.addEventListener('visibilitychange', () => (document.hidden || hostPaused ? stop() : start()));
+// 2026-10-01: the host (tools/wallpaper.js) pauses us while a window covers the whole desktop
+window.wpPause = on => { hostPaused = !!on; if (hostPaused) stop(); else if (!document.hidden) start(); };
+if (!document.hidden) start();
+
+// cost measurement: median CPU time of advance() and GPU time of render() (readPixels sync before/after)
+function bench(frames = 60) {
+  const px = new Uint8Array(4), cpu = [], gpu = [];
+  const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  for (let i = 0; i < frames; i++) {
+    const t0 = performance.now(); advance(now(), 1 / FPS); const t1 = performance.now();
+    sync(); const t2 = performance.now(); render(); sync(); const t3 = performance.now();
+    cpu.push(t1 - t0); gpu.push(t3 - t2);
+  }
+  const med = a => a.sort((x, y) => x - y)[a.length >> 1];
+  return { cpuMs: med(cpu), gpuMs: med(gpu), signals: S.n, res: canvas.width + 'x' + canvas.height, points: N, edges: E };
+}
+
+// testing hooks
+window.network = {
+  requestState, applyState, STATES, PARAMS, CONFIG, bench,
+  setOverride(o) { override = o; },
+  get current() { return { ...current }; }, get state() { return stateName; },
+  get signals() { return S.n; }, get edges() { return E; }, get points() { return N; }, HUBS, LAYOUT,
+};
+</script>
+</body>
+</html>
+<!--
+使用說明（demo 2：光點網路桌布）
+· 讀的是同一個 weather/state.json（clear→idle、overcast→working、storm→busy、clearing→output；也接受
+  idle/working/busy/output/error 直接寫在檔案裡）。error 目前沒有 hook，按 4 才看得到。
+· 網址：http://127.0.0.1:47321/weather/network.html（App 內建 claude-bridge 伺服器要在跑）。
+· 試玩：開網址後按 1 idle、2 working、3 output、4 error、5 busy；按 d 顯示 HUD（狀態、參數、訊號數、fps）。
+  Console：network.requestState('working')、network.bench() 量每幀成本、network.setOverride({signalRate:200})。
+· 要把桌布換成這個，只要改 tools/wallpaper.js 載入的網址（index.html → network.html）一行；本檔沒有動它。
+-->
