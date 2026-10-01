@@ -7,6 +7,8 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 它停下來等你回答或批准的時候，天上會亮起一顆慢慢閃的星星。
 你不用切視窗，眼角餘光就知道 AI 在做什麼。
 
+![夜晚的海：五個 Claude Code session 是五艘船，天上那顆星和其中一艘的燈正在閃——它在等你](docs/screenshots/ocean-night.jpg)
+
 ## 狀態對照
 
 | Claude Code 在做的事 | 天氣 | 右上角 HUD |
@@ -27,6 +29,17 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 - **天氣**：只有天空。雲、雨、閃電、陽光光束，跟著台北的真實日出日落變化。
 - **天氣＋海**：下半部是一片遠方的海，倒映同一片天空，海上有船隊。
 - **海**：貼近海面的立體海，浪頭、白沫、月光，船隊在浪裡起伏。
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/weather-storm.jpg" alt="天氣：雷雨與閃電"><br>天氣・執行中（雷雨）</td>
+<td width="50%"><img src="docs/screenshots/sky-sea-dusk.jpg" alt="天氣＋海：黃昏的船隊"><br>天氣＋海・黃昏的船隊</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/ocean-day.jpg" alt="海：白天"><br>海・白天</td>
+<td><img src="docs/screenshots/ocean-storm.jpg" alt="海：雷雨"><br>海・雷雨</td>
+</tr>
+</table>
 
 桌布掛在桌面圖示底下，不會擋到任何東西。被全螢幕或最大化的視窗蓋住時會自動暫停。
 
