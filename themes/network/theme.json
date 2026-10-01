@@ -1,0 +1,7 @@
+{
+  "name": "星網",
+  "order": 9,
+  "entry": "index.html",
+  "enabled": false,
+  "description": "3D 光點網路（2026-10-01 停用；enabled 改成 true 就回到選單）。"
+}

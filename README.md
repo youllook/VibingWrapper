@@ -45,6 +45,11 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 
 桌布掛在桌面圖示底下，不會擋到任何東西。被全螢幕或最大化的視窗蓋住時會自動暫停。
 
+### 自己做一個主題
+
+每種桌布是 `themes/` 底下的一個資料夾（`theme.json`＋頁面＋說明）。複製一個資料夾、改 `theme.json` 的名稱，
+齒輪選單的「桌布」就會多一個選項，不用改主程式。規格見 [themes/README.md](themes/README.md)。
+
 ## 小工具
 
 | 功能 | 快捷鍵 |
@@ -96,11 +101,10 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 |---|---|
 | `main.js` | Electron 主程序：HUD 視窗、系統匣、設定 |
 | `prototype/hud.html` | 右上角的 AI 狀態圖示＋齒輪選單 |
-| `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `weather/state.json`；也負責提供 `weather/` 頁面 |
+| `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `themes/state.json`；也負責提供 `themes/` 頁面與主題清單 |
 | `tools/wallpaper.js`、`attach-wallpaper.ps1` | 把桌布視窗掛到桌面圖示底下（WorkerW） |
-| `weather/index.html` | 天氣桌布（`?sea=1` 是天氣＋海），單一 WebGL fragment shader |
-| `weather/ocean.html` | 立體海與船隊 |
-| `weather/demo.html` | 調參數用的預覽頁：切狀態、拉時間軸看日夜 |
+| `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`（`network` 停用） |
+| `themes/demo.html` | 調參數用的預覽頁：選主題、切狀態、拉時間軸看日夜 |
 | `tools/desktop-icons.*`、`boss-key.js`、`capture.*` | 收桌面、老闆鍵、吸色／截圖 |
 
 ## 致謝

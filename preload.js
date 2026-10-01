@@ -8,8 +8,9 @@ contextBridge.exposeInMainWorld('petAPI', {
   // quit and start the whole app again (menu: 重新啟動)
   restart: () => ipcRenderer.send('pet:restart'),
   // AI state machine (Claude hooks → weather state): current value + live changes
-  // wallpaper style: 'weather' | 'sea' | 'ocean'
+  // wallpaper style = a theme folder id; the list comes from themes/*/theme.json
   getWallpaperStyle: () => ipcRenderer.invoke('pet:wallpaper-style'),
+  getWallpaperStyles: () => ipcRenderer.invoke('pet:wallpaper-styles'),
   setWallpaperStyle: s => ipcRenderer.invoke('pet:set-wallpaper-style', s),
   getAiState: () => ipcRenderer.invoke('pet:ai-state'),
   onAiState: fn => ipcRenderer.on('pet:ai-state', (_e, s) => fn(s)),

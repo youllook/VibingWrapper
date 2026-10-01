@@ -4,7 +4,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, globalShor
 const fs = require('fs');
 const path = require('path');
 const capture = require('./tools/capture');           // Ctrl+Q eyedropper / Ctrl+R region capture (PicPick replacement)
-const claudeBridge = require('./tools/claude-bridge'); // Claude Code hooks → weather/state.json (+ serves weather/)
+const claudeBridge = require('./tools/claude-bridge'); // Claude Code hooks → themes/state.json (+ serves themes/)
 const wallpaper = require('./tools/wallpaper');       // weather wallpaper behind the desktop icons (replaces Lively)
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
 const bossKey = require('./tools/boss-key');           // 一鍵隱藏: user-defined hotkey hides every 星圖 window (boss key)
@@ -72,11 +72,12 @@ ipcMain.on('pet:interactive', (_e, on) => {
   else win.setIgnoreMouseEvents(true, { forward: true });
 });
 
-// wallpaper style (gear menu): 'weather' | 'sea' | 'ocean' — see claudeBridge.WALLPAPER_URLS
-const wallpaperUrl = () => claudeBridge.WALLPAPER_URLS[settings.wallpaperStyle] || claudeBridge.WALLPAPER_URL;
+// wallpaper style (gear menu) = a theme folder id under themes/ (2026-10-01; see themes/README.md)
+const wallpaperUrl = () => claudeBridge.themeUrl(settings.wallpaperStyle) || (claudeBridge.themes()[0] || {}).url;
 ipcMain.handle('pet:wallpaper-style', () => settings.wallpaperStyle);
+ipcMain.handle('pet:wallpaper-styles', () => claudeBridge.themes().map(t => ({ id: t.id, name: t.name })));
 ipcMain.handle('pet:set-wallpaper-style', (_e, style) => {
-  if (!claudeBridge.WALLPAPER_URLS[style]) return settings.wallpaperStyle;
+  if (!claudeBridge.themeUrl(style)) return settings.wallpaperStyle;
   settings.wallpaperStyle = style; saveSettings();
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   return style;

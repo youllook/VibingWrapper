@@ -1,17 +1,19 @@
 // Claude Code → weather bridge (2026-09-29, weather since 2026-09-30).
 // 1. Claude Code hooks POST their JSON (the hook's stdin) to http://127.0.0.1:47321/claude;
-//    we map the event to a weather state and write weather/state.json.
-// 2. The same server serves the weather/ folder, so the wallpaper page can fetch('state.json')
-//    from its own directory (a file:// page could not).
-// Localhost only, small bodies only, static files from weather/ only; nothing is executed.
+//    we map the event to a weather state and write themes/state.json.
+// 2. The same server serves the themes/ folder (one sub-folder per wallpaper theme, 2026-10-01) and
+//    answers every themes/<id>/state.json with that one file, so each page can fetch('state.json') from its
+//    own folder (a file:// page could not). GET /themes/list.json = the enabled themes (see themes/README.md).
+// Localhost only, small bodies only, static files from themes/ only; nothing is executed.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
 const PORT = 47321;
-const WEATHER_DIR = path.join(__dirname, '..', 'weather');
-const STATE_FILE = path.join(WEATHER_DIR, 'state.json');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.json': 'application/json', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+const THEMES_DIR = path.join(__dirname, '..', 'themes');
+const STATE_FILE = path.join(THEMES_DIR, 'state.json');
+const TYPES = { '.html': 'text/html; charset=utf-8', '.json': 'application/json', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png',
+  '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.glsl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8' };
 
 // Claude Code event → weather. Working = storm, thinking = overcast, done = clearing → clear.
 const EVENT_WEATHER = {
@@ -142,10 +144,30 @@ setInterval(() => {
   if (n) log({ event: 'sweep', dropped: n, sky: skyState(), changed: publish() });
 }, 60000).unref();
 
-function serveWeather(req, res) {
-  const rel = decodeURIComponent(req.url.split('?')[0].slice('/weather/'.length)) || 'index.html';
-  const file = path.join(WEATHER_DIR, rel);
-  if (path.dirname(file) !== WEATHER_DIR) { res.writeHead(404).end(); return; }   // no sub-paths / traversal
+/* ---- themes (2026-10-01): every folder themes/<id>/ with a theme.json is a wallpaper ----
+   theme.json: { name, order, entry = 'index.html', enabled = true, description }. Folders starting with _ or .
+   are skipped. Read fresh on every call, so a new folder shows up without a restart. */
+const BASE = `http://127.0.0.1:${PORT}/themes/`;
+function themes() {
+  let dirs = [];
+  try { dirs = fs.readdirSync(THEMES_DIR, { withFileTypes: true }).filter(d => d.isDirectory() && !/^[_.]/.test(d.name)); } catch { return []; }
+  const list = [];
+  for (const d of dirs) {
+    let t; try { t = JSON.parse(fs.readFileSync(path.join(THEMES_DIR, d.name, 'theme.json'), 'utf8')); } catch { continue; }
+    if (!t || t.enabled === false) continue;
+    const entry = typeof t.entry === 'string' && t.entry ? t.entry : 'index.html';
+    list.push({ id: d.name, name: String(t.name || d.name), order: Number(t.order) || 99, description: t.description || '', url: BASE + d.name + '/' + entry });
+  }
+  return list.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+}
+const themeUrl = id => (themes().find(t => t.id === id) || {}).url || null;
+
+function serveThemes(req, res) {
+  const rel = decodeURIComponent(req.url.split('?')[0].slice('/themes/'.length)) || 'demo.html';
+  const send = (type, buf) => { res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(buf); };
+  if (rel === 'list.json') return send(TYPES['.json'], JSON.stringify(themes()));
+  const file = path.basename(rel) === 'state.json' ? STATE_FILE : path.resolve(THEMES_DIR, rel);
+  if (file !== STATE_FILE && !file.startsWith(THEMES_DIR + path.sep)) { res.writeHead(404).end(); return; }   // no traversal
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404).end(); return; }
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
@@ -163,7 +185,7 @@ function start(opts = {}) {
     if (Date.now() - st.mtimeMs < 120000 && typeof s === 'string') lastWritten = s; else publish();
   } catch { publish(); }
   const server = http.createServer((req, res) => {
-    if (req.method === 'GET' && req.url.startsWith('/weather/')) return serveWeather(req, res);
+    if (req.method === 'GET' && req.url.startsWith('/themes/')) return serveThemes(req, res);
     if (req.method !== 'POST' || req.url !== '/claude') { res.writeHead(404).end(); return; }
     let body = '';
     req.on('data', c => { body += c; if (body.length > 64 * 1024) req.destroy(); });
@@ -178,15 +200,6 @@ function start(opts = {}) {
   return server;
 }
 
-const WALLPAPER_URL = `http://127.0.0.1:${PORT}/weather/index.html`;
 const current = () => lastWritten || 'clear';
 const sessionStates = () => slotStates();
-// wallpaper styles (2026-09-30), in gear-menu order: 天氣 = weather/index.html, 天氣＋海 = the same page with the
-// distant sea (?sea=1), 海 = weather/ocean.html (3D ocean by Fable)
-// (星網 / network.html removed from the menu 2026-10-01 — kept in weather/archive/)
-const WALLPAPER_URLS = {
-  weather: WALLPAPER_URL,
-  sea: WALLPAPER_URL + '?sea=1',
-  ocean: `http://127.0.0.1:${PORT}/weather/ocean.html`,
-};
-module.exports = { start, current, sessionStates, MAX_SESSIONS, PORT, WALLPAPER_URL, WALLPAPER_URLS };
+module.exports = { start, current, sessionStates, MAX_SESSIONS, PORT, themes, themeUrl };

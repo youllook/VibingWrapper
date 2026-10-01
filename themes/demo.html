@@ -33,10 +33,7 @@
 <iframe id="view" title="桌布預覽"></iframe>
 <aside>
   <h1>動態桌布 · 調參數</h1>
-  <div class="row"><label>樣式</label><select id="style">
-    <option value="index.html">天氣</option><option value="index.html?sea=1">天氣＋海</option>
-    <option value="ocean.html">海（立體）</option>
-  </select></div>
+  <div class="row"><label>樣式</label><select id="style"></select></div>
   <div class="sub" id="now">載入中…</div>
 
   <h2>切換狀態（走真的狀態機：防抖＋轉場）</h2>
@@ -88,10 +85,16 @@ const STATE_NAMES = { clear: '晴', overcast: '陰', storm: '雷雨', clearing: 
 // test API (window.weather / ocean / network); sections a page lacks (clock, rain mood, lightning) are hidden.
 let W = null;   // the wallpaper page's test API
 let gen = 0;    // bumps on every page switch so the old tick loop stops
+// themes come from the bridge (themes/*/theme.json, enabled ones, in order); ?style=<theme id> preselects one
 const styleSel = document.getElementById('style');
-{ const q = new URLSearchParams(location.search).get('style'); if (q && [...styleSel.options].some(o => o.value === q)) styleSel.value = q; }
 styleSel.onchange = () => { W = null; view.src = styleSel.value; };
-view.src = styleSel.value;
+fetch('list.json').then(r => r.json()).then(list => {
+  for (const t of list) styleSel.add(new Option(t.name, t.id + '/' + (t.url.split('/' + t.id + '/')[1] || 'index.html')));
+  const q = new URLSearchParams(location.search).get('style');
+  const pick = list.find(t => t.id === q);
+  if (pick) styleSel.value = [...styleSel.options].find(o => o.value.startsWith(pick.id + '/')).value;
+  view.src = styleSel.value;
+});
 
 function slider(parent, key, [lo, hi], value, onInput) {
   const row = document.createElement('div'); row.className = 'row';
@@ -120,7 +123,7 @@ function renderTargets() {
 
 function init() {
   const cw = view.contentWindow;
-  W = cw.weather || cw.ocean || cw.network;
+  W = cw.weather || cw.ocean || cw.network || cw.theme;
   if (!W) return setTimeout(init, 100);
   const my = ++gen;
   for (const id of ['states', 'live', 'editState', 'targets', 'override']) $(id).innerHTML = '';

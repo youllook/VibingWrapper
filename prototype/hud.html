@@ -116,11 +116,14 @@ setAi('clear');
 if (IS_APP) { window.petAPI.getAiState().then(setAi); window.petAPI.onAiState(setAi); }
 
 /* ---- Settings ---- */
-const WP_STYLES = { weather: '天氣', sea: '天氣＋海', ocean: '海' };   // click cycles in this order
+// 桌布 cycles through the theme folders (themes/*/theme.json, in their order); refreshed whenever the menu opens
+let WP_STYLES = [{ id: 'weather', name: '天氣' }];
+const wpName = id => (WP_STYLES.find(t => t.id === id) || { name: id }).name;
+const loadStyles = () => IS_APP && window.petAPI.getWallpaperStyles().then(l => { if (l && l.length) { WP_STYLES = l; if (settingsEl.classList.contains('open')) renderMenu(); } });
 let wpStyle = 'weather', iconsKey = 'Ctrl+Alt+D';
 const SETTINGS = IS_APP ? [
-  { label: '桌布', value: () => WP_STYLES[wpStyle] || '天氣',
-    run: () => { const k = Object.keys(WP_STYLES); window.petAPI.setWallpaperStyle(k[(k.indexOf(wpStyle) + 1) % k.length]).then(s => { wpStyle = s; renderMenu(); }); } },
+  { label: '桌布', value: () => wpName(wpStyle),
+    run: () => { const k = WP_STYLES.map(t => t.id); window.petAPI.setWallpaperStyle(k[(k.indexOf(wpStyle) + 1) % k.length]).then(s => { wpStyle = s; renderMenu(); }); } },
   { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },   // right side = the hotkey, as a reminder
   // 一鍵隱藏 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
   { label: '一鍵隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
@@ -144,7 +147,7 @@ function renderMenu() {
   }));
 }
 function setMenu(open) {
-  if (open) bossMsg = ''; else if (capturing) endBossCapture('');
+  if (open) { bossMsg = ''; loadStyles(); } else if (capturing) endBossCapture('');
   settingsEl.classList.toggle('open', open); if (open) renderMenu();
 }
 
@@ -173,7 +176,7 @@ document.addEventListener('click', () => setMenu(false));
 window.addEventListener('keydown', ev => { if (ev.key === 'Escape') setMenu(false); });
 
 if (IS_APP) {
-  window.petAPI.getWallpaperStyle().then(s => { wpStyle = s || 'weather'; });
+  window.petAPI.getWallpaperStyle().then(s => { wpStyle = s || 'weather'; }); loadStyles();
   window.petAPI.iconsHotkey().then(ok => { iconsKey = ok ? 'Ctrl+Alt+D' : '熱鍵被占用'; });
   const setBoss = s => { if (!s) return; boss = s; document.body.classList.toggle('stealth', !!s.hidden); if (settingsEl.classList.contains('open')) renderMenu(); };
   window.petAPI.bossKey().then(setBoss); window.petAPI.onBossState(setBoss);

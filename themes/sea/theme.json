@@ -1,0 +1,6 @@
+{
+  "name": "天氣＋海",
+  "order": 2,
+  "entry": "index.html",
+  "description": "下半部是遠方的海，倒映同一片天空；每個 Claude session 一艘船。"
+}

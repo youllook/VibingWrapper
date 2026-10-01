@@ -1,7 +1,7 @@
-// Weather wallpaper host (2026-09-30): replaces Lively Wallpaper. Opens weather/index.html in a
+// Weather wallpaper host (2026-09-30): replaces Lively Wallpaper. Opens the chosen theme page (themes/<id>/) in a
 // full-screen window and parents it BEHIND the desktop icons (attach-wallpaper.ps1), so it is
 // always the bottom layer and can never be clicked or selected.
-// The page is served by claude-bridge (http://127.0.0.1:47321/weather/) so its fetch('state.json')
+// The page is served by claude-bridge (http://127.0.0.1:47321/themes/<id>/) so its fetch('state.json')
 // works exactly as the spec says.
 const { BrowserWindow, screen } = require('electron');
 const { execFile } = require('child_process');

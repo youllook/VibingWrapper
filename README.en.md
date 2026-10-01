@@ -44,6 +44,11 @@ Gear menu → 桌布 (wallpaper) cycles through them:
 
 The wallpaper lives behind your desktop icons and never gets in the way. It pauses itself while a maximized or full-screen window covers the desktop.
 
+### Make your own theme
+
+Each wallpaper is a folder under `themes/` (`theme.json` + page + notes). Copy a folder and change the name in `theme.json` —
+it shows up in the gear menu's wallpaper list, no changes to the app needed. The folder contract is in [themes/README.md](themes/README.md) (Chinese).
+
 ## Little tools
 
 | Feature | Shortcut |
@@ -97,11 +102,10 @@ Received events are logged by name and the first 8 characters of the session ID 
 |---|---|
 | `main.js` | Electron main process: HUD window, tray, settings |
 | `prototype/hud.html` | The top-right AI state icon + gear menu |
-| `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `weather/state.json`; also serves the `weather/` pages |
+| `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `themes/state.json`; also serves the `themes/` pages and the theme list |
 | `tools/wallpaper.js`, `attach-wallpaper.ps1` | Parents the wallpaper window behind the desktop icons (WorkerW) |
-| `weather/index.html` | Weather wallpaper (`?sea=1` adds the sea), a single WebGL fragment shader |
-| `weather/ocean.html` | 3D ocean and fleet |
-| `weather/demo.html` | Tuning page: switch states, scrub the clock through day and night |
+| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean` (`network` disabled) |
+| `themes/demo.html` | Tuning page: pick a theme, switch states, scrub the clock through day and night |
 | `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, eyedropper / screenshot |
 
 ## Credits
