@@ -93,3 +93,7 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 - 雲的畫法參考 [power418/skygl](https://github.com/power418/skygl)（MIT），壓縮成單一 2D pass。
 - 立體海和船隊由 Claude（Fable）設計實作；AI 狀態圖示與 logo 由 Codex 設計。
 - 整個專案用 Claude Code 寫成。
+
+## 授權
+
+[MIT](LICENSE)
