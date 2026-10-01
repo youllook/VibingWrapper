@@ -1,3 +1,5 @@
+**繁體中文** · [English](README.en.md)
+
 # VibingWrapper
 
 跟著 Claude Code 工作節奏變天的 Windows 動態桌布。
