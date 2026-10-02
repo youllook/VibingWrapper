@@ -73,7 +73,11 @@ ipcMain.on('pet:interactive', (_e, on) => {
 });
 
 // wallpaper style (gear menu) = a theme folder id under themes/ (2026-10-01; see themes/README.md)
-const wallpaperUrl = () => claudeBridge.themeUrl(settings.wallpaperStyle) || (claudeBridge.themes()[0] || {}).url;
+// 白天模式 (settings.dayMode) adds ?day=1: the theme locks its clock to late morning instead of following real time
+const wallpaperUrl = () => {
+  const u = claudeBridge.themeUrl(settings.wallpaperStyle) || (claudeBridge.themes()[0] || {}).url;
+  return u && settings.dayMode ? u + (u.includes('?') ? '&' : '?') + 'day=1' : u;
+};
 ipcMain.handle('pet:wallpaper-style', () => settings.wallpaperStyle);
 ipcMain.handle('pet:wallpaper-styles', () => claudeBridge.themes().map(t => ({ id: t.id, name: t.name })));
 ipcMain.handle('pet:set-wallpaper-style', (_e, style) => {
@@ -81,6 +85,12 @@ ipcMain.handle('pet:set-wallpaper-style', (_e, style) => {
   settings.wallpaperStyle = style; saveSettings();
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   return style;
+});
+ipcMain.handle('pet:day-mode', () => !!settings.dayMode);
+ipcMain.handle('pet:set-day-mode', (_e, on) => {
+  settings.dayMode = !!on; saveSettings();
+  wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
+  return settings.dayMode;
 });
 ipcMain.handle('pet:ai-state', () => claudeBridge.current());   // AI category asks once on load
 ipcMain.handle('pet:icons-hotkey', () => desktopIcons.status.hotkey);

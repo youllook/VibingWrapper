@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   getWallpaperStyle: () => ipcRenderer.invoke('pet:wallpaper-style'),
   getWallpaperStyles: () => ipcRenderer.invoke('pet:wallpaper-styles'),
   setWallpaperStyle: s => ipcRenderer.invoke('pet:set-wallpaper-style', s),
+  getDayMode: () => ipcRenderer.invoke('pet:day-mode'),          // 白天模式: wallpaper stays in daytime
+  setDayMode: on => ipcRenderer.invoke('pet:set-day-mode', on),
   getAiState: () => ipcRenderer.invoke('pet:ai-state'),
   onAiState: fn => ipcRenderer.on('pet:ai-state', (_e, s) => fn(s)),
   // hide / show all desktop icons (also Ctrl+Alt+D and the tray menu)

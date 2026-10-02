@@ -37,8 +37,9 @@
    - `state`：合成後的天空，`clear` / `overcast` / `storm` / `clearing` / `waiting`
    - `sessions`：5 個固定位置，每個是一個 Claude session 自己的狀態（`null` = 沒有）
 2. **暫停**：提供 `window.wpPause(on)`。桌面被最大化／全螢幕視窗蓋住、或一鍵隱藏時會呼叫；`document.hidden` 時也要停止渲染。
-3. **效能**：30 fps 上限、半解析度渲染，GPU 每格最好在 12 ms 以內。
-4. **測試介面（選配）**：把 `requestState`、`applyState`、`STATES`、`PARAMS`、`CONFIG`（含 `clockHours`、`polling`）掛在 `window` 上
+3. **白天模式**：網址帶 `?day=1` 時（齒輪選單「白天模式」），時鐘固定在白天（現有主題用 `clockHours = 10.5`），不跟著真實時間進入黃昏和夜晚。
+4. **效能**：30 fps 上限、半解析度渲染，GPU 每格最好在 12 ms 以內。
+5. **測試介面（選配）**：把 `requestState`、`applyState`、`STATES`、`PARAMS`、`CONFIG`（含 `clockHours`、`polling`）掛在 `window` 上
    （現有主題用 `window.weather` / `window.ocean` / `window.network`，新主題可以用 `window.theme`），
    [demo.html](demo.html) 就能切狀態、調參數、拉時間軸。
 
