@@ -1,0 +1,1691 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>草原桌布</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* wallpaper: always the bottom layer, nothing selectable / draggable / clickable (same as the other themes) */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #5c7a3a;
+               user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+  /* rendered at RES_SCALE of the window, stretched back up by CSS */
+  canvas { display: block; width: 100vw; height: 100vh; pointer-events: none; }
+  #hud { position: fixed; left: 10px; bottom: 8px; font: 12px/1.5 Consolas, monospace; color: rgba(255,255,255,.8);
+         background: rgba(0,0,0,.35); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
+  body.debug #hud { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+/* =====================================================================================
+ * 草原＋蒲公英 v2 (meadow theme, painted look) — 2026-10-01 — sibling of themes/ocean
+ *
+ * Art direction: an original background in the spirit of a 1990s Japanese animated film — depth
+ * layers (painted sky with big cumulus → hazy far mountains → mid mountains → near green hills
+ * with a ridge → the meadow slope → soft foreground blades), a lone broad tree as the focal point,
+ * low sun from the upper right (backlit grass: warm translucent tips, cool undersides, rim light),
+ * cloud shadows drifting across the field with the wind, aerial perspective, warm highlights /
+ * blue-violet shadows. In a storm a gust front sweeps the field as a wave of light and shadow.
+ *
+ * Tech (WebGL1, four draw calls): full-screen pass (sky, mountains, hills, far meadow, tree,
+ * windmills, 等你 star) · ~9 000 clumped grass blades + dandelion stems in one triangle strip bent by
+ * a shared wind field (gusts = travelling fronts) · dandelion heads (point sprites) · particles
+ * (seeds with parachutes, tumbling leaves, fireflies). State machine, polling, keys, HUD, wpPause,
+ * day / night clock and the window.theme API are the same as the other themes.
+ * Mountain layers: procedural by default; painted PNG layers in assets/ are used when present.
+ * ===================================================================================== */
+
+/* ------------------------------ config ------------------------------ */
+const FPS = 30;
+const RES_SCALE = 0.5;
+const CONFIG = { fullTransition: 4.0, polling: true, clockHours: /[?&]day=1/.test(location.search) ? 10.5 : null, paintedLayers: true, skip: '' };   // skip: debug, e.g. 'cards,blades' leaves passes out   // clockHours: test override (0–24), null = real time
+const DEBOUNCE_MS = 300;
+const POLL_MS = 1000;
+const HORIZON = 0.45;                        // where the flat meadow meets the near hills (screen fraction from the bottom)
+const CAM_H = 1.25;                          // eye height above the ground (m): low, in the grass
+const FOV = 1.0;
+const ZFAR = 60.0;
+const N_BLADES = 0, Z_NEAR = 2.2, Z_FAR_BLADES = 19.0;   // v5: the ribbon blades are gone (painted strips + tufts instead)
+const TREE = { x: 0.70, z: 21.0 };           // the lone tree: screen x (fraction) at that distance — right third, off the star column
+
+// parameter ranges (used to normalise distances)
+const PARAMS = {
+  sway:          [0, 1],                     // base breeze
+  gustRate:      [0, 0.5],                   // gusts per second (random within a rhythm)
+  gustStrength:  [0, 1],                     // bending at a gust front
+  seedRate:      [0, 1],                     // single seeds drifting by, per second
+  burstChance:   [0, 1],                     // chance a gust releases a big burst of seeds
+  leafRate:      [0, 1],                     // leaves falling from the tree, per second (working)
+  skyBrightness: [0, 1],                     // 1 blue sky … 0 dark grey
+  cloudCover:    [0, 1],
+  warmth:        [0, 1],                     // golden light (clearing)
+  beacon:        [0, 1],                     // 等你 star
+};
+const STATES = {
+  clear:    { sway: 0.25, gustRate: 0.05, gustStrength: 0.25, seedRate: 0.08, burstChance: 0.00, leafRate: 0.0, skyBrightness: 1.00, cloudCover: 0.42, warmth: 0.20, beacon: 0 },
+  overcast: { sway: 0.45, gustRate: 0.12, gustStrength: 0.45, seedRate: 0.20, burstChance: 0.00, leafRate: 0.0, skyBrightness: 0.66, cloudCover: 0.78, warmth: 0.00, beacon: 0 },
+  storm:    { sway: 0.26, gustRate: 0.24, gustStrength: 1.00, seedRate: 0.30, burstChance: 0.55, leafRate: 1.0, skyBrightness: 0.55, cloudCover: 0.88, warmth: 0.00, beacon: 0 },
+  clearing: { sway: 0.30, gustRate: 0.06, gustStrength: 0.30, seedRate: 0.45, burstChance: 0.00, leafRate: 0.1, skyBrightness: 0.92, cloudCover: 0.50, warmth: 1.00, beacon: 0 },
+  // 等你: almost still, the sky dims, one star pulses slowly
+  waiting:  { sway: 0.08, gustRate: 0.00, gustStrength: 0.00, seedRate: 0.03, burstChance: 0.00, leafRate: 0.0, skyBrightness: 0.52, cloudCover: 0.55, warmth: 0.10, beacon: 1 },
+};
+const KEYS = { '1': 'clear', '2': 'overcast', '3': 'storm', '4': 'clearing', '5': 'waiting' };
+
+/* ------------------------------ state machine (as the other themes) ------------------------------ */
+const smooth = t => t * t * (3 - 2 * t);
+let current = { ...STATES.clear };
+let from = { ...current }, to = { ...current };
+let tStart = 0, tDur = 0;
+let stateName = 'clear', pending = null, debounceT = 0;
+let override = null;
+function now() { return performance.now() / 1000; }
+function step(t) {
+  const k = tDur > 0 ? Math.min(1, (t - tStart) / tDur) : 1;
+  const e = smooth(k);
+  for (const p in PARAMS) current[p] = from[p] + (to[p] - from[p]) * e;
+}
+function applyState(name) {
+  if (!STATES[name]) return;
+  const t = now();
+  step(t);
+  from = { ...current };
+  to = { ...STATES[name] };
+  let dist = 0;
+  for (const p in PARAMS) { const [lo, hi] = PARAMS[p]; dist = Math.max(dist, Math.abs(to[p] - from[p]) / (hi - lo)); }
+  tStart = t; tDur = CONFIG.fullTransition * dist; stateName = name;
+}
+function requestState(name) {
+  if (!STATES[name]) return;
+  pending = name;
+  clearTimeout(debounceT);
+  debounceT = setTimeout(() => { if (pending !== stateName) applyState(pending); pending = null; }, DEBOUNCE_MS);
+}
+
+/* ------------------------------ inputs ------------------------------ */
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
+addEventListener('keydown', e => {
+  if (KEYS[e.key]) requestState(KEYS[e.key]);
+  if (e.key === 'd') document.body.classList.toggle('debug');
+});
+let lastPolled = null, sessionsFile = null, sessionsOverride = null;
+async function poll() {
+  if (!CONFIG.polling) return;
+  try {
+    const r = await fetch('state.json?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json(), s = j.state;
+      if (STATES[s] && s !== lastPolled) { lastPolled = s; requestState(s); }
+      sessionsFile = Array.isArray(j.sessions) ? Array.from({ length: 5 }, (_, i) => STATES[j.sessions[i]] ? j.sessions[i] : null) : null;
+    }
+  } catch { /* unreadable → keep the current state */ }
+}
+setInterval(poll, POLL_MS);
+poll();
+
+/* ------------------------------ day / night (same model as the other themes) ------------------------------ */
+function sunAltitude(date, lat = 25.04, lon = 121.56) {
+  const rad = Math.PI / 180;
+  const n = date.getTime() / 86400000 + 2440587.5 - 2451545.0;
+  const L = (280.46 + 0.9856474 * n) % 360;
+  const g = ((357.528 + 0.9856003 * n) % 360) * rad;
+  const lambda = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * rad;
+  const eps = (23.439 - 0.0000004 * n) * rad;
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda));
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lambda));
+  const gmst = (280.46061837 + 360.98564736629 * n) % 360;
+  const ha = (gmst + lon) * rad - ra;
+  return Math.asin(Math.sin(lat * rad) * Math.sin(dec) + Math.cos(lat * rad) * Math.cos(dec) * Math.cos(ha)) / rad;
+}
+function sky() {
+  let d = new Date();
+  if (CONFIG.clockHours != null) { d = new Date(d); d.setHours(0, 0, 0, 0); d = new Date(d.getTime() + CONFIG.clockHours * 3600000); }
+  const alt = sunAltitude(d);
+  const night = 1 - smooth(Math.min(1, Math.max(0, (alt + 9) / 13)));
+  const twilight = Math.exp(-Math.pow((alt + 1.5) / 5, 2));
+  const hours = d.getHours() + d.getMinutes() / 60;
+  const frac = Math.min(1, Math.max(0, (hours - 5.5) / 13));
+  // the light always comes from the upper right (the painting's key light); it only drifts a little with the hour
+  const sunX = 0.66 + 0.18 * frac;
+  const sunY = HORIZON + 0.14 + 0.26 * Math.min(1, Math.max(0, alt / 60));
+  const sunUp = smooth(Math.min(1, Math.max(0, (alt + 2) / 6)));
+  return { alt, night, twilight, sunX, sunY, sunUp };
+}
+
+/* ------------------------------ WebGL ------------------------------ */
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: false, alpha: false, depth: true, preserveDrawingBuffer: false, powerPreference: 'low-power' });
+
+// shared GLSL: hash noise, the wind field, the cloud-shadow / gust-light field (JS mirrors windAt())
+const COMMON = `
+precision highp float;
+uniform float uTime, uSway, uShadowDrift, uCloudShadow, uLightFloor;
+uniform vec3  uLightDir;    // key light (sun by day, moon by night): from the upper right, in front of the viewer
+
+uniform vec4  uGust[4];     // front position (m, along x + z·slant), width (m), strength, slant
+uniform vec4  uShadow[4];   // big cloud shadows: centre x, centre z, radius x (m), strength (radius z = 0.55 × radius x)
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 a = mod(i, 289.0), b = mod(i + 1.0, 289.0);
+  return mix(mix(hash(a), hash(vec2(b.x, a.y)), u.x), mix(hash(vec2(a.x, b.y)), hash(b), u.x), u.y);
+}
+float fbm2(vec2 p) { return noise(p) * 0.6 + noise(p * 2.1 + 5.3) * 0.4; }
+float fbm3(vec2 p) { return noise(p) * 0.5 + noise(p * 2.1 + 5.3) * 0.3 + noise(p * 4.3 + 11.1) * 0.2; }
+// large-scale field colour map: patches of yellow-green / green / blue-green / olive over metres (not per blade)
+vec2 fieldMap(float x, float z) { return vec2(fbm2(vec2(x, z * 1.3) * 0.075 + 3.0), noise(vec2(x, z * 1.3) * 0.13 + 9.0)); }
+// bending at ground point (x, z): + = blown toward +x
+float windAt(float x, float z, float t) {
+  float w = uSway * (sin(t * 0.9 + x * 0.35 + z * 0.2) * 0.6 + sin(t * 1.7 + x * 0.9 - z * 0.4) * 0.3 + sin(t * 2.9 + x * 2.1) * 0.15);
+  for (int i = 0; i < 4; i++) {
+    vec4 g = uGust[i];
+    float d = (x + z * g.w - g.x) / max(g.y, 0.1);
+    w += g.z * exp(-d * d) * (1.0 + 0.35 * sin(t * 7.0 + x * 3.0 + z * 1.3));
+  }
+  return w;
+}
+// the gust wave alone (−1 trough … +1 crest): drives the "wave of light" sheen on tufts, strips and the slope
+float gustAt(float x, float z) {
+  float g = 0.0;
+  for (int i = 0; i < 4; i++) {
+    vec4 G = uGust[i];
+    float d = (x + z * G.w - G.x) / max(G.y, 0.1);
+    g += G.z * (exp(-d * d * 0.5) - 0.9 * exp(-(d - 1.8) * (d - 1.8) * 0.6));
+  }
+  return clamp(g, -1.0, 1.0);
+}
+// sheen: crest = warmer yellow-green and +12 % value, trough = cooler blue-green
+vec3 sheen(vec3 c, float g) { return g > 0.0 ? mix(c, c * vec3(1.16, 1.12, 0.84), g) : mix(c, c * vec3(0.88, 0.96, 1.08), -g); }
+// sunlight reaching ground point (x, z): 1 full sun … ~0.45 under a cloud shadow. Cloud shadows drift with
+// the wind; a gust front carries a band of sunlight with a darker rim ahead of it (light + shadow wave)
+float lightAt(float x, float z) {
+  float s = fbm2(vec2(x - uShadowDrift, z * 1.6 - uShadowDrift * 0.3) * 0.035);
+  float l = 1.0 - smoothstep(0.42, 0.68, s) * 0.30 * uCloudShadow;                // fine broken shade
+  for (int i = 0; i < 4; i++) {                                                   // the deliberate big ones: soft but defined edge
+    vec4 S = uShadow[i];
+    if (S.w < 0.01) continue;
+    float e = length(vec2((x - S.x) / S.z, (z - S.y) / (S.z * 0.55)));
+    l -= S.w * 0.62 * (1.0 - smoothstep(0.75, 1.05, e));
+  }
+  for (int i = 0; i < 4; i++) {
+    vec4 g = uGust[i];
+    float d = (x + z * g.w - g.x) / max(g.y, 0.1);
+    l += g.z * (0.45 * exp(-d * d * 0.5) - 0.40 * exp(-(d - 1.8) * (d - 1.8) * 0.6));
+  }
+  return clamp(l, uLightFloor, 1.35);
+}`;
+
+// ---------- pass 1: the painting behind the grass ----------
+const VS_SKY = `attribute vec2 p; void main() { gl_Position = vec4(p, 0.9999, 1.0); }`;   // at the far plane: drawn after the grass, depth-tested
+const FS_SKY = COMMON + `
+uniform vec2  uRes;
+uniform float uBright, uCloud, uNight, uTwilight, uSunUp, uWarm, uBeacon, uTreeSway, uLayers;
+uniform vec2  uSun, uDrift;
+uniform vec3  uZenith, uHorizonC, uCloudLit, uCloudShade, uSunCol, uGroundLight, uShadowTint;
+uniform vec3  uMtnFar, uMtnMid, uHill, uMeadowA, uMeadowB, uTreeLit, uTreeShade, uFieldA, uFieldB, uFieldC, uFieldD;
+uniform vec4  uMill[5];     // windmill: screen x, base y, scale (uv per unit height), alpha
+uniform vec4  uMillB[5];    // sail angle, lamp 0..1
+uniform sampler2D uTexFar, uTexMid, uTexNear;   // painted mountain layers (optional)
+uniform sampler2D uAtlasCloud;
+uniform float uCloudOn, uSheet;                 // 1 = sprites; grey sheet behind them (overcast)
+uniform vec4  uCloudSpr[10];                    // sprite: centre uv.x, centre uv.y, width (uv), cell
+uniform vec4  uCloudSprB[10];                   // alpha, lit (0..1 how much of it is lit), unused, unused
+uniform vec4  uCloudCells[8];                   // atlas cell rects u, v (from top), w, h
+uniform vec4  uLayerBox;    // x: uv.y of the canvas bottom, y: canvas height in uv, z: far layer used, w: mid layer used
+uniform float uLayerNearOn;
+uniform vec3  uTintFar, uTintMid, uTintNear;   // per-layer light (neutral daylight paintings → time of day / state)
+const float HORIZON = ${HORIZON.toFixed(3)};
+const float CAM_H = ${CAM_H.toFixed(2)};
+const float FOV = ${FOV.toFixed(2)};
+vec4 layer(sampler2D tex, vec2 uv) {
+  vec2 tuv = vec2(uv.x, 1.0 - (uv.y - uLayerBox.x) / uLayerBox.y);
+  if (tuv.y < 0.0 || tuv.y > 1.0) return vec4(0.0);
+  return texture2D(tex, tuv);
+}
+float fbm4(vec2 p) { return noise(p) * 0.45 + noise(p * 2.1 + 5.3) * 0.27 + noise(p * 4.3 + 11.1) * 0.17 + noise(p * 8.7 + 23.7) * 0.11; }
+float box(vec2 q, vec2 lo, vec2 hi) { return min(min(q.x - lo.x, hi.x - q.x), min(q.y - lo.y, hi.y - q.y)); }
+mat2 rot2(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+// painted ridgelines (screen x in aspect units → ridge height in uv). The near hill rises to the left.
+float ridgeFar(float x)  { return HORIZON + 0.145 + 0.075 * fbm3(vec2(x * 0.9 + 3.0, 1.0)) + 0.03 * noise(vec2(x * 3.5, 7.0)); }
+float ridgeMid(float x)  { return HORIZON + 0.075 + 0.055 * fbm3(vec2(x * 1.4 + 9.0, 2.0)) + 0.025 * noise(vec2(x * 5.0, 3.0)); }
+float ridgeNear(float x, float aspect) { float k = clamp(1.0 - x / aspect, 0.0, 1.0); return HORIZON + 0.012 + 0.07 * k * k + 0.025 * fbm2(vec2(x * 1.1 + 2.0, 5.0)); }
+// one windmill in local units (base (0,0), tower top y = 1): returns (lit side 0..1, coverage, window)
+vec4 windmill(vec2 q, float ang, float px) {
+  float tower = min(min(q.x + 0.17 - q.y * 0.05, 0.17 - q.y * 0.05 - q.x), min(q.y, 1.0 - q.y));
+  float tA = smoothstep(-px, px, tower);
+  float roof = smoothstep(px, -px, length((q - vec2(0.0, 1.0)) * vec2(1.0, 1.5)) - 0.19);
+  float lit = tA * smoothstep(-0.08, 0.10, q.x);
+  float cov = max(tA, roof), sails = 0.0;
+  vec2 hub = vec2(0.0, 1.02);
+  for (int i = 0; i < 4; i++) {
+    vec2 r = rot2(ang + float(i) * 1.5708) * (q - hub);
+    float arm = smoothstep(px, -px, abs(r.x) - 0.014) * step(0.0, r.y) * step(r.y, 0.66);
+    float lat = box(r, vec2(-0.13, 0.16), vec2(0.0, 0.64));
+    float latA = smoothstep(-px, px, lat) * (0.5 + 0.5 * smoothstep(0.03, 0.0, abs(fract(r.y * 9.0) - 0.5) - 0.28));
+    float frame = smoothstep(px, -px, min(abs(r.x + 0.13), abs(r.y - 0.64)) - 0.013) * smoothstep(-px, px, lat + 0.03);
+    sails = max(sails, max(arm, max(latA * 0.9, frame)));
+  }
+  sails = max(sails, smoothstep(px, -px, length(q - hub) - 0.045));
+  float win = smoothstep(-px, px, box(q, vec2(-0.05, 0.42), vec2(0.05, 0.56)));
+  return vec4(lit, cov, sails, win);
+}
+// the lone tree: a few overlapping painted lobes with a noisy edge, lit from the upper right
+float treeSDF(vec2 d) {
+  float c = length((d - vec2(0.0, 0.66)) * vec2(1.0, 1.25)) - 0.46;
+  for (int i = 0; i < 10; i++) {
+    float a = float(i) * 0.628 + 0.3;
+    vec2 cc = vec2(0.0, 0.66) + vec2(cos(a) * 0.40, sin(a) * 0.30);
+    c = min(c, length((d - cc) * vec2(1.0, 1.2)) - (0.17 + 0.05 * sin(float(i) * 2.3)));
+  }
+  float e = noise(d * 11.0 + 3.0) * 0.07 + noise(d * 27.0) * 0.025;
+  return c + e - 0.03;
+}
+float seg(vec2 p, vec2 a, vec2 b) { vec2 ab = b - a; float h = clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0); return length(p - a - ab * h); }
+// trunk and main limbs (canopy unit = 5.2 m): tapered, flared at the root, a slight natural curve, limbs
+// forking into the canopy; bark painted as value bands — warm on the sun side, cool dark on the shadow side
+vec3 tree(vec2 d, float px, float sway, out float a) {
+  d.x -= sway * d.y;
+  float cx = 0.035 * sin(d.y * 3.2 + 0.4) - 0.02;                                 // natural curve
+  float r = 0.072 - 0.034 * d.y + 0.11 * exp(-max(d.y, 0.0) * 9.0);                // taper + root flare
+  float trunk = smoothstep(px, -px, abs(d.x - cx) - r) * step(-0.04, d.y) * step(d.y, 0.70);
+  vec2 fork = vec2(cx, 0.62);
+  float br = smoothstep(px, -px, seg(d, fork, vec2(-0.36, 1.02)) - (0.034 - 0.02 * (d.y - 0.6)))
+           + smoothstep(px, -px, seg(d, vec2(cx, 0.68), vec2(0.36, 1.00)) - (0.032 - 0.02 * (d.y - 0.6)))
+           + smoothstep(px, -px, seg(d, vec2(cx, 0.70), vec2(0.06, 1.18)) - (0.028 - 0.016 * (d.y - 0.7)))
+           + smoothstep(px, -px, seg(d, vec2(-0.20, 0.84), vec2(-0.50, 1.00)) - 0.016);
+  a = clamp(trunk + br, 0.0, 1.0);
+  float side = (d.x - cx) / max(r, 0.02);                                         // −1 shadow side … +1 sun side
+  float lit = smoothstep(-0.5, 0.9, side);
+  float bands = 0.85 + 0.3 * step(0.5, fract(noise(vec2(d.x * 38.0, d.y * 7.0)) * 2.0 + d.y * 3.0));   // vertical bark strokes
+  vec3 shadowC = vec3(0.16, 0.11, 0.09), litC = vec3(0.46, 0.34, 0.22);
+  vec3 col = mix(shadowC, litC, lit) * bands;
+  col = mix(col, col * vec3(0.9, 0.95, 1.1), (1.0 - lit) * 0.5);                    // cool shadow side
+  return col;
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float aspect = uRes.x / uRes.y;
+  vec2 p = vec2(uv.x * aspect, uv.y);
+  float t = uTime;
+  vec3 col;
+  // ---- sky ----
+  float up = clamp((uv.y - HORIZON) / (1.0 - HORIZON), 0.0, 1.0);
+  col = mix(uHorizonC, uZenith, pow(up, 0.6));
+  vec2 sd = (uv - uSun) * vec2(aspect, 1.0);
+  float sr = length(sd);
+  col += uSunCol * vec3(1.0, 0.9, 0.7) * (exp(-sr * 2.5) * 0.14 + exp(-sr * 12.0) * 0.18) * uSunUp;
+  // stars (night)
+  if (uNight > 0.01) {
+    vec2 sp2 = p * 90.0;
+    vec2 cell = floor(sp2), f = fract(sp2);
+    float h = hash(cell + 3.7);
+    if (h > 0.91) {
+      vec2 pos = vec2(hash(cell + 11.1), hash(cell + 27.3)) * 0.7 + 0.15;
+      float b = pow(hash(cell + 41.9), 3.0);
+      float tw = 0.75 + 0.25 * sin(t * (1.5 + 3.0 * h) + h * 60.0);
+      col += vec3(0.9, 0.93, 1.0) * smoothstep(0.16, 0.0, length(f - pos)) * (0.3 + 0.7 * b) * tw * uNight * smoothstep(0.0, 0.15, uv.y - HORIZON);
+    }
+  }
+  // moon
+  col += vec3(0.85, 0.90, 1.0) * (smoothstep(0.017, 0.010, length((uv - vec2(0.82, 0.86)) * vec2(aspect, 1.0))) * 1.6 + exp(-length((uv - vec2(0.82, 0.86)) * vec2(aspect, 1.0)) * 10.0) * 0.25) * uNight;
+  // ---- cumulus: gouache blobs with crisp edges, lit from the sun side, flattened toward the horizon ----
+  if (uCloudOn > 0.5 && uv.y > HORIZON - 0.02) {
+    float hz = max(uv.y - HORIZON, 0.0);
+    // soft grey sheet behind the sprites when the cover closes in
+    col = mix(col, mix(uCloudShade, uCloudLit, 0.5), uSheet * smoothstep(0.0, 0.12, hz) * (0.55 + 0.45 * smoothstep(0.0, 0.5, hz)));
+    for (int i = 0; i < 10; i++) {
+      vec4 S = uCloudSpr[i];
+      if (S.z < 0.001) continue;
+      float h = S.z * aspect * 0.666;                                                // every cell is 1024×682
+      vec2 d = vec2((uv.x - S.x) / S.z, (uv.y - S.y) / h) + 0.5;                     // sprite-local 0..1
+      if (d.x < 0.0 || d.x > 1.0 || d.y < 0.0 || d.y > 1.0) continue;
+      vec4 c = vec4(0.0);
+      for (int k = 0; k < 8; k++) if (abs(S.w - float(k)) < 0.5) c = uCloudCells[k];
+      vec4 tx = texture2D(uAtlasCloud, vec2(c.x + d.x * c.z, c.y + (1.0 - d.y) * c.w));
+      float lum = dot(tx.rgb, vec3(0.3, 0.55, 0.15));
+      vec3 cc = mix(uCloudShade, uCloudLit, smoothstep(0.35, 0.85, lum) * uCloudSprB[i].y + 0.15);
+      cc = mix(cc, cc * vec3(1.25, 0.85, 0.75) + vec3(0.25, 0.08, 0.02), uTwilight * (1.0 - smoothstep(0.5, 0.85, lum)) * 0.8);   // dusk: pink / orange undersides
+      cc += uSunCol * exp(-sr * 3.0) * 0.25 * lum;
+      col = mix(col, cc, tx.a * uCloudSprB[i].x);
+    }
+    col = mix(col, uHorizonC, exp(-hz * 14.0) * 0.5 * (1.0 - uNight * 0.5));
+  } else if (uv.y > HORIZON - 0.02) {
+    float hz = max(uv.y - HORIZON, 0.0);
+    float sq = mix(0.35, 1.0, smoothstep(0.0, 0.35, hz));                        // flatter near the horizon
+    vec2 q = vec2(p.x * 1.1, hz * 2.6 * sq) * 1.1 + uDrift * 6.0;
+    float mask = noise(q * 0.35 + 7.0);                                            // cumulus come in groups
+    float n = fbm3(q) * 0.7 + 0.3 * noise(q * 0.6 + 2.0) + (mask - 0.5) * 0.35;
+    n -= 0.10 * smoothstep(0.30, 0.0, hz);
+    float th = mix(0.60, 0.36, uCloud);
+    float cov = smoothstep(th, th + 0.05, n) * smoothstep(0.0, 0.03, hz);
+    float nUp = fbm2(q + vec2(0.0, 0.22)) * 0.7 + 0.3 * noise((q + vec2(0.0, 0.22)) * 0.6 + 2.0) + (mask - 0.5) * 0.35;   // cheaper second sample: only the shading needs it
+    float lit = smoothstep(-0.04, 0.12, n - nUp + 0.03);                          // the top of each mass is lit, the belly in shade
+    float body = smoothstep(th, th + 0.25, n);
+    vec3 cc = mix(uCloudShade, uCloudLit, lit * (1.0 - 0.35 * body));
+    cc = mix(cc, uCloudShade * 0.9, body * (1.0 - lit) * 0.5);                     // heavy bottoms
+    cc += uSunCol * exp(-sr * 3.0) * 0.25 * lit;
+    cc *= 0.97 + 0.06 * noise(p * 60.0);                                           // paper grain
+    col = mix(col, cc, cov);
+    col = mix(col, mix(uCloudShade, uCloudLit, 0.45), smoothstep(0.65, 1.0, uCloud) * 0.7 * smoothstep(0.0, 0.1, hz));   // overcast sheet
+    col = mix(col, uHorizonC, exp(-hz * 14.0) * 0.5 * (1.0 - uNight * 0.5));       // haze at the horizon
+  }
+  // ---- mountains and hills: aerial perspective, each layer warmer / darker as it comes nearer ----
+  float rf = uLayerBox.z > 0.5 ? 0.0 : ridgeFar(p.x), rm = uLayerBox.w > 0.5 ? 0.0 : ridgeMid(p.x), rn = uLayerNearOn > 0.5 ? HORIZON + 0.05 : ridgeNear(p.x, aspect);
+  vec3 lay;
+  float nearA = uLayerNearOn > 0.5 ? layer(uTexNear, uv).a : 0.0;
+  if (uLayerBox.z > 0.5 && nearA < 0.98) {
+    vec4 tx = layer(uTexFar, uv);
+    col = mix(col, mix(tx.rgb * uTintFar, uHorizonC, 0.30), tx.a);
+  } else {
+    float k = smoothstep(rf + 0.004, rf - 0.004, uv.y);
+    lay = uMtnFar * (0.9 + 0.2 * noise(p * 14.0)) * (1.0 - 0.25 * smoothstep(rf - 0.12, rf, uv.y));
+    lay += uSunCol * 0.12 * smoothstep(rf - 0.02, rf, uv.y) * uSunUp;
+    col = mix(col, mix(lay, uHorizonC, 0.25), k);
+  }
+  if (uLayerBox.w > 0.5 && nearA < 0.98) {
+    vec4 tx = layer(uTexMid, uv);
+    vec3 tm = mix(tx.rgb * uTintMid, uHorizonC, 0.14);
+    if (uTwilight > 0.02) tm += uSunCol * vec3(1.0, 0.7, 0.45) * (1.0 - layer(uTexMid, uv + vec2(0.0, 0.004)).a) * 0.35 * uTwilight;
+    col = mix(col, tm, tx.a);
+  } else {
+    float k = smoothstep(rm + 0.004, rm - 0.004, uv.y);
+    float tex = fbm3(vec2(p.x * 6.0, uv.y * 18.0));
+    lay = uMtnMid * (0.85 + 0.3 * tex) * (1.0 - 0.2 * smoothstep(rm - 0.08, rm, uv.y));
+    lay += uSunCol * 0.10 * smoothstep(0.45, 0.75, tex) * uSunUp;
+    col = mix(col, mix(lay, uHorizonC, 0.12), k);
+  }
+  // near hills: green, with the cloud-shadow field and a soft ridge highlight
+  if (uv.y > HORIZON - 0.02 && uv.y < HORIZON + 0.32) {
+    float k = smoothstep(rn + 0.003, rn - 0.003, uv.y);
+    float hx = (uv.x - 0.5) * aspect * 40.0;
+    float L = lightAt(hx, 38.0 + (rn - uv.y) * 120.0);
+    float tex = uLayerNearOn > 0.5 ? 0.5 : fbm3(vec2(p.x * 7.0, uv.y * 25.0));
+    lay = uHill * (0.8 + 0.35 * tex);
+    lay = mix(lay * uShadowTint, lay, L);
+    lay = sheen(lay, gustAt(hx, 38.0) * 0.5);
+    lay += uSunCol * 0.10 * smoothstep(rn - 0.012, rn, uv.y) * uSunUp;              // rim-lit ridge
+    if (uLayerNearOn > 0.5) {
+      vec4 tx = layer(uTexNear, uv);
+      vec3 tl = tx.rgb * uTintNear;
+      tl = mix(tl * uShadowTint, tl, L);
+      tl = sheen(tl, gustAt(hx, 38.0 + (rn - uv.y) * 120.0) * 0.5);
+      tl = mix(tl, uHorizonC, 0.05);
+      if (uTwilight > 0.02) {                                                      // dusk: the ridge rim-lit against the sky
+        float above = layer(uTexNear, uv + vec2(0.0, 0.004)).a;
+        tl += uSunCol * vec3(1.0, 0.75, 0.5) * tx.a * (1.0 - above) * 0.45 * uTwilight;
+      }
+      col = mix(col, tl, tx.a);
+    } else col = mix(col, lay, k);
+  }
+  // ---- the meadow (ground plane) beyond and between the blades ----
+  if (uv.y < HORIZON) {
+    float zz = CAM_H / ((HORIZON - uv.y) * FOV);
+    float xx = (uv.x - 0.5) * aspect * zz;
+    float far = 1.0 - exp(-zz * 0.04);
+    float patch = noise(vec2(xx * 0.09, zz * 0.16) + 4.0);                           // hue patches: yellow-green ↔ blue-green
+    float tex = noise(vec2(xx * 2.5, zz * 1.2)) * 0.6 + noise(vec2(xx * 9.0, zz * 5.0)) * 0.4;
+    float L = lightAt(xx, zz);
+    vec2 fm = fieldMap(xx, zz);
+    vec3 g = mix(mix(uFieldA, uFieldB, smoothstep(0.35, 0.65, fm.x)), mix(uFieldC, uFieldD, smoothstep(0.35, 0.65, fm.x)), smoothstep(0.3, 0.7, fm.y)) * 0.62;   // ground = the root colour of the grass
+    g *= (0.80 + 0.24 * tex) * uGroundLight;
+    g = sheen(g, gustAt(xx, zz) * 0.6);
+    g = mix(g * uShadowTint, g, L);
+    g = mix(g, g * 1.0, smoothstep(6.0, 1.2, zz));                                 // ground under the near blades is in their shadow
+    col = mix(g, uHorizonC, far * far * 0.7);
+    if (uLayerNearOn > 0.5 && uv.y > HORIZON - 0.12) {                                // the painted slope runs on under the far blades
+      vec4 tx = layer(uTexNear, uv);
+      vec3 tl = mix(tx.rgb * uTintNear * uShadowTint, tx.rgb * uTintNear, L);
+      tl = sheen(tl, gustAt((uv.x - 0.5) * aspect * 30.0, 30.0) * 0.5);
+      col = mix(col, tl, tx.a * smoothstep(HORIZON - 0.11, HORIZON - 0.045, uv.y));
+    }
+  }
+  // ---- the lone tree (behind the near blades; the depth buffer sorts the rest) ----
+  {
+    float tz = ${TREE.z.toFixed(1)};
+    float ty = HORIZON - (CAM_H / tz) / FOV;                                         // where its roots stand
+    float tsz = (5.2 / tz) / FOV;                                                     // canopy unit = 5.2 m
+    vec2 d = vec2((uv.x - ${TREE.x.toFixed(2)}) * aspect, uv.y - ty) / tsz;
+    if (abs(d.x) < 0.7 && d.y > -0.1 && d.y < 1.2) {
+      float a;
+      vec3 tc = tree(d, 1.0 / (uRes.y * tsz), uTreeSway, a);
+      float L = lightAt((${TREE.x.toFixed(2)} - 0.5) * aspect * tz, tz);
+      tc = mix(tc * uShadowTint, tc, L) * uGroundLight;
+      tc = mix(tc, uHorizonC, 0.18);
+      col = mix(col, tc, a);
+      // contact shadow / AO pool on the grass at the root (shadow side heavier)
+      float pool = exp(-((d.x + 0.08) * (d.x + 0.08) * 9.0 + (d.y + 0.01) * (d.y + 0.01) * 320.0)) * step(d.y, 0.02);
+      col = mix(col, col * vec3(0.45, 0.5, 0.62), pool * 0.7 * (1.0 - a));
+    }
+  }
+  // ---- windmills on the ridge (one per Claude session) ----
+  for (int i = 0; i < 5; i++) {
+    vec4 M = uMill[i];
+    if (M.w < 0.002) continue;
+    vec2 q = vec2((uv.x - M.x) * aspect, uv.y - M.y) / M.z;
+    if (abs(q.x) > 0.8 || q.y < -0.05 || q.y > 1.8) continue;
+    float px = 1.0 / (uRes.y * M.z);
+    vec4 w = windmill(q, uMillB[i].x, px);
+    vec3 body = mix(vec3(0.62, 0.58, 0.56), vec3(0.96, 0.92, 0.84), w.x) * uGroundLight;
+    body = mix(body, body * uShadowTint, 0.25 * (1.0 - w.x));
+    vec3 roofC = vec3(0.45, 0.22, 0.16) * uGroundLight;
+    float roof = smoothstep(px, -px, length((q - vec2(0.0, 1.0)) * vec2(1.0, 1.5)) - 0.19) * step(0.98, q.y);
+    body = mix(body, roofC, roof);
+    body = mix(body, vec3(0.18, 0.15, 0.14) * (0.6 + 0.4 * uGroundLight.g), w.z);   // dark sails
+    body = mix(body, uHorizonC, 0.12);
+    col = mix(col, body, max(w.y, w.z) * M.w);
+    float lamp = uMillB[i].y;
+    col = mix(col, vec3(1.0, 0.78, 0.45) * 1.25, w.w * lamp * M.w);
+    col += vec3(1.0, 0.72, 0.40) * exp(-length(q - vec2(0.0, 0.49)) * 8.0) * 0.45 * lamp * M.w;
+  }
+  // ---- 等你: one star in FRONT of everything, pulsing slowly ----
+  if (uBeacon > 0.01) {
+    vec2 bd = p - vec2(0.58 * aspect, 0.80);
+    float br = length(bd);
+    float pulse = pow(0.5 + 0.5 * sin(t * 2.2 - 1.57), 2.0);
+    float core = exp(-br * 110.0) * 1.6;
+    float halo = exp(-br * 16.0) * 0.30 + exp(-br * 5.0) * 0.08;
+    float spikes = exp(-abs(bd.x) * 320.0) * exp(-abs(bd.y) * 14.0) + exp(-abs(bd.y) * 320.0) * exp(-abs(bd.x) * 14.0);
+    col += vec3(1.0, 0.91, 0.74) * (core * (0.55 + 0.45 * pulse) + (halo + spikes * 0.7) * pulse) * uBeacon;
+  }
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
+// ---------- pass 2 / 3: blades (triangle strip) and dandelion heads (points) share the bending code ----------
+const VS_BEND = COMMON + `
+attribute vec4 aP;          // x, z, height (m), width (m)
+attribute vec4 aQ;          // t along the blade (0 root … 1 tip), side (−1 / +1), flexibility, clump hue (0..1; −1 = dandelion stem)
+attribute vec2 aR;          // per-blade jitter, unused
+uniform vec2  uRes;
+uniform float uAspect;
+varying float vT, vSide, vHue, vZ, vWind, vLight, vJit;
+varying vec2  vField;
+const float HORIZON = ${HORIZON.toFixed(3)};
+const float CAM_H = ${CAM_H.toFixed(2)};
+const float FOV = ${FOV.toFixed(2)};
+const float ZFAR = ${ZFAR.toFixed(1)};
+vec3 bendPoint(vec4 b, float t, float flex, float wind) {
+  float bend = wind * (0.25 + 0.75 * flex);
+  float dx = bend * t * t * b.z;
+  float y = b.z * t * (1.0 - 0.22 * abs(bend) * t * t);
+  return vec3(b.x + dx, y, b.y);
+}
+vec4 project(vec3 P, out float z) {
+  z = P.z;
+  float sx = (P.x / P.z) / (FOV * uAspect) + 0.5;
+  float sy = HORIZON + ((P.y - CAM_H) / P.z) / FOV;
+  return vec4(sx * 2.0 - 1.0, sy * 2.0 - 1.0, (P.z / ZFAR) * 2.0 - 1.0, 1.0);
+}`;
+const VS_BLADE = VS_BEND + `
+void main() {
+  float wind = windAt(aP.x, aP.y, uTime);
+  vec3 P = bendPoint(aP, aQ.x, aQ.z, wind);
+  float z;
+  vec4 c = project(P, z);
+  float wScr = (aP.w / z) / (FOV * uAspect) * (1.0 - aQ.x * 0.92) * 2.0;
+  c.x += aQ.y * wScr;
+  gl_Position = c;
+  vT = aQ.x; vSide = aQ.y; vHue = aQ.w; vZ = z; vWind = wind; vJit = aR.x;
+  vLight = lightAt(aP.x, aP.y);
+  vField = fieldMap(aP.x, aP.y);
+}`;
+const FS_BLADE = `
+precision mediump float;
+uniform vec3  uGroundLight, uHaze, uShadowTint, uSunCol, uLightDir, uRimCol;
+uniform vec3  uFieldA, uFieldB, uFieldC, uFieldD;   // yellow-green, green, blue-green, olive
+uniform float uSunX, uNight, uWarm, uBacklight;
+varying float vT, vSide, vHue, vZ, vWind, vLight, vJit;
+varying vec2  vField;
+void main() {
+  bool stem = vHue < -0.5;
+  float soft = smoothstep(1.0, 0.35, abs(vSide));
+  float a = mix(1.0, soft, 0.6) * smoothstep(19.0, 13.0, vZ);                  // soft painted edges everywhere
+  if (a < 0.05) discard;
+  float far = smoothstep(4.0, 16.0, vZ);                                 // far: clump-shared colour, no per-blade variety (no shimmer)
+  // rounded-ribbon normal: the ground normal tilted sideways across the blade width, and back with the bend
+  vec3 n = normalize(vec3(vSide * 0.55 * (1.0 - far * 0.7), 1.0, -0.35 * clamp(vWind, -1.5, 1.5)));
+  float ndl = dot(n, uLightDir);
+  float diff = 0.60 + 0.40 * ndl;                                        // half-Lambert, continuous over the field
+  vec3 col;
+  if (stem) col = mix(vec3(0.30, 0.42, 0.18), vec3(0.46, 0.58, 0.26), vT);
+  else {
+    vec3 fc = mix(mix(uFieldA, uFieldB, smoothstep(0.35, 0.65, vField.x)), mix(uFieldC, uFieldD, smoothstep(0.35, 0.65, vField.x)), smoothstep(0.3, 0.7, vField.y));
+    fc = mix(fc, mix(uFieldB, uFieldC, vHue), 0.35);                     // the clump's own leaning
+    fc *= 1.0 + (vJit - 0.5) * 0.22 * (1.0 - far);                       // per-blade variety, faded with distance
+    col = fc * mix(0.34, 0.92, pow(vT, 0.8));                            // root AO → tip highlight
+    float back = uBacklight * pow(vT, 2.5) * (0.6 + 0.4 * clamp(vWind, -1.0, 1.0));
+    col += uSunCol * vec3(0.95, 0.85, 0.45) * back * 0.75;              // translucent tips against the sun
+    col = mix(col, col * vec3(1.12, 1.02, 0.78), uWarm * vT * 0.5);
+  }
+  col *= diff * uGroundLight;
+  col += uRimCol * smoothstep(0.55, 1.0, ndl) * pow(vT, 2.0) * 0.18;     // rim on the tips (warm by day, cool moonlight at night)
+  col = mix(col * uShadowTint, col, vLight);
+  col = mix(col, uHaze, 1.0 - exp(-vZ * 0.03));
+  gl_FragColor = vec4(col, a);
+}`;
+const VS_HEAD = VS_BEND + `
+attribute vec4 aH;          // type (0 seed head, 1 yellow, 2 white, 3 purple), unused, hash, radius (m)
+uniform float uPuff;        // ambient seed heads: how full (0 bare … 1 full)
+varying float vType, vHash, vFull, vZh, vLh;
+void main() {
+  // v8: aP = x, z, head height (on the strip's ground line), strip height · aQ = vv in the strip, strip phase, –, strip z
+  float wind = windAt(aP.x, aQ.w, uTime + aQ.y);
+  vec3 P = vec3(aP.x + wind * 0.22 * aQ.x * aQ.x * aP.w, aP.z, aP.y);
+  float z;
+  vec4 c = project(P, z);
+  gl_Position = c;
+  gl_PointSize = max(1.5, (aH.w / z) / FOV * uRes.y * 3.2);                    // room for a stem tip below the head
+  vType = aH.x; vHash = aH.z; vFull = aH.x > 0.5 ? 1.0 : uPuff; vZh = z; vLh = lightAt(aP.x, aP.y);
+}`;
+const FS_HEAD = `
+precision mediump float;
+uniform vec3  uGroundLight, uHaze, uShadowTint;
+uniform float uNight, uWarm;
+varying float vType, vHash, vFull, vZh, vLh;
+void main() {
+  vec2 c = gl_PointCoord * 2.0 - 1.0; c.y = -c.y;
+  // the head sits in the upper part of the sprite, a short stem tip below it disappears into the grass
+  float stem = smoothstep(0.09, 0.03, abs(c.x + 0.02 * c.y)) * step(c.y, 0.2) * step(-1.0, c.y);
+  c = (c - vec2(0.0, 0.38)) / 0.6;
+  float r = length(c);
+  if (r > 1.0 && stem < 0.1) discard;
+  if (r > 1.0) { gl_FragColor = vec4(vec3(0.34, 0.46, 0.20) * uGroundLight, stem); return; }
+  float ang = atan(c.y, c.x);
+  vec3 col; float a;
+  if (vType < 0.5) {
+    float idx = floor((ang + 3.14159) / 6.28318 * 40.0 + vHash * 40.0);
+    float keep = step(fract(idx * 0.618 + vHash), vFull);
+    float ray = smoothstep(0.5, 0.0, abs(fract((ang + 3.14159) / 6.28318 * 40.0 + vHash * 40.0) - 0.5) * (0.6 + r * 2.0)) * keep;
+    float body = smoothstep(1.0, 0.45, r) * 0.30 * vFull + exp(-r * r * 9.0) * 0.5;
+    a = clamp(ray * 0.6 * smoothstep(1.0, 0.6, r) + body, 0.0, 0.85) * (0.75 + 0.25 * smoothstep(1.0, 0.3, r));   // feathered, a little translucent
+    col = mix(vec3(0.80, 0.82, 0.86), vec3(0.98, 0.95, 0.86), smoothstep(-0.8, 0.8, c.x + c.y * 0.6));          // cool shadow side → warm sun side
+  } else {
+    a = smoothstep(0.95, 0.72, r);
+    float petals = 0.85 + 0.15 * smoothstep(0.2, 0.0, abs(fract(ang * 2.228) - 0.5));
+    vec3 fc = vType < 1.5 ? vec3(0.92, 0.80, 0.30) : vType < 2.5 ? vec3(0.94, 0.93, 0.88) : vec3(0.78, 0.68, 0.88);
+    a *= 0.9;
+    col = fc * petals * (0.8 + 0.2 * smoothstep(0.35, 0.0, r));
+    col = mix(col, col * vec3(0.9, 0.75, 0.3), (vType < 1.5 ? 1.0 : 0.0) * smoothstep(0.25, 0.0, r) * 0.6);
+  }
+  col *= uGroundLight;
+  col = mix(col * uShadowTint, col, vLh);
+  col = mix(col, uHaze, 1.0 - exp(-vZh * 0.03));
+  if (a < 0.08) discard;
+  gl_FragColor = vec4(col, a);
+}`;
+
+// ---------- cards: camera-facing quads — leaf clusters of the tree (per-sub-cluster spherized normals, 3 tone bands,
+//            3-layer wind: trunk bend / branch sway / leaf flutter) and grass tufts in the nearest band (root fixed,
+//            top bends with the wind). Textured from the atlases in assets/ when present, procedural otherwise. ----------
+const VS_CARD = COMMON + `
+attribute vec4 aC0;         // x, y, z (m; leaves relative to the tree base), size (m)
+attribute vec4 aC1;         // corner u (0..1), corner v (0..1), atlas cell, kind (0 leaf, 1 tuft)
+attribute vec4 aC2;         // normal xyz (spherized per sub-cluster), phase
+attribute vec4 aC3;         // flip (±1), rotation (rad), scale jitter, hue / value jitter (−1..1)
+uniform vec2  uRes;
+uniform float uAspect, uTreeWind, uTreeX, uTreeZ;
+varying vec2  vUV; varying float vCell, vKind, vNdl, vLight, vZc, vV, vPhase, vRim;
+varying vec2  vField; varying vec4 vRect; varying float vJit, vSheen;
+uniform vec4  uLeafCells[6], uTuftCells[8], uMidCells[8];
+const float HORIZON = ${HORIZON.toFixed(3)};
+const float CAM_H = ${CAM_H.toFixed(2)};
+const float FOV = ${FOV.toFixed(2)};
+const float ZFAR = ${ZFAR.toFixed(1)};
+void main() {
+  vec3 P = aC0.xyz;
+  float size = aC0.w, u = aC1.x, v = aC1.y;
+  vec2 off;
+  if (aC1.w < 0.5) {
+    // leaf cluster: trunk bend (height², low frequency) + branch sway (per sub-cluster phase) + leaf flutter
+    float hN = P.y / 7.5;
+    float w = uTreeWind;
+    P.x += w * 0.12 * hN * hN;                                                    // whole canopy: a gentle rock
+    P.x += sin(uTime * 1.3 + aC2.w) * (0.04 + 0.09 * abs(w)) * hN;               // branches: small, out of phase
+    P.y += sin(uTime * 1.7 + aC2.w * 1.3) * 0.025 * abs(w) * hN;
+    float fl = sin(uTime * 9.0 + aC2.w * 7.0) * (0.04 + 0.10 * abs(w));
+    float ca = cos(fl), sa = sin(fl);
+    off = vec2((u - 0.5) * 0.667 * ca - (v - 0.5) * sa, (u - 0.5) * 0.667 * sa + (v - 0.5) * ca) * size;   // cell aspect 683:1024
+    P.x += uTreeX; P.z += uTreeZ;
+    vNdl = dot(aC2.xyz, uLightDir);
+    vRim = smoothstep(0.55, 1.0, aC2.y + aC2.x * 0.6);
+  } else {
+    // grass tuft: root fixed at the bottom-centre, the top leans with the wind (height²); h-flip, a small
+    // rotation and a scale jitter per card; clump-shared normal (tilted by where the card sits in its clump)
+    float w = windAt(P.x, P.z, uTime);
+    float sz = size * aC3.z;
+    vec2 o2 = vec2((u - 0.5) * sz * (aC1.w > 1.5 ? 1.0 : 0.5) * aC3.x, v * sz);   // tufts 1:2 cells, mid-tufts square
+    float ca = cos(aC3.y), sa = sin(aC3.y);
+    o2 = vec2(o2.x * ca - o2.y * sa, o2.x * sa + o2.y * ca);
+    off = o2 + vec2(w * 0.42 * v * v * sz, 0.0);
+    vNdl = dot(normalize(vec3(aC2.x + (u - 0.5) * 0.35, 1.0, aC2.z - 0.3 * w)), uLightDir);
+    vRim = smoothstep(0.6, 1.0, aC2.x * 0.6 + 0.6);
+  }
+  float sx = (P.x / P.z) / (FOV * uAspect) + 0.5 + (off.x / P.z) / (FOV * uAspect);
+  float sy = HORIZON + ((P.y - CAM_H) / P.z) / FOV + (off.y / P.z) / FOV;
+  gl_Position = vec4(sx * 2.0 - 1.0, sy * 2.0 - 1.0, (P.z / ZFAR) * 2.0 - 1.0, 1.0);
+  vUV = vec2(u, v); vCell = aC1.z; vKind = aC1.w; vZc = P.z; vV = v; vPhase = aC2.w;
+  vRect = vec4(0.0);
+  if (aC1.w < 0.5) { for (int i = 0; i < 6; i++) if (abs(aC1.z - float(i)) < 0.5) vRect = uLeafCells[i]; }
+  else if (aC1.w < 1.5) { for (int i = 0; i < 8; i++) if (abs(aC1.z - float(i)) < 0.5) vRect = uTuftCells[i]; }
+  else { for (int i = 0; i < 8; i++) if (abs(aC1.z - float(i)) < 0.5) vRect = uMidCells[i]; }
+  vJit = aC3.w; vSheen = gustAt(P.x, P.z);
+  vLight = lightAt(P.x, P.z);
+  vField = fieldMap(P.x, P.z);
+}`;
+const FS_CARD = `
+#extension GL_OES_standard_derivatives : enable
+precision mediump float;
+uniform sampler2D uAtlasLeaf, uAtlasTuft, uAtlasTuft2, uAtlasMid;
+uniform float uLeafOn, uTuftOn, uMidOn, uNight, uBacklight, uWarm;
+uniform vec3  uGroundLight, uHaze, uShadowTint, uSunCol, uRimCol, uTreeCore, uTreeMid, uTreeLit;
+uniform vec3  uFieldA, uFieldB, uFieldC, uFieldD;
+varying vec2  vUV; varying float vCell, vKind, vNdl, vLight, vZc, vV, vPhase, vRim;
+varying vec2  vField; varying vec4 vRect; varying float vJit, vSheen;
+vec3 sheen(vec3 c, float g) { return g > 0.0 ? mix(c, c * vec3(1.16, 1.12, 0.84), g) : mix(c, c * vec3(0.88, 0.96, 1.08), -g); }
+float sharpen(float a) { return clamp((a - 0.5) / max(fwidth(a), 1e-4) * 0.5 + 0.5, 0.0, 1.0); }   // crisp but antialiased edge
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + 1.0), u.x), u.y);
+}
+void main() {
+  float a; float lum = 1.0; vec3 col;
+  if (vKind < 0.5) {
+    if (uLeafOn > 0.5) {
+      vec4 c = vRect;
+      vec4 tx = texture2D(uAtlasLeaf, vec2(c.x + vUV.x * c.z, c.y + (1.0 - vUV.y) * c.w));
+      a = tx.a; lum = dot(tx.rgb, vec3(0.3, 0.55, 0.15)) * 1.6 + 0.2;
+    } else {
+      vec2 q = vUV * 2.0 - 1.0;                                            // procedural cluster: a ragged disc of leaf blobs
+      float r = length(q);
+      a = smoothstep(0.95, 0.75, r + (noise(vUV * 6.0 + vPhase) - 0.5) * 0.5);
+      lum = 0.75 + 0.5 * noise(vUV * 9.0 + vPhase * 3.0);
+    }
+    if (sharpen(a) < 0.5) discard;
+    // three tone bands from the sub-cluster normal, plus a lit rim on the upper-right edges
+    float band = smoothstep(-0.30, -0.15, vNdl) + smoothstep(0.12, 0.26, vNdl);          // the whole sun-facing third is lit
+    col = band < 0.5 ? uTreeCore : band < 1.5 ? uTreeMid : uTreeLit;
+    col = mix(col, uTreeLit * vec3(1.12, 1.06, 0.72), vRim * smoothstep(0.3, 0.8, vNdl) * 0.7);
+    col = mix(col, uTreeCore * vec3(0.8, 0.9, 1.15), smoothstep(0.55, 0.3, lum) * 0.6);   // cool only deep in the gaps
+    col += uRimCol * vRim * 0.18;
+    col *= (0.75 + 0.5 * lum) * uGroundLight;
+  } else {
+    vec3 paint = vec3(-1.0);
+    if (vKind > 1.5 && uMidOn > 0.5) {
+      vec4 c = vRect;
+      vec4 tx = texture2D(uAtlasMid, vec2(c.x + vUV.x * c.z, c.y + (1.0 - vUV.y) * c.w));
+      a = tx.a; lum = dot(tx.rgb, vec3(0.3, 0.55, 0.15)) * 1.5 + 0.25; paint = tx.rgb;
+    } else if (vKind > 1.5) {
+      a = 0.0;
+    } else if (uTuftOn > 0.5) {
+      vec4 c = vRect;
+      vec4 tx = vCell < 3.5 ? texture2D(uAtlasTuft, vec2(c.x + vUV.x * c.z, c.y + (1.0 - vUV.y) * c.w)) : texture2D(uAtlasTuft2, vec2(c.x + vUV.x * c.z, c.y + (1.0 - vUV.y) * c.w));
+      a = tx.a; lum = dot(tx.rgb, vec3(0.3, 0.55, 0.15)) * 1.5 + 0.25; paint = tx.rgb;
+    } else {
+      // procedural tuft: a fan of 7 blades from the root
+      float best = 1.0;
+      for (int i = 0; i < 7; i++) {
+        float k = (float(i) - 3.0) / 3.0 + (hash(vec2(float(i), vPhase)) - 0.5) * 0.3;
+        float cx = 0.5 + k * 0.42 * vV * (1.0 + 0.3 * vV);
+        float wdt = 0.06 * (1.0 - vV * 0.8) + 0.004;
+        best = min(best, abs(vUV.x - cx) / wdt);
+      }
+      a = smoothstep(1.0, 0.7, best) * step(vV, 0.98);
+      lum = 0.8 + 0.4 * vV;
+    }
+    if (sharpen(a) < 0.5) discard;
+    vec3 fc = mix(mix(uFieldA, uFieldB, smoothstep(0.35, 0.65, vField.x)), mix(uFieldC, uFieldD, smoothstep(0.35, 0.65, vField.x)), smoothstep(0.3, 0.7, vField.y));
+    fc *= 1.0 + vJit * 0.12;                                                       // per-card value jitter
+    fc = mix(fc, fc.gbr * vec3(0.9, 1.05, 0.9), max(vJit, 0.0) * 0.12);            // and a little hue drift
+    // root = ground colour, up to the tip; three tone bands from the clump normal, rim on the lit side
+    float band = smoothstep(-0.30, -0.15, vNdl) + smoothstep(0.12, 0.26, vNdl);
+    float tone = band < 0.5 ? 0.62 : band < 1.5 ? 0.84 : 1.0;
+    if (paint.x >= 0.0) {
+      // v8: the painted colour leads (as in the strips), hue nudged toward the field map, value from the painting
+      vec3 fcN = fc / max(dot(fc, vec3(0.333)), 0.01) * dot(paint, vec3(0.333));
+      col = mix(paint, fcN, 0.32) * (0.84 + 0.16 * tone) * mix(0.80, 1.02, smoothstep(0.0, 0.5, vV));
+      col = mix(col, vec3(dot(col, vec3(0.333))), uNight * 0.35);
+    } else {
+      col = mix(fc, uFieldB, 0.55) * vec3(0.94, 1.0, 0.98) * mix(0.50, 0.90, pow(vV, 0.9)) * (0.55 + 0.55 * lum) * tone;
+    }
+    col += fc * vRim * 0.2 * smoothstep(0.3, 0.8, vNdl) * vV;
+    col += uSunCol * vec3(0.95, 0.85, 0.45) * uBacklight * pow(vV, 2.5) * 0.3;
+    col += uRimCol * smoothstep(0.55, 1.0, vNdl) * pow(vV, 2.0) * 0.25;
+    col = mix(col, col * vec3(1.12, 1.02, 0.78), uWarm * vV * 0.5);
+    col = sheen(col, vSheen);
+    col *= uGroundLight;
+  }
+  col = mix(col * uShadowTint, col, vLight);
+  col = mix(col, uHaze, 1.0 - exp(-vZc * 0.03));
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// ---------- painted parallax grass strips (assets/turf-N.png + -mask.png): screen-wide bands at fixed
+//            depths, tiled horizontally; the top silhouette sways (UV shift weighted by the mask + vertex bend),
+//            the mass carries the wind as sheen ----------
+const VS_STRIP = COMMON + `
+attribute vec3 aS;          // x (m), v (0 root … 1 top), unused
+uniform vec2  uRes;
+uniform float uAspect, uStripZ, uStripH, uStripPhase, uStripSeed;
+varying float vV, vX, vWind, vLight, vSheen;
+varying vec2  vField;
+const float HORIZON = ${HORIZON.toFixed(3)};
+const float CAM_H = ${CAM_H.toFixed(2)};
+const float FOV = ${FOV.toFixed(2)};
+const float ZFAR = ${ZFAR.toFixed(1)};
+void main() {
+  float w = windAt(aS.x, uStripZ, uTime + uStripPhase);
+  float x = aS.x + w * 0.22 * aS.y * aS.y * uStripH;                             // only the top really moves
+  // the ground line rises and falls (shared low-frequency terrain + this strip's own wobble) and the strip's
+  // height varies along x, so no two silhouettes are parallel and nothing is a straight horizontal edge
+  float terrain = (noise(vec2(aS.x * 0.028 + 7.0, uStripZ * 0.05)) - 0.5) * 1.4 + (noise(vec2(aS.x * 0.11 + uStripSeed, 3.0)) - 0.5) * 0.6;
+  float hv = 0.80 + 0.45 * noise(vec2(aS.x * 0.07 + uStripSeed * 2.0, 9.0));
+  float y = terrain * clamp(uStripZ / 6.0, 0.35, 1.0) * uStripH * 0.9 + aS.y * uStripH * hv;
+  float sx = (x / uStripZ) / (FOV * uAspect) + 0.5;
+  float sy = HORIZON + ((y - CAM_H) / uStripZ) / FOV;
+  gl_Position = vec4(sx * 2.0 - 1.0, sy * 2.0 - 1.0, (uStripZ / ZFAR) * 2.0 - 1.0, 1.0);
+  vV = aS.y; vX = aS.x; vWind = w; vLight = lightAt(aS.x, uStripZ); vSheen = gustAt(aS.x, uStripZ);
+  vField = fieldMap(aS.x, uStripZ);
+}`;
+const FS_STRIP = `
+#extension GL_OES_standard_derivatives : enable
+precision mediump float;
+uniform sampler2D uStripTex, uStripMask;
+uniform float uStripZ, uStripH, uStripTile, uStripFar, uStripFlip, uStripDark, uTime, uBacklight, uWarm, uNight;
+uniform vec3  uGroundLight, uHaze, uShadowTint, uSunCol, uRimCol, uFieldA, uFieldB, uFieldC, uFieldD;
+varying float vV, vX, vWind, vLight, vSheen;
+varying vec2  vField;
+vec3 sheen(vec3 c, float g) { return g > 0.0 ? mix(c, c * vec3(1.16, 1.12, 0.84), g) : mix(c, c * vec3(0.88, 0.96, 1.08), -g); }
+void main() {
+  float vv = clamp(vV, 0.0, 1.0);
+  float vt = vV < 0.06 ? 0.06 + 0.3 - abs(mod(0.06 - vV, 0.6) - 0.3) : vv;
+  vec2 uv = vec2(vX / uStripTile * uStripFlip + 0.37, 1.0 - vt);
+  float m = texture2D(uStripMask, uv).r;                                           // 0 root … 1 tips
+  uv.x += vWind * 0.012 * m * m;                                                   // the silhouette sways, the mass stays
+  vec4 tx = texture2D(uStripTex, uv);
+  float a = clamp((tx.a - 0.5) / max(fwidth(tx.a), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
+  if (a < 0.5) discard;                                                            // alpha test: opaque, depth-written, front to back
+  float lum = dot(tx.rgb, vec3(0.3, 0.55, 0.15)) * 1.5 + 0.25;
+  vec3 fc = mix(mix(uFieldA, uFieldB, smoothstep(0.35, 0.65, vField.x)), mix(uFieldC, uFieldD, smoothstep(0.35, 0.65, vField.x)), smoothstep(0.3, 0.7, vField.y));
+  // v8: the painted colour leads; the field map only nudges its hue (at the painting's own value) so layers agree
+  vec3 fcN = fc / max(dot(fc, vec3(0.333)), 0.01) * dot(tx.rgb, vec3(0.333));
+  vec3 col = mix(tx.rgb, fcN, 0.28) * mix(0.82, 1.0, smoothstep(0.0, 0.45, vv)) * 1.04;
+  col = mix(col, vec3(dot(col, vec3(0.333))), uNight * 0.35);
+  col += uSunCol * vec3(0.95, 0.85, 0.45) * uBacklight * pow(vv, 2.5) * m * 0.25;
+  col += uRimCol * pow(vv, 2.0) * m * 0.15;
+  col = mix(col, col * vec3(1.12, 1.02, 0.78), uWarm * vv * 0.5);
+  col = sheen(col, vSheen);
+  col *= uGroundLight;
+  col = mix(col * uShadowTint, col, vLight);
+  col = mix(col, uHaze, uStripFar);                                                // aerial perspective: the far strips melt into the hills
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// ---------- pass 4: particles — seeds with parachutes, tumbling leaves, fireflies ----------
+const VS_PART = `
+precision highp float;
+attribute vec4 aA;          // x, y, z, angle (rad)
+attribute vec4 aB;          // size (m), type (0 seed, 1 leaf, 2 firefly), alpha, tint
+uniform vec2  uRes;
+uniform float uAspect;
+varying float vAng, vType, vAlpha, vTint, vZp;
+const float HORIZON = ${HORIZON.toFixed(3)};
+const float CAM_H = ${CAM_H.toFixed(2)};
+const float FOV = ${FOV.toFixed(2)};
+const float ZFAR = ${ZFAR.toFixed(1)};
+void main() {
+  vec3 P = aA.xyz;
+  float sx = (P.x / P.z) / (FOV * uAspect) + 0.5;
+  float sy = HORIZON + ((P.y - CAM_H) / P.z) / FOV;
+  gl_Position = vec4(sx * 2.0 - 1.0, sy * 2.0 - 1.0, (P.z / ZFAR) * 2.0 - 1.0, 1.0);
+  gl_PointSize = max(2.0, (aB.x / P.z) / FOV * uRes.y * 2.0);
+  vAng = aA.w; vType = aB.y; vAlpha = aB.z; vTint = aB.w; vZp = P.z;
+}`;
+const FS_PART = `
+precision mediump float;
+uniform vec3  uGroundLight, uHaze, uSunCol;
+uniform float uNight;
+varying float vAng, vType, vAlpha, vTint, vZp;
+void main() {
+  vec2 c = gl_PointCoord * 2.0 - 1.0; c.y = -c.y;
+  float ca = cos(vAng), sa = sin(vAng);
+  vec2 q = vec2(c.x * ca - c.y * sa, c.x * sa + c.y * ca);
+  vec3 col; float a;
+  if (vType < 0.5) {
+    vec2 hub = vec2(0.0, -0.15);
+    vec2 d = q - hub;
+    float rr = length(d);
+    float an = atan(d.x, d.y);
+    float rays = smoothstep(0.07, 0.0, abs(fract(an * 2.2 + 0.5) - 0.5) * (0.5 + rr)) * step(abs(an), 1.35) * smoothstep(0.92, 0.70, rr) * step(0.06, rr);
+    float tips = smoothstep(0.05, 0.0, abs(rr - 0.84)) * step(abs(an), 1.35) * 0.35;
+    float stalk = smoothstep(0.08, 0.0, abs(q.x)) * step(-0.85, q.y) * step(q.y, -0.15);
+    float ach = smoothstep(0.16, 0.06, length(q - vec2(0.0, -0.82)));
+    a = clamp(rays * 0.9 + tips + stalk * 0.7 + ach, 0.0, 1.0) * vAlpha;
+    col = mix(vec3(0.99, 0.97, 0.92) + uSunCol * 0.2, vec3(0.55, 0.45, 0.30), ach);
+  } else if (vType < 1.5) {
+    vec2 e = vec2(q.x / (0.95 - 0.25 * q.y), q.y / 0.42);
+    float shape = 1.0 - dot(e, e);
+    a = smoothstep(-0.08, 0.08, shape) * vAlpha;
+    float rib = smoothstep(0.08, 0.0, abs(q.y)) * 0.35;
+    col = mix(vec3(0.82, 0.52, 0.16), vec3(0.60, 0.30, 0.10), vTint) * (1.0 - rib) * (0.85 + 0.3 * q.x);
+  } else {
+    float r = length(c);
+    a = (exp(-r * r * 6.0) + exp(-r * 18.0)) * vAlpha;
+    col = vec3(0.75, 1.0, 0.35) * 2.0;
+    gl_FragColor = vec4(col * a, a); return;
+  }
+  col *= uGroundLight * (1.0 + 0.3 * uNight);
+  col = mix(col, uHaze, 1.0 - exp(-vZp * 0.03));
+  if (a < 0.02) discard;
+  gl_FragColor = vec4(col, a);
+}`;
+
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs, attribs, uniforms) {
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
+  attribs.forEach((a, i) => gl.bindAttribLocation(p, i, a));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  for (const n of uniforms) u[n] = gl.getUniformLocation(p, n);
+  return { p, u };
+}
+const U_WIND = ['uTime', 'uSway', 'uGust', 'uShadowDrift', 'uCloudShadow', 'uShadow'];
+const P_SKY = program(VS_SKY, FS_SKY, ['p'], [...U_WIND, 'uLightDir', 'uLightFloor', 'uRes', 'uBright', 'uCloud', 'uNight', 'uTwilight', 'uSunUp', 'uWarm', 'uBeacon', 'uTreeSway', 'uLayers', 'uSun', 'uDrift',
+  'uZenith', 'uHorizonC', 'uCloudLit', 'uCloudShade', 'uSunCol', 'uGroundLight', 'uShadowTint', 'uMtnFar', 'uMtnMid', 'uHill', 'uMeadowA', 'uMeadowB', 'uTreeLit', 'uTreeShade',
+  'uMill', 'uMillB', 'uTexFar', 'uTexMid', 'uTexNear', 'uLayerBox', 'uLayerNearOn', 'uTintFar', 'uTintMid', 'uTintNear', 'uAtlasCloud', 'uCloudOn', 'uSheet', 'uCloudSpr', 'uCloudSprB', 'uCloudCells', 'uFieldA', 'uFieldB', 'uFieldC', 'uFieldD']);
+const P_BLADE = program(VS_BLADE, FS_BLADE, ['aP', 'aQ', 'aR'], [...U_WIND, 'uLightDir', 'uLightFloor', 'uRes', 'uAspect', 'uGroundLight', 'uHaze', 'uShadowTint', 'uSunCol', 'uRimCol', 'uFieldA', 'uFieldB', 'uFieldC', 'uFieldD', 'uSunX', 'uNight', 'uWarm', 'uBacklight']);
+const P_HEAD = program(VS_HEAD, FS_HEAD, ['aP', 'aQ', 'aH'], [...U_WIND, 'uLightDir', 'uLightFloor', 'uRes', 'uAspect', 'uPuff', 'uGroundLight', 'uHaze', 'uShadowTint', 'uNight', 'uWarm']);
+const P_PART = program(VS_PART, FS_PART, ['aA', 'aB'], ['uRes', 'uAspect', 'uGroundLight', 'uHaze', 'uSunCol', 'uNight']);
+gl.getExtension('OES_standard_derivatives');
+const P_STRIP = program(VS_STRIP, FS_STRIP, ['aS'], [...U_WIND, 'uLightDir', 'uLightFloor', 'uRes', 'uAspect', 'uStripZ', 'uStripH', 'uStripPhase', 'uStripSeed', 'uStripTex', 'uStripMask', 'uStripTile', 'uStripFar', 'uStripFlip', 'uStripDark', 'uBacklight', 'uWarm', 'uNight',
+  'uGroundLight', 'uHaze', 'uShadowTint', 'uSunCol', 'uRimCol', 'uFieldA', 'uFieldB', 'uFieldC', 'uFieldD']);
+const P_CARD = program(VS_CARD, FS_CARD, ['aC0', 'aC1', 'aC2', 'aC3'], [...U_WIND, 'uLightDir', 'uLightFloor', 'uRes', 'uAspect', 'uTreeWind', 'uTreeX', 'uTreeZ', 'uAtlasLeaf', 'uAtlasTuft', 'uAtlasTuft2', 'uAtlasMid', 'uLeafOn', 'uTuftOn', 'uMidOn', 'uMidCells',
+  'uNight', 'uBacklight', 'uWarm', 'uLeafCells', 'uTuftCells', 'uGroundLight', 'uHaze', 'uShadowTint', 'uSunCol', 'uRimCol', 'uTreeCore', 'uTreeMid', 'uTreeLit', 'uFieldA', 'uFieldB', 'uFieldC', 'uFieldD']);
+
+/* ------------------------------ atlases (optional PNGs in assets/, retried while missing) ------------------------------ */
+// cell rects (u, v from the top, w, h) — defaults are even grids; assets/README-assets.md may give exact rects
+const ATLAS = {
+  cloud: { file: 'assets/clouds.png', unit: 5, cells: [0, 1, 2, 3, 4, 5].map(i => [(i % 2) * 0.5, Math.floor(i / 2) * 682 / 2048, 0.5, 682 / 2048]) },   // 2×3 cells of 1024×682 (assets/README-assets.md): 0–2 big cumulus, 3–4 flat-bottomed, 5 stratus wisp
+  leaf: { file: 'assets/leaf-clusters.png', unit: 3, cells: [[0, 0, 1 / 3, 0.5], [1 / 3, 0, 1 / 3, 0.5], [2 / 3, 0, 1 / 3, 0.5], [0, 0.5, 1 / 3, 0.5], [1 / 3, 0.5, 1 / 3, 0.5], [2 / 3, 0.5, 1 / 3, 0.5]] },
+  tuft: { file: 'assets/grass-clumps.png', unit: 4, cells: [[0, 0, 0.25, 1], [0.25, 0, 0.25, 1], [0.5, 0, 0.25, 1], [0.75, 0, 0.25, 1], [0, 0, 0.25, 1], [0.25, 0, 0.25, 1], [0.5, 0, 0.25, 1], [0.75, 0, 0.25, 1]] },
+  tuft2: { file: 'assets/grass-clumps-2.png', unit: 6, cells: [] },   // cells 4–7 of the tufts (same layout)
+  mid: { file: 'assets/mid-tufts.png', unit: 9, cells: [0, 1, 2, 3, 4, 5, 6, 7].map(i => [(i % 4) * 0.25, Math.floor(i / 4) * 0.5, 0.25, 0.5]) },   // 4×2 cells of 512²; 6–7 defocused
+};
+const atlasTex = {};
+function loadAtlas(key) {
+  const A = ATLAS[key], img = new Image();
+  img.onload = () => {
+    const tex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + A.unit);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    atlasTex[key] = { tex, w: img.width, h: img.height };
+    console.log('[meadow] atlas loaded: ' + A.file);
+  };
+  img.onerror = () => { atlasTex[key] = null; setTimeout(() => loadAtlas(key), 30000); };   // Codex may still be painting it
+  img.src = A.file + '?t=' + Date.now();
+}
+if (CONFIG.paintedLayers) for (const k in ATLAS) loadAtlas(k);
+
+
+/* ------------------------------ painted mountain layers (optional PNGs in assets/) ------------------------------ */
+// assets/README-assets.md may give each layer's ridge height; otherwise the layer spans from the horizon to a default top.
+// The three PNGs share one 3840×1080 canvas (see assets/README-assets.md): transparent above the ridges, the
+// near hills' ridge 44–76 % from the top. The canvas is scaled to the screen width and placed so the near
+// ridge lands around uv.y ≈ 0.62; its bottom runs behind the meadow plane.
+const LAYERS = { far: 'assets/mountains-far.png', mid: 'assets/mountains-mid.png', near: 'assets/hills-near.png' };
+const texUnits = { far: 0, mid: 1, near: 2 };
+const layerTex = {};
+let paintedRidge = null;                     // Float32Array: per column, ridge row (0 top … 1 bottom) of hills-near.png
+function layerBox() {
+  const aspect = canvas.width / canvas.height, imgA = layerTex.near ? layerTex.near.aspect : 3840 / 1080;
+  const H = aspect / imgA;                   // canvas height in uv when scaled to the screen width
+  return { yb: 0.63 - H * (1 - 0.44), H };
+}
+function loadLayer(key) {
+  const img = new Image();
+  img.onload = () => {
+    const tex = gl.createTexture();
+    const pot = document.createElement('canvas'); pot.width = 2048; pot.height = 1024;        // power of two → mipmaps (WebGL1)
+    pot.getContext('2d').drawImage(img, 0, 0, pot.width, pot.height);
+    gl.activeTexture(gl.TEXTURE0 + texUnits[key]);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, pot);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    layerTex[key] = { tex, aspect: img.width / img.height };
+    if (key === 'near') {                    // read the ridge line so the windmills stand on the painted hill
+      const cw = 480, ch = 135, c2 = document.createElement('canvas'); c2.width = cw; c2.height = ch;
+      const ctx = c2.getContext('2d'); ctx.drawImage(img, 0, 0, cw, ch);
+      const d = ctx.getImageData(0, 0, cw, ch).data;
+      paintedRidge = new Float32Array(cw);
+      for (let x = 0; x < cw; x++) { let y = 0; while (y < ch && d[(y * cw + x) * 4 + 3] < 32) y++; paintedRidge[x] = y / ch; }
+    }
+    console.log('[meadow] painted layer loaded: ' + LAYERS[key]);
+  };
+  img.onerror = () => { layerTex[key] = null; };
+  img.src = LAYERS[key] + '?t=' + Date.now();
+}
+if (CONFIG.paintedLayers) for (const k in LAYERS) loadLayer(k);
+
+/* ------------------------------ geometry: the field ------------------------------ */
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const rng = mulberry32(11);
+const ASPECT_MAX = 2.4;
+// clumps: blades gather around clump centres, each clump with its own height and hue (yellow-green / green / blue-green patches)
+const blades = [];
+{
+  const clumps = [];
+  for (let i = 0; i < 1400; i++) {
+    const u = rng();
+    const z = 1 / ((1 / Z_NEAR) - u * ((1 / Z_NEAR) - (1 / Z_FAR_BLADES)));
+    const xr = z * FOV * ASPECT_MAX * 1.05;
+    const x = (rng() * 2 - 1) * xr;
+    const patch = 0.5 + 0.5 * Math.sin(x * 0.12 + 1.0) * Math.cos(z * 0.21 + 0.4) + (rng() - 0.5) * 0.5;   // slow hue field + jitter
+    clumps.push({ x, z, h: 0.7 + 0.6 * rng(), hue: Math.min(1, Math.max(0, patch)), r: 0.15 + 0.25 * rng() });
+  }
+  for (let i = 0; i < N_BLADES; i++) {
+    const c = clumps[(rng() * clumps.length) | 0];
+    const ang = rng() * 6.283, rr = c.r * Math.sqrt(rng());
+    const z = Math.max(Z_NEAR * 0.95, c.z + Math.sin(ang) * rr * 0.6);
+    blades.push({ x: c.x + Math.cos(ang) * rr, z, h: (0.22 + 0.35 * Math.pow(rng(), 1.3)) * c.h, w: (0.024 + 0.03 * rng()) * (1 + z * 0.06), flex: 0.45 + 0.55 * rng(), hue: c.hue, jit: rng() });
+  }
+}
+// dandelions and a few other flowers, grown INSIDE the painted strips (v8): each head stands on its strip's
+// ground line (JS twin of VS_STRIP's terrain) among the blade tips and sways with that strip's top, so nothing
+// floats between layers. Only the visible width, not the far left (desktop icons). Drawn just behind the strip,
+// so the painted tips overlap the head and hide the stem.
+// v8: five turf layers, each its own painting (assets/turf-N.png + -mask) with a stroke size for its depth;
+// aspect = the texture's width / height, so a tile is h × aspect metres wide (no stretching). dw = dandelion share.
+const STRIP_DEF = [
+  { z: 2.0, h: 0.70, far: 0.0, phase: 5.3, seed: 5.0, file: 'turf-1', aspect: 4.0, dw: 0.26 },
+  { z: 3.0, h: 0.85, far: 0.04, phase: 0.0, seed: 1.0, file: 'turf-2', aspect: 4.0, dw: 0.30 },
+  { z: 5.0, h: 1.05, far: 0.09, phase: 1.3, seed: 2.0, file: 'turf-3', aspect: 4.8, dw: 0.27 },
+  { z: 8.0, h: 1.40, far: 0.08, phase: 2.6, seed: 3.0, file: 'turf-4', aspect: 5.12, dw: 0.17 },
+  { z: 14.0, h: 2.0, far: 0.14, phase: 4.1, seed: 4.0, file: 'turf-5', aspect: 8.0, dw: 0 }];
+const DAND_STRIPS = STRIP_DEF.filter(st => st.dw > 0).map(st => ({ ...st, w: st.dw }));
+// the ground line between two layers (for the tufts scattered in between): lerp of the neighbours' lines
+function groundAt(x, z) {
+  if (z <= STRIP_DEF[0].z) return stripTopAt(STRIP_DEF[0], x, 0);
+  for (let i = 1; i < STRIP_DEF.length; i++) if (z <= STRIP_DEF[i].z) {
+    const a = STRIP_DEF[i - 1], b = STRIP_DEF[i], k = (z - a.z) / (b.z - a.z);
+    return stripTopAt(a, x, 0) * (1 - k) + stripTopAt(b, x, 0) * k;
+  }
+  return stripTopAt(STRIP_DEF[STRIP_DEF.length - 1], x, 0);
+}
+function stripTopAt(st, x, vv) {
+  const terrain = (jsNoise(x * 0.028 + 7.0, st.z * 0.05) - 0.5) * 1.4 + (jsNoise(x * 0.11 + st.seed, 3.0) - 0.5) * 0.6;
+  const hv = 0.80 + 0.45 * jsNoise(x * 0.07 + st.seed * 2.0, 9.0);
+  return terrain * Math.min(1, Math.max(0.35, st.z / 6)) * st.h * 0.9 + vv * st.h * hv;
+}
+const plants = [];
+let dand = 0, dtries = 0;
+while (dand < 32 && dtries++ < 4000) {
+  let pick = rng(), st = DAND_STRIPS[0];
+  for (const c of DAND_STRIPS) { if (pick < c.w) { st = c; break; } pick -= c.w; }
+  const half = 0.5 * st.z * FOV * 1.78;                       // visible half-width at that depth (16:9)
+  const sx = 0.2 + 0.78 * rng();                              // screen x: keep the left 20 % calm
+  const x = (sx - 0.5) * 2 * half;
+  if (rng() > 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(x * 0.9 + 2.0) * Math.cos(st.z * 1.3 + x * 0.21))) continue;   // clumped
+  dand++;
+  const vv = 0.78 + 0.24 * rng(), t = rng();
+  plants.push({ x, z: st.z + 0.02, h: stripTopAt(st, x, vv), H: st.h, vv, phase: st.phase, sz: st.z,
+    type: t < 0.55 ? 0 : t < 0.78 ? 1 : t < 0.92 ? 2 : 3, hash: rng(), r: 0.034 + 0.016 * rng() });
+}
+const strip = [...blades].sort((a, b) => b.z - a.z);   // v6: no stems in the strip (the heads carry a short stem tip)
+const SEGS = 5, VERTS_PER = SEGS * 2 + 2;
+const stripBuf = new Float32Array(strip.length * VERTS_PER * 10);
+{
+  let o = 0;
+  const put = (b, t, side) => { stripBuf.set([b.x, b.z, b.h, b.w, t, side, b.flex, b.hue, b.jit, 0], o); o += 10; };
+  for (const b of strip) {
+    put(b, 0, -1);
+    for (let s = 0; s < SEGS; s++) { const t = s / (SEGS - 1); put(b, t, -1); put(b, t, 1); }
+    put(b, 1, 1);
+  }
+}
+const headBuf = new Float32Array(plants.length * 12);
+plants.forEach((q, i) => headBuf.set([q.x, q.z, q.h, q.H, q.vv, q.phase, 0, q.sz, q.type, 0, q.hash, q.r], i * 12));   // aP: x z y H · aQ: vv phase – stripZ
+
+// the tree's canopy: ~320 leaf-cluster cards in 7 sub-clusters (tree-local metres, base at the trunk foot);
+// each card's normal points away from ITS sub-cluster's centre (spherized per cluster, not one big ball)
+const SUBS = [[0, 5.3, 0, 2.0], [-1.9, 4.6, 0.4, 1.45], [1.9, 4.8, -0.3, 1.5], [0.6, 6.6, 0.2, 1.3], [-1.0, 6.3, -0.4, 1.2], [-2.7, 5.4, 0, 1.0], [2.8, 5.7, 0.3, 1.05]];
+const N_LEAF = 300, N_TUFT = 150, N_MID = 150;
+const cards = [];
+{
+  const wsum = SUBS.reduce((s, c) => s + c[3] ** 3, 0);
+  for (let i = 0; i < N_LEAF; i++) {
+    let r = rng() * wsum, k = 0; while (k < SUBS.length - 1 && r >= SUBS[k][3] ** 3) { r -= SUBS[k][3] ** 3; k++; }
+    const [cx, cy, cz, cr] = SUBS[k];
+    const th = rng() * 6.283, ph = Math.acos(2 * rng() - 1), rad = cr * Math.cbrt(rng()) * 0.95;
+    const dx = Math.sin(ph) * Math.cos(th), dy = Math.cos(ph), dz = Math.sin(ph) * Math.sin(th);
+    const px = cx + dx * rad, py = cy + dy * rad, pz = cz + dz * rad;
+    const nx = px - cx, ny = py - cy, nz = pz - cz, nl = Math.hypot(nx, ny, nz) || 1;
+    const gx = px, gy = py - 5.3, gz = pz, gl2 = Math.hypot(gx, gy, gz) || 1;   // a little of the whole-canopy normal
+    const mx = nx / nl * 0.75 + gx / gl2 * 0.25, my = ny / nl * 0.75 + gy / gl2 * 0.25, mz = nz / nl * 0.75 + gz / gl2 * 0.25, ml = Math.hypot(mx, my, mz);
+    cards.push({ x: px, y: py, z: pz, size: 1.5 + 1.0 * rng(), cell: (rng() * 6) | 0, kind: 0, n: [mx / ml, my / ml, mz / ml], phase: k * 1.7 + rng() * 0.6 });
+  }
+  // foreground tufts: 1.25–3 m, clumped (noise-driven acceptance), 8 variants, h-flip / rotation / scale / hue jitter,
+  // clump-shared normal: cards on the right of their clump face the sun a little more
+  let placed = 0, tries = 0;
+  while (placed < N_TUFT && tries++ < 4000) {
+    const u = rng();
+    const z = 1 / ((1 / 1.25) - u * ((1 / 1.25) - (1 / 3.0)));
+    const xr = 0.5 * z * FOV * 1.78 * 1.12;                                         // v8: the visible width (16:9) and a little margin
+    let x = (rng() * 2 - 1) * xr;
+    if (x < -xr * 0.6 && rng() < 0.6) x += xr * 0.7;    // the left edge stays calmer
+    const dens = 0.5 + 0.5 * Math.sin(x * 1.7 + 0.4) * Math.cos(z * 2.3 + 1.1);
+    if (rng() > dens * 0.8 + 0.2) continue;
+    const cx = Math.round(x / 0.9) * 0.9;                                           // clump centre this card belongs to
+    cards.push({ x, y: groundAt(x, z), z, size: 0.55 + 0.35 * rng(), cell: (rng() * 8) | 0, kind: 1, n: [Math.max(-1, Math.min(1, (x - cx) * 1.2)), 1, 0], phase: rng() * 6.283,
+      flip: rng() < 0.5 ? -1 : 1, rot: (rng() - 0.5) * 0.28, scale: 0.85 + 0.3 * rng(), jit: rng() * 2 - 1 });
+    placed++;
+  }
+  // v8: mid-distance tussocks (assets/mid-tufts.png) scattered BETWEEN the turf layers so no layer's silhouette runs
+  // unbroken; sharp cells 0–5 around 4–8 m, the two softly defocused cells 6–7 nearest and farthest
+  placed = 0; tries = 0;
+  while (placed < N_MID && tries++ < 6000) {
+    const u = rng();
+    const z = 2.4 + 8.6 * u * u;
+    const xr = 0.5 * z * FOV * 1.78 * 1.08;
+    const x = (rng() * 2 - 1) * xr;
+    if (x < -xr * 0.6 && rng() < 0.65) continue;
+    const dens = 0.5 + 0.5 * Math.sin(x * 0.8 + z * 0.6) * Math.cos(z * 1.1 - x * 0.3);
+    if (rng() > dens * 0.85 + 0.15) continue;
+    const hz = STRIP_DEF[0].h + (z - 2) * 0.09;                                        // layer height at that depth
+    const soft = z < 3.6 || z > 9.0;
+    cards.push({ x, y: groundAt(x, z) + hz * 0.15, z, size: hz * (0.45 + 0.3 * rng()), cell: soft ? 6 + ((rng() * 2) | 0) : (rng() * 6) | 0, kind: 2,
+      n: [rng() - 0.3, 1, 0], phase: rng() * 6.283, flip: rng() < 0.5 ? -1 : 1, rot: (rng() - 0.5) * 0.12, scale: 0.85 + 0.3 * rng(), jit: rng() * 2 - 1 });
+    placed++;
+  }
+}
+cards.sort((a, b) => (a.kind ? a.z : TREE.z + a.z) - (b.kind ? b.z : TREE.z + b.z));   // near → far: opaque alpha-tested cards, early-z
+const cardBuf = new Float32Array(cards.length * 4 * 16);
+const cardIdx = new Uint16Array(cards.length * 6);
+cards.forEach((c, i) => {
+  [[0, 0], [1, 0], [1, 1], [0, 1]].forEach(([u, v], k) => cardBuf.set([c.x, c.y, c.z, c.size, u, v, c.cell, c.kind, c.n[0], c.n[1], c.n[2], c.phase, c.flip || 1, c.rot || 0, c.scale || 1, c.jit || 0], (i * 4 + k) * 16));
+  cardIdx.set([i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3], i * 6);
+});
+const bufCard = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufCard); gl.bufferData(gl.ARRAY_BUFFER, cardBuf, gl.STATIC_DRAW);
+const bufCardIdx = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufCardIdx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, cardIdx, gl.STATIC_DRAW);
+const leafCellArr = new Float32Array(24), tuftCellArr = new Float32Array(32), cloudCellArr = new Float32Array(32), midCellArr = new Float32Array(32);
+// painted grass strips: depth (m), height (m), tile width (m), aerial-perspective mix, sway phase; textures retried while missing
+// five layers: the nearest reuses strip 1 (flipped, offset, darker root) right under the tufts so there is no bare band
+const STRIPS = STRIP_DEF.map((d, i) => ({ ...d, i, tex: null, mask: null, tile: d.h * d.aspect }));
+function loadStripTex(st, which) {
+  const img = new Image();
+  img.onload = () => {
+    const tex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + 7);                                                // upload only; bound per draw
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    // WebGL1 can't REPEAT a non-power-of-two texture (it samples black): resample e.g. 3072×640 → 4096×1024
+    const p2 = n => 2 ** Math.ceil(Math.log2(n));
+    let src = img;
+    if (p2(img.width) !== img.width || p2(img.height) !== img.height) {
+      src = document.createElement('canvas'); src.width = p2(img.width); src.height = p2(img.height);
+      const cx = src.getContext('2d'); cx.imageSmoothingQuality = 'high'; cx.drawImage(img, 0, 0, src.width, src.height);
+    }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);              // no mips: fixed camera, known size; no alpha bleeding
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    st[which] = tex;
+    console.log('[meadow] strip loaded: ' + img.src.split('?')[0].split('/').pop());
+  };
+  img.onerror = () => setTimeout(() => loadStripTex(st, which), 30000);
+  img.src = 'assets/' + st.file + (which === 'mask' ? '-mask' : '') + '.png?t=' + Date.now();
+}
+if (CONFIG.paintedLayers) for (const st of STRIPS) { loadStripTex(st, 'tex'); loadStripTex(st, 'mask'); }
+// strip geometry: a 48 × 4 grid across the visible width at that depth (bent per vertex by the wind)
+const stripGeo = STRIPS.map(st => {
+  const lo = st.i === 0 ? -2.6 : -0.4;   // the bottom hangs below the ground line, tucked behind the nearer layer; the nearest reaches below the screen
+  const xr = st.z * FOV * ASPECT_MAX * 1.1, NX = 96, NY = st.i === 0 ? 8 : 4, v = [];
+  const vj = j => lo + (1 - lo) * j / NY;
+  for (let j = 0; j < NY; j++) for (let i = 0; i <= NX; i++) { const x = -xr + 2 * xr * i / NX; v.push(x, vj(j), 0, x, vj(j + 1), 0); }
+  const idx = [];
+  for (let j = 0; j < NY; j++) { const base = j * (NX + 1) * 2; idx.push(base); for (let i = 0; i <= NX; i++) idx.push(base + i * 2, base + i * 2 + 1); idx.push(base + NX * 2 + 1); }
+  const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW);
+  const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+  return { vb, ib, n: idx.length };
+});
+// drifting cloud sprites: fixed set, wrapping around the screen; more and greyer with cloudCover
+const N_CLOUD = 10;
+const cloudSprites = [];
+for (let i = 0; i < N_CLOUD; i++) cloudSprites.push({ x: rng() * 1.6 - 0.3, y: HORIZON + 0.08 + 0.44 * Math.pow(rng(), 0.7), w: 0.20 + 0.28 * rng(), cell: i < 5 ? i % 3 : i < 10 ? 3 + (i % 2) : 5, speed: 0.6 + 0.6 * rng(), order: rng() });
+const cloudA = new Float32Array(N_CLOUD * 4), cloudB = new Float32Array(N_CLOUD * 4), shadowArr = new Float32Array(16);
+function packClouds(sk) {
+  const cover = current.cloudCover;
+  cloudSprites.forEach((c, i) => {
+    const vis = smooth(Math.min(1, Math.max(0, (cover * 1.25 - c.order) * 4 + 0.5))) * (c.cell > 2 || cover > 0.2 ? 1 : 0);   // the sprites appear in a fixed order as the cover grows
+    const scale = 0.55 + 0.45 * (1 - (c.y - HORIZON) / 0.52);                                 // flatter / smaller toward the horizon
+    cloudA.set([c.x, c.y, c.w * scale * vis, c.cell], i * 4);
+    cloudB.set([vis * (1 - 0.15 * sk.night), 1 - 0.7 * Math.max(0, cover - 0.5) * 2, 0, 0], i * 4);
+    c.vis = vis; c.scale = scale;
+  });
+  // the big cumulus (cells 0–2) throw shadows: the cloud's screen position → a ground spot at a depth given by its
+  // height in the sky (low = far), pushed to the lower-left of the cloud (sun upper right); size ∝ the sprite
+  shadowArr.fill(0);
+  const aspect = canvas.width / canvas.height;
+  let k = 0;
+  for (const c of cloudSprites) {
+    if (c.cell > 2 || c.vis < 0.05 || k >= 4) continue;
+    const t = Math.min(1, Math.max(0, (c.y - HORIZON - 0.08) / 0.44));
+    const z = 5 + 30 * (1 - t) * (1 - t);
+    const rx = c.w * c.scale * aspect * FOV * z * 0.7;
+    const x = (c.x - 0.5) * aspect * FOV * z - rx * 0.6;
+    shadowArr.set([x, z - rx * 0.3, rx, c.vis * (1 - 0.5 * sk.night)], k * 4); k++;
+  }
+}
+ATLAS.leaf.cells.forEach((c, i) => leafCellArr.set(c, i * 4)); ATLAS.tuft.cells.forEach((c, i) => tuftCellArr.set(c, i * 4)); ATLAS.cloud.cells.forEach((c, i) => cloudCellArr.set(c, i * 4)); ATLAS.mid.cells.forEach((c, i) => midCellArr.set(c, i * 4));
+
+const bufStrip = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufStrip); gl.bufferData(gl.ARRAY_BUFFER, stripBuf, gl.STATIC_DRAW);
+const bufHead = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufHead); gl.bufferData(gl.ARRAY_BUFFER, headBuf, gl.STATIC_DRAW);
+const bufTri = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufTri); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const MAX_PART = 1200;
+const partBuf = new Float32Array(MAX_PART * 8);
+const bufPart = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufPart); gl.bufferData(gl.ARRAY_BUFFER, partBuf.byteLength, gl.DYNAMIC_DRAW);
+
+function resize() {
+  const w = Math.max(1, Math.round(innerWidth * RES_SCALE)), h = Math.max(1, Math.round(innerHeight * RES_SCALE));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); }
+}
+addEventListener('resize', resize);
+resize();
+
+/* ------------------------------ wind: gusts scheduled in JS, mirrored in the shaders ------------------------------ */
+let gusts = [];
+let nextGustIn = 2.0;
+const gustArr = new Float32Array(16);
+const X_MIN = -Z_FAR_BLADES * FOV * ASPECT_MAX, X_MAX = -X_MIN;
+let shadowDrift = 0;                         // cloud shadows travel with the wind (m)
+function spawnGust(strength, burst, front = X_MIN - 12) {
+  gusts.push({ front, width: 3 + 4 * Math.random(), strength: strength * 1.4, slant: 0.15 + 0.35 * Math.random(), speed: 8 + 8 * Math.random() * (0.5 + strength), burst, fired: false });
+  if (gusts.length > 4) gusts.shift();
+}
+function windAt(x, z, t) {
+  let w = current.sway * (Math.sin(t * 0.9 + x * 0.35 + z * 0.2) * 0.6 + Math.sin(t * 1.7 + x * 0.9 - z * 0.4) * 0.3 + Math.sin(t * 2.9 + x * 2.1) * 0.15);
+  for (const g of gusts) { const d = (x + z * g.slant - g.front) / Math.max(g.width, 0.1); w += g.strength * Math.exp(-d * d) * (1 + 0.35 * Math.sin(t * 7 + x * 3 + z * 1.3)); }
+  return w;
+}
+function updateGusts(dt) {
+  nextGustIn -= dt;
+  if (nextGustIn <= 0) {
+    if (current.gustRate > 0.005 && current.gustStrength > 0.02) spawnGust(current.gustStrength * (0.6 + 0.4 * Math.random()), Math.random() < current.burstChance);
+    nextGustIn = Math.max(2.0, Math.min((1 / Math.max(current.gustRate, 0.01)) * (0.55 + 0.9 * Math.random()), 40));
+  }
+  for (const g of gusts) g.front += g.speed * dt;
+  gusts = gusts.filter(g => g.front < X_MAX + g.width * 3);
+  gustArr.fill(0);
+  gusts.forEach((g, i) => gustArr.set([g.front, g.width, g.strength, g.slant], i * 4));
+  shadowDrift += dt * (0.6 + 3.0 * current.sway + 2.0 * current.gustStrength);
+}
+
+/* ------------------------------ particles: seeds, leaves, fireflies (JS) ------------------------------ */
+const parts = [];
+let puff = 1;
+const seedHeads = plants.filter(q => q.type === 0);
+const treeWorld = () => { const aspect = canvas.width / canvas.height; return { x: (TREE.x - 0.5) * aspect * FOV * TREE.z, z: TREE.z }; };
+function spawnSeed(q, burst) {
+  if (parts.length >= MAX_PART) return;
+  const wind = windAt(q.x, q.z, sceneTime);
+  parts.push({ x: q.x + (Math.random() - 0.5) * 0.05, y: q.h * 0.9 + Math.random() * 0.1, z: q.z + (Math.random() - 0.5) * 0.1,
+    vx: (0.3 + Math.random() * 0.6) * (burst ? 2.5 : 1) + wind * 1.5, vy: 0.15 + Math.random() * (burst ? 0.8 : 0.3), vz: (Math.random() - 0.5) * 0.3,
+    ang: (Math.random() - 0.5) * 0.6, spin: (Math.random() - 0.5) * 1.2, size: 0.038 + Math.random() * 0.024, type: 0, alpha: 0.9, tint: 0,
+    age: 0, life: 14 + Math.random() * 14, wob: Math.random() * 6.28 });
+}
+function spawnLeaf() {                        // leaves fall from the tree's canopy
+  if (parts.length >= MAX_PART) return;
+  const T = treeWorld();
+  parts.push({ x: T.x + (Math.random() - 0.5) * 5.0, y: 3.5 + Math.random() * 3.5, z: T.z + (Math.random() - 0.5) * 3, vx: 0.5 + Math.random(), vy: -0.3, vz: (Math.random() - 0.5) * 0.4,
+    ang: Math.random() * 6.28, spin: (Math.random() - 0.5) * 6, size: 0.09 + Math.random() * 0.05, type: 1, alpha: 1, tint: Math.random(),
+    age: 0, life: 20, wob: Math.random() * 6.28, landed: 0 });
+}
+function spawnFirefly() {
+  if (parts.length >= MAX_PART) return;
+  const z = 2.6 + Math.random() * 10, xr = z * FOV * (canvas.width / canvas.height);
+  parts.push({ x: (Math.random() * 2 - 1) * xr, y: 0.3 + Math.random() * 1.0, z, vx: 0, vy: 0, vz: 0, ang: 0, spin: 0, size: 0.09, type: 2, alpha: 0, tint: 0,
+    age: 0, life: 10 + Math.random() * 12, wob: Math.random() * 6.28 });
+}
+let seedAcc = 0, leafAcc = 0, fireAcc = 0;
+function updateParticles(dt, sk) {
+  seedAcc += current.seedRate * dt;
+  while (seedAcc >= 1) { seedAcc -= 1; if (seedHeads.length) spawnSeed(seedHeads[(Math.random() * seedHeads.length) | 0], false); }
+  for (const g of gusts) {
+    if (g.burst && !g.fired && g.front > -8) {
+      g.fired = true;
+      const n = 10 + ((Math.random() * 14) | 0);
+      for (let k = 0; k < n; k++) { const q = seedHeads[(Math.random() * seedHeads.length) | 0]; const m = 8 + ((Math.random() * 14) | 0); for (let j = 0; j < m; j++) spawnSeed(q, true); }
+      puff = Math.max(0.15, puff - 0.5);
+    }
+  }
+  puff = Math.min(1, puff + dt / 70);
+  leafAcc += current.leafRate * 1.2 * dt;
+  while (leafAcc >= 1) { leafAcc -= 1; spawnLeaf(); }
+  fireAcc += sk.night * (1 - current.leafRate) * 2.0 * dt;
+  while (fireAcc >= 1) { fireAcc -= 1; if (parts.filter(p => p.type === 2).length < 40) spawnFirefly(); }
+  const t = sceneTime;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.age += dt;
+    if (p.type === 0) {
+      const w = windAt(p.x, p.z, t);
+      const gust = Math.max(0, w - current.sway * 0.5);
+      p.vx += ((1.0 + 3.0 * w) - p.vx) * Math.min(1, dt * 1.5);
+      p.vy += ((-0.10 + 0.35 * Math.sin(t * 1.3 + p.wob) + 0.9 * gust) - p.vy) * Math.min(1, dt * 1.2);
+      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+      p.ang += (Math.sin(t * 2.1 + p.wob) * 0.3 - p.ang) * dt * 2 + p.vx * 0.02;
+      p.alpha = Math.min(1, p.age * 3) * (1 - smooth(Math.max(0, (p.age - p.life + 3) / 3)));
+      if (p.y < 0.05 || p.age > p.life || p.x > X_MAX) parts.splice(i, 1);
+    } else if (p.type === 1) {
+      const w = windAt(p.x, p.z, t);
+      if (!p.landed) {
+        p.vx += ((0.8 + 2.5 * w) - p.vx) * Math.min(1, dt * 2);
+        p.vy += ((-0.45 + 0.35 * Math.sin(t * 3.0 + p.wob) + 0.6 * Math.max(0, w - 0.3)) - p.vy) * Math.min(1, dt * 2);
+        p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+        p.ang += p.spin * dt * (0.6 + Math.abs(w));
+        if (p.y < 0.12) { p.landed = 1; p.y = 0.12; p.age = 0; }
+      } else {
+        p.x += Math.max(0, w - 0.5) * 1.2 * dt;
+        p.alpha = 1 - smooth(Math.min(1, p.age / 6));
+        if (p.age > 6) parts.splice(i, 1);
+      }
+      if (p.x > X_MAX || p.age > 40) parts.splice(i, 1);
+    } else {
+      p.x += Math.sin(t * 0.7 + p.wob) * 0.25 * dt; p.y += Math.cos(t * 0.9 + p.wob * 1.7) * 0.15 * dt;
+      p.alpha = Math.pow(Math.max(0, Math.sin(t * 1.6 + p.wob)), 6) * sk.night * (1 - current.leafRate);
+      if (p.age > p.life) parts.splice(i, 1);
+    }
+  }
+  parts.forEach((p, i) => partBuf.set([p.x, p.y, p.z, p.ang, p.size, p.type, p.alpha, p.tint], i * 8));
+}
+
+/* ------------------------------ windmills: one per Claude session (user: 多session，遠處風車) ------------------------------ */
+// Slot i of state.json "sessions" always gets home spot i on the near ridge. Each mill has its own look per
+// session state (sail speed, lamp, blink) eased from the current values; the sail angle is integrated so a
+// speed change never jumps. Zero sessions → one ambient mill in slot 0 following the sky state.
+const MILL_HOMES = [[0.36, 1.0], [0.84, 0.85], [0.21, 0.7], [0.50, 0.9], [0.93, 1.1]];   // [screen x, size]; off the star column (58 %), the tree (70 %) and the left edge
+const MILL = { fade: 2.5, baseScale: 0.075 };
+const MPARAMS = { speed: [0, 3], lamp: [0, 1], blink: [0, 1] };
+const MILL_STATES = {
+  clear:    { speed: 0.18, lamp: 0.0, blink: 0 },
+  overcast: { speed: 0.70, lamp: 0.3, blink: 0 },
+  storm:    { speed: 2.60, lamp: 0.8, blink: 0 },
+  clearing: { speed: 0.00, lamp: 0.1, blink: 0 },
+  waiting:  { speed: 0.00, lamp: 0.0, blink: 1 },
+};
+const mills = MILL_HOMES.map((h, i) => ({ slot: i, active: false, alpha: 0, state: null, cur: { ...MILL_STATES.clear }, from: null, to: null, tStart: 0, tDur: 0, angle: i * 0.7 }));
+function stepMill(m, t) {
+  if (!m.from) return;
+  const e = smooth(m.tDur > 0 ? Math.min(1, (t - m.tStart) / m.tDur) : 1);
+  for (const p in MPARAMS) m.cur[p] = m.from[p] + (m.to[p] - m.from[p]) * e;
+}
+function applyMillState(m, name, t) {
+  stepMill(m, t);
+  m.from = { ...m.cur }; m.to = { ...MILL_STATES[name] };
+  let dist = 0;
+  for (const p in MPARAMS) { const [lo, hi] = MPARAMS[p]; dist = Math.max(dist, Math.abs(m.to[p] - m.from[p]) / (hi - lo)); }
+  m.tStart = t; m.tDur = CONFIG.fullTransition * dist; m.state = name;
+}
+function effectiveSlots() {
+  const s = sessionsOverride || sessionsFile;
+  if (s && s.some(x => x)) return s;
+  return [stateName, null, null, null, null];
+}
+// JS twin of the shader's ridgeNear() (same noise) so the mills stand exactly on the ridge
+function jsHash(x, y) { let px = (x * 123.34) % 1, py = (y * 456.21) % 1; px = px < 0 ? px + 1 : px; py = py < 0 ? py + 1 : py; const d = px * (px + 45.32) + py * (py + 45.32); px += d; py += d; const v = (px * py) % 1; return v < 0 ? v + 1 : v; }
+function jsNoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = v => ((v % 289) + 289) % 289;
+  const ax = m(ix), ay = m(iy), bx = m(ix + 1), by = m(iy + 1);
+  const l = (a, b, k) => a + (b - a) * k;
+  return l(l(jsHash(ax, ay), jsHash(bx, ay), ux), l(jsHash(ax, by), jsHash(bx, by), ux), uy);
+}
+function ridgeNearJS(x, aspect) {
+  const k = Math.min(1, Math.max(0, 1 - x / aspect));
+  const f = jsNoise(x * 1.1 + 2.0, 5.0) * 0.6 + jsNoise((x * 1.1 + 2.0) * 2.1 + 5.3, 5.0 * 2.1 + 5.3) * 0.4;
+  return HORIZON + 0.012 + 0.07 * k * k + 0.025 * f;
+}
+const millA = new Float32Array(20), millB = new Float32Array(20);
+function updateMills(dt, t, sk) {
+  const eff = effectiveSlots();
+  const aspect = canvas.width / canvas.height;
+  const lampBase = Math.min(1, sk.night + 0.5 * sk.twilight + 0.8 * Math.max(0, 0.5 - current.skyBrightness));
+  const pulse = Math.pow(0.5 + 0.5 * Math.sin(sceneTime * 2.2 - 1.57), 2);
+  millA.fill(0); millB.fill(0);
+  for (const m of mills) {
+    const want = MILL_STATES[eff[m.slot]] ? eff[m.slot] : null;
+    if (want && !m.active) { m.active = true; if (m.alpha <= 0) { m.cur = { ...MILL_STATES[want] }; m.from = null; m.state = want; } }
+    if (!want && m.active) m.active = false;
+    if (want && want !== m.state) applyMillState(m, want, t);
+    m.alpha = Math.min(1, Math.max(0, m.alpha + (m.active ? 1 : -1) * dt / MILL.fade));
+    if (m.alpha <= 0) continue;
+    stepMill(m, t);
+    m.angle += m.cur.speed * dt;
+    if (m.angle > 1e4) m.angle -= 1e4;
+    let L = Math.max(lampBase, m.cur.lamp);
+    const blink = Math.max(L, 0.9) * (0.1 + 0.9 * pulse);
+    L += (blink - L) * m.cur.blink;
+    const [sx, size] = MILL_HOMES[m.slot];
+    let baseY = ridgeNearJS(sx * aspect, aspect) - 0.006 * size;
+    if (paintedRidge) {                      // on the painted hill: a little below the alpha ridge (the tree clumps), down the slope
+      const { yb, H } = layerBox();
+      let r = 0; const c0 = Math.floor(sx * paintedRidge.length);
+      for (let k = -6; k <= 6; k++) r = Math.max(r, paintedRidge[Math.min(paintedRidge.length - 1, Math.max(0, c0 + k))]);
+      baseY = yb + H * (1 - r) - 0.012 * size;
+    }
+    millA.set([sx, baseY, MILL.baseScale * size, smooth(m.alpha)], m.slot * 4);
+    millB.set([m.angle, L, 0, 0], m.slot * 4);
+  }
+}
+
+/* ------------------------------ palette (CPU, once per frame): warm light, blue-violet shadow ------------------------------ */
+const lerp = (a, b, k) => a + (b - a) * k;
+const mix3 = (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
+const scale3 = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+function palette(sk) {
+  const b = current.skyBrightness, night = sk.night, tw = sk.twilight, warm = current.warmth;
+  const nd = k => mix3(k, [0.22, 0.25, 0.31], night);                                   // → deep blue at night
+  const day = (clear, grey) => mix3(grey, clear, b);
+  let zenith = day([0.33, 0.55, 0.86], [0.42, 0.47, 0.56]);
+  let horizonC = day([0.86, 0.90, 0.92], [0.70, 0.72, 0.74]);
+  zenith = mix3(zenith, [0.40, 0.32, 0.55], tw * 0.6);
+  horizonC = mix3(horizonC, [1.0, 0.62, 0.40], tw * 0.8);
+  zenith = mix3(zenith, [0.07, 0.10, 0.19], night);
+  horizonC = mix3(horizonC, [0.18, 0.21, 0.32], night);
+  let cloudLit = day([1.0, 0.98, 0.94], [0.78, 0.78, 0.80]);
+  let cloudShade = day([0.62, 0.66, 0.82], [0.50, 0.52, 0.60]);
+  cloudLit = mix3(cloudLit, [1.0, 0.72, 0.52], tw * 0.7); cloudShade = mix3(cloudShade, [0.55, 0.38, 0.52], tw * 0.6);
+  cloudLit = mix3(cloudLit, [0.34, 0.38, 0.48], night); cloudShade = mix3(cloudShade, [0.16, 0.18, 0.26], night);   // moonlit grey-blue
+  const sunCol = scale3(mix3([1.0, 0.95, 0.82], [1.0, 0.58, 0.32], tw), (1 - night) * (0.5 + 0.5 * b));
+  let ground = day([1.0, 0.98, 0.92], [0.78, 0.80, 0.86]);
+  ground = mix3(ground, [1.08, 0.96, 0.74], warm * 0.6);
+  ground = mix3(ground, [1.05, 0.72, 0.52], tw * 0.6);
+  ground = mix3(ground, [0.46, 0.49, 0.56], night);                                     // moon: a blue-white key light at ~45 % of day
+  const shadowTint = mix3([0.58, 0.62, 0.86], [0.76, 0.78, 0.86], night);                 // blue-violet shadows
+  const lightFloor = lerp(0.25, 0.55, night);                                              // shadows never go black at night
+  const lightDir = [0.52, 0.62, 0.59];                                                     // upper right, in front (unit length)
+  const rimCol = mix3(scale3(mix3([1.0, 0.92, 0.62], [1.0, 0.62, 0.38], tw), 0.6 * (0.5 + 0.5 * b)), [0.62, 0.70, 0.90], night);   // warm by day, cool moonlight at night
+  const fieldA = nd(day([0.68, 0.74, 0.24], [0.50, 0.54, 0.26]));                            // yellow-green
+  const fieldB = nd(day([0.48, 0.64, 0.22], [0.38, 0.48, 0.26]));                            // green
+  const fieldC = nd(day([0.36, 0.54, 0.28], [0.32, 0.42, 0.30]));                            // cooler green
+  const fieldD = nd(day([0.56, 0.56, 0.22], [0.42, 0.42, 0.24]));                            // olive
+  const treeCore = nd(day([0.11, 0.25, 0.11], [0.14, 0.22, 0.16]));
+  const treeMid = nd(day([0.33, 0.52, 0.19], [0.30, 0.40, 0.22]));
+  const mtnFar = nd(day(mix3([0.62, 0.66, 0.84], [0.80, 0.62, 0.68], tw * 0.5), [0.58, 0.60, 0.68]));
+  const mtnMid = nd(day(mix3([0.42, 0.56, 0.60], [0.55, 0.45, 0.52], tw * 0.5), [0.44, 0.48, 0.54]));
+  const hill = nd(day(mix3([0.44, 0.62, 0.30], [0.60, 0.50, 0.30], tw * 0.5), [0.40, 0.48, 0.34]));
+  const meadowA = nd(day(mix3([0.56, 0.68, 0.24], [0.66, 0.56, 0.26], warm * 0.5), [0.44, 0.52, 0.28]));   // yellow-green
+  const meadowB = nd(day([0.30, 0.52, 0.34], [0.32, 0.42, 0.34]));                                           // blue-green
+  const treeLit = nd(day(mix3([0.74, 0.80, 0.30], [0.84, 0.70, 0.28], warm * 0.5), [0.48, 0.56, 0.30]));
+  const treeShade = nd(day([0.12, 0.27, 0.20], [0.16, 0.24, 0.22]));
+  const haze = mix3(horizonC, [0.6, 0.66, 0.6], 0.25 * (1 - night));
+  return { zenith, horizonC, cloudLit, cloudShade, sunCol, ground, shadowTint, mtnFar, mtnMid, hill, meadowA, meadowB, treeLit, treeShade, haze, lightFloor, lightDir, rimCol, fieldA, fieldB, fieldC, fieldD, treeCore, treeMid };
+}
+
+/* ------------------------------ loop ------------------------------ */
+let raf = 0, nextFrame = 0, lastT = now(), sceneTime = 0;
+let drift = [0, 0];
+const FRAME_MS = 1000 / FPS;
+let fpsCount = 0, fpsT = now(), fps = 0;
+
+function advance(t, dt) {
+  step(t);
+  if (override) Object.assign(current, override);
+  sceneTime += dt;
+  const w = 0.003 + 0.010 * current.sway;
+  drift[0] += w * dt; drift[1] -= w * dt * 0.3;
+  for (const c of cloudSprites) { c.x += w * dt * 1.6 * c.speed; if (c.x > 1.35) c.x -= 1.7; }   // sprites drift with the wind and wrap
+  const sk = sky();
+  updateGusts(dt);
+  updateParticles(dt, sk);
+  updateMills(dt, t, sk);
+  return sk;
+}
+
+function render(sk) {
+  const P = palette(sk);
+  const aspect = canvas.width / canvas.height;
+  const sunX = (sk.sunX - 0.5) * 2;
+  const T = treeWorld();
+  const treeWind = windAt(T.x, T.z, sceneTime);
+  const treeSway = treeWind * 0.006;                                            // the trunk barely leans
+  const cloudShadow = (0.35 + 0.65 * current.cloudCover) * (1 - 0.6 * sk.night);
+  const backlight = sk.sunUp * (1 - sk.night) * (0.35 + 0.65 * current.skyBrightness) * (1 + 0.5 * current.warmth);
+  packClouds(sk);
+  const setWind = pr => { gl.uniform1f(pr.u.uTime, sceneTime); gl.uniform1f(pr.u.uSway, current.sway); gl.uniform4fv(pr.u.uGust, gustArr); gl.uniform1f(pr.u.uShadowDrift, shadowDrift); gl.uniform1f(pr.u.uCloudShadow, cloudShadow); gl.uniform4fv(pr.u.uShadow, shadowArr); };
+
+  gl.disable(gl.BLEND);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LESS);
+  gl.clearDepth(1.0);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+  // 2) blades + stems: one strip, depth-tested, blended only for the soft near edges
+  gl.depthMask(true);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(P_BLADE.p);
+  setWind(P_BLADE);
+  gl.uniform2f(P_BLADE.u.uRes, canvas.width, canvas.height);
+  gl.uniform1f(P_BLADE.u.uAspect, aspect);
+  gl.uniform3fv(P_BLADE.u.uGroundLight, P.ground); gl.uniform3fv(P_BLADE.u.uHaze, P.haze); gl.uniform3fv(P_BLADE.u.uShadowTint, P.shadowTint); gl.uniform3fv(P_BLADE.u.uSunCol, P.sunCol);
+  gl.uniform1f(P_BLADE.u.uSunX, sunX); gl.uniform1f(P_BLADE.u.uNight, sk.night); gl.uniform1f(P_BLADE.u.uWarm, current.warmth); gl.uniform1f(P_BLADE.u.uBacklight, backlight);
+  gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1); gl.enableVertexAttribArray(2);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufStrip);
+  gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 40, 0);
+  gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 40, 16);
+  gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 40, 32);
+  gl.uniform3fv(P_BLADE.u.uRimCol, P.rimCol); gl.uniform3fv(P_BLADE.u.uLightDir, P.lightDir); gl.uniform1f(P_BLADE.u.uLightFloor, P.lightFloor);
+  gl.uniform3fv(P_BLADE.u.uFieldA, P.fieldA); gl.uniform3fv(P_BLADE.u.uFieldB, P.fieldB); gl.uniform3fv(P_BLADE.u.uFieldC, P.fieldC); gl.uniform3fv(P_BLADE.u.uFieldD, P.fieldD);
+  if (!CONFIG.skip.includes('blades') && strip.length) gl.drawArrays(gl.TRIANGLE_STRIP, 0, strip.length * VERTS_PER);
+  // 3a) painted grass strips, near → far, alpha-tested and depth-written (early-z kills the overlap)
+  gl.disable(gl.BLEND);
+  gl.depthMask(true);
+  gl.enable(gl.DEPTH_TEST);
+  gl.useProgram(P_STRIP.p);
+  setWind(P_STRIP);
+  gl.uniform2f(P_STRIP.u.uRes, canvas.width, canvas.height);
+  gl.uniform1f(P_STRIP.u.uAspect, aspect);
+  gl.uniform1f(P_STRIP.u.uBacklight, backlight); gl.uniform1f(P_STRIP.u.uWarm, current.warmth); gl.uniform1f(P_STRIP.u.uNight, sk.night);
+  gl.uniform3fv(P_STRIP.u.uLightDir, P.lightDir); gl.uniform1f(P_STRIP.u.uLightFloor, P.lightFloor);
+  for (const [n, v] of [['uGroundLight', P.ground], ['uHaze', P.haze], ['uShadowTint', P.shadowTint], ['uSunCol', P.sunCol], ['uRimCol', P.rimCol], ['uFieldA', P.fieldA], ['uFieldB', P.fieldB], ['uFieldC', P.fieldC], ['uFieldD', P.fieldD]]) gl.uniform3fv(P_STRIP.u[n], v);
+  gl.enableVertexAttribArray(0); gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2); gl.disableVertexAttribArray(3);
+  const order = STRIPS.map((st, i) => i).sort((a, b) => STRIPS[a].z - STRIPS[b].z);
+  for (const i of order) {
+    const st = STRIPS[i];
+    if (!st.tex || !st.mask || CONFIG.skip.includes('strips')) continue;
+    gl.activeTexture(gl.TEXTURE0 + 7); gl.bindTexture(gl.TEXTURE_2D, st.tex);
+    gl.activeTexture(gl.TEXTURE0 + 8); gl.bindTexture(gl.TEXTURE_2D, st.mask);
+    gl.uniform1f(P_STRIP.u.uStripZ, st.z); gl.uniform1f(P_STRIP.u.uStripH, st.h); gl.uniform1f(P_STRIP.u.uStripPhase, st.phase); gl.uniform1f(P_STRIP.u.uStripSeed, st.seed);
+    gl.uniform1f(P_STRIP.u.uStripTile, st.tile); gl.uniform1f(P_STRIP.u.uStripFar, st.far); gl.uniform1f(P_STRIP.u.uStripFlip, st.flip || 1); gl.uniform1f(P_STRIP.u.uStripDark, st.dark || 1);
+    gl.uniform1i(P_STRIP.u.uStripTex, 7); gl.uniform1i(P_STRIP.u.uStripMask, 8);
+    gl.bindBuffer(gl.ARRAY_BUFFER, stripGeo[i].vb); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, stripGeo[i].ib);
+    gl.drawElements(gl.TRIANGLE_STRIP, stripGeo[i].n, gl.UNSIGNED_SHORT, 0);
+  }
+  // 3b) cards: leaf clusters + grass tufts, front to back, alpha-tested with fwidth-sharpened edges
+  {
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.useProgram(P_CARD.p);
+    setWind(P_CARD);
+    gl.uniform2f(P_CARD.u.uRes, canvas.width, canvas.height);
+    gl.uniform1f(P_CARD.u.uAspect, aspect);
+    gl.uniform1f(P_CARD.u.uTreeWind, treeWind);
+    gl.uniform1f(P_CARD.u.uTreeX, T.x); gl.uniform1f(P_CARD.u.uTreeZ, T.z);
+    gl.uniform1i(P_CARD.u.uAtlasLeaf, ATLAS.leaf.unit); gl.uniform1i(P_CARD.u.uAtlasTuft, ATLAS.tuft.unit); gl.uniform1i(P_CARD.u.uAtlasTuft2, atlasTex.tuft2 ? ATLAS.tuft2.unit : ATLAS.tuft.unit);
+    gl.uniform1f(P_CARD.u.uLeafOn, atlasTex.leaf ? 1 : 0); gl.uniform1f(P_CARD.u.uTuftOn, atlasTex.tuft ? 1 : 0);
+    gl.uniform1i(P_CARD.u.uAtlasMid, ATLAS.mid.unit); gl.uniform1f(P_CARD.u.uMidOn, atlasTex.mid ? 1 : 0); gl.uniform4fv(P_CARD.u.uMidCells, midCellArr);
+    gl.uniform4fv(P_CARD.u.uLeafCells, leafCellArr); gl.uniform4fv(P_CARD.u.uTuftCells, tuftCellArr);
+    gl.uniform1f(P_CARD.u.uNight, sk.night); gl.uniform1f(P_CARD.u.uBacklight, backlight); gl.uniform1f(P_CARD.u.uWarm, current.warmth);
+    gl.uniform3fv(P_CARD.u.uLightDir, P.lightDir); gl.uniform1f(P_CARD.u.uLightFloor, P.lightFloor);
+    for (const [n, v] of [['uGroundLight', P.ground], ['uHaze', P.haze], ['uShadowTint', P.shadowTint], ['uSunCol', P.sunCol], ['uRimCol', P.rimCol], ['uTreeCore', P.treeCore], ['uTreeMid', P.treeMid], ['uTreeLit', P.treeLit],
+      ['uFieldA', P.fieldA], ['uFieldB', P.fieldB], ['uFieldC', P.fieldC], ['uFieldD', P.fieldD]]) gl.uniform3fv(P_CARD.u[n], v);
+    gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1); gl.enableVertexAttribArray(2); gl.enableVertexAttribArray(3);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufCard);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 64, 0);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 64, 16);
+    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 64, 32);
+    gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 64, 48);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufCardIdx);
+    const nLeaf = cards.filter(c => c.kind === 0).length;   // sorted near → far: the tufts first, then the leaves
+    if (!CONFIG.skip.includes('cards')) gl.drawElements(gl.TRIANGLES, (CONFIG.skip.includes('tufts') ? nLeaf : cards.length) * 6, gl.UNSIGNED_SHORT, CONFIG.skip.includes('tufts') ? (cards.length - nLeaf) * 12 : 0);
+    gl.disableVertexAttribArray(3);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+  // 1 → last) the painting behind the grass: depth-tested against the strips / cards / heads (free where covered)
+  gl.disable(gl.BLEND);
+  gl.depthMask(false);
+  gl.useProgram(P_SKY.p);
+  setWind(P_SKY);
+  gl.uniform2f(P_SKY.u.uRes, canvas.width, canvas.height);
+  gl.uniform1f(P_SKY.u.uBright, current.skyBrightness);
+  gl.uniform1f(P_SKY.u.uCloud, current.cloudCover);
+  gl.uniform1f(P_SKY.u.uNight, sk.night);
+  gl.uniform1f(P_SKY.u.uTwilight, sk.twilight);
+  gl.uniform1f(P_SKY.u.uSunUp, sk.sunUp);
+  gl.uniform1f(P_SKY.u.uWarm, current.warmth);
+  gl.uniform1f(P_SKY.u.uBeacon, current.beacon);
+  gl.uniform1f(P_SKY.u.uTreeSway, treeSway);
+  gl.uniform2f(P_SKY.u.uSun, sk.sunX, sk.sunY);
+  gl.uniform2f(P_SKY.u.uDrift, drift[0], drift[1]);
+  for (const [n, v] of [['uZenith', P.zenith], ['uHorizonC', P.horizonC], ['uCloudLit', P.cloudLit], ['uCloudShade', P.cloudShade], ['uSunCol', P.sunCol], ['uGroundLight', P.ground], ['uShadowTint', P.shadowTint],
+    ['uMtnFar', P.mtnFar], ['uMtnMid', P.mtnMid], ['uHill', P.hill], ['uMeadowA', P.meadowA], ['uMeadowB', P.meadowB], ['uTreeLit', P.treeLit], ['uTreeShade', P.treeShade],
+    ['uFieldA', P.fieldA], ['uFieldB', P.fieldB], ['uFieldC', P.fieldC], ['uFieldD', P.fieldD]]) gl.uniform3fv(P_SKY.u[n], v);
+  gl.uniform4fv(P_SKY.u.uMill, millA); gl.uniform4fv(P_SKY.u.uMillB, millB);
+  gl.uniform1f(P_SKY.u.uLightFloor, P.lightFloor); gl.uniform3fv(P_SKY.u.uLightDir, P.lightDir);
+  gl.uniform1i(P_SKY.u.uAtlasCloud, ATLAS.cloud.unit);
+  gl.uniform1f(P_SKY.u.uCloudOn, atlasTex.cloud ? 1 : 0);
+  gl.uniform1f(P_SKY.u.uSheet, smooth(Math.min(1, Math.max(0, (current.cloudCover - 0.55) / 0.4))) * 0.8);
+  gl.uniform4fv(P_SKY.u.uCloudSpr, cloudA); gl.uniform4fv(P_SKY.u.uCloudSprB, cloudB); gl.uniform4fv(P_SKY.u.uCloudCells, cloudCellArr);
+  {
+    const { yb, H } = layerBox();
+    gl.uniform1i(P_SKY.u.uTexFar, 0); gl.uniform1i(P_SKY.u.uTexMid, 1); gl.uniform1i(P_SKY.u.uTexNear, 2);
+    gl.uniform4f(P_SKY.u.uLayerBox, yb, H, layerTex.far ? 1 : 0, layerTex.mid ? 1 : 0);
+    gl.uniform1f(P_SKY.u.uLayerNearOn, layerTex.near ? 1 : 0);
+    // neutral daylight paintings → the scene's light; farther layers take more of the sky's haze colour
+    const tw = sk.twilight;
+    const tintNear = mix3(mix3(P.ground, mix3(P.ground, [1.1, 0.75, 0.5], 0.5), tw * 0.5), [0.30, 0.34, 0.48], sk.night * 0.8);   // moonlit hills go blue
+    gl.uniform3fv(P_SKY.u.uTintNear, tintNear);
+    gl.uniform3fv(P_SKY.u.uTintMid, mix3(tintNear, P.horizonC, 0.25));
+    gl.uniform3fv(P_SKY.u.uTintFar, mix3(tintNear, P.horizonC, 0.45));
+  }
+  gl.enableVertexAttribArray(0); gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufTri); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  if (!CONFIG.skip.includes('sky')) gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // 3c) flower / seed heads: after the opaque grass, blended, depth-tested, no depth write
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  gl.useProgram(P_HEAD.p);
+  setWind(P_HEAD);
+  gl.uniform2f(P_HEAD.u.uRes, canvas.width, canvas.height);
+  gl.uniform1f(P_HEAD.u.uAspect, aspect);
+  gl.uniform1f(P_HEAD.u.uPuff, puff);
+  gl.uniform3fv(P_HEAD.u.uGroundLight, P.ground); gl.uniform3fv(P_HEAD.u.uHaze, P.haze); gl.uniform3fv(P_HEAD.u.uShadowTint, P.shadowTint);
+  gl.uniform1f(P_HEAD.u.uNight, sk.night); gl.uniform1f(P_HEAD.u.uWarm, current.warmth); gl.uniform1f(P_HEAD.u.uLightFloor, P.lightFloor); gl.uniform3fv(P_HEAD.u.uLightDir, P.lightDir);
+  gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1); gl.enableVertexAttribArray(2);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufHead);
+  gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 48, 0);
+  gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 48, 16);
+  gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 48, 32);
+  gl.drawArrays(gl.POINTS, 0, plants.length);
+  gl.depthMask(true);
+  // 4) particles (no depth write, blended)
+  if (parts.length) {
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.useProgram(P_PART.p);
+    gl.uniform2f(P_PART.u.uRes, canvas.width, canvas.height);
+    gl.uniform1f(P_PART.u.uAspect, aspect);
+    gl.uniform3fv(P_PART.u.uGroundLight, P.ground); gl.uniform3fv(P_PART.u.uHaze, P.haze); gl.uniform3fv(P_PART.u.uSunCol, P.sunCol);
+    gl.uniform1f(P_PART.u.uNight, sk.night);
+    gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1); gl.disableVertexAttribArray(2);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufPart);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, partBuf.subarray(0, parts.length * 8));
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16);
+    gl.drawArrays(gl.POINTS, 0, parts.length);
+    gl.depthMask(true);
+  }
+  gl.disable(gl.BLEND);
+}
+
+function frame(ms) {
+  raf = requestAnimationFrame(frame);
+  if (ms < nextFrame) return;
+  nextFrame += FRAME_MS;
+  if (nextFrame < ms) nextFrame = ms + FRAME_MS;
+  const t = now(), dt = Math.min(0.1, t - lastT);
+  lastT = t;
+  const sk = advance(t, dt);
+  render(sk);
+  fpsCount++;
+  if (t - fpsT >= 1) { fps = fpsCount / (t - fpsT); fpsCount = 0; fpsT = t; }
+  if (document.body.classList.contains('debug')) {
+    document.getElementById('hud').textContent =
+      `state ${stateName}${pending ? ' (→' + pending + ')' : ''}\n` +
+      Object.keys(PARAMS).map(p => `${p.padEnd(14)} ${current[p].toFixed(2)}`).join('\n') +
+      `\ngusts ${gusts.length}  next ${nextGustIn.toFixed(1)}s  seeds ${parts.filter(p => p.type === 0).length}  leaves ${parts.filter(p => p.type === 1).length}  puff ${puff.toFixed(2)}` +
+      `\nfps ${fps.toFixed(1)}  res ${canvas.width}×${canvas.height}  sun ${sk.alt.toFixed(1)}°  night ${sk.night.toFixed(2)}  twilight ${sk.twilight.toFixed(2)}  layers ${['far', 'mid', 'near'].map(k => layerTex[k] ? k : '-').join(' ')} atlas ${['leaf', 'tuft', 'tuft2', 'cloud'].map(k => atlasTex[k] ? k : '-').join(' ')} strips ${STRIPS.filter(st => st.tex && st.mask).length}/4` +
+      `\nmills ${effectiveSlots().map(s => s || '-').join(' ')}${sessionsOverride ? ' (override)' : sessionsFile ? '' : ' (ambient)'}  ` +
+      mills.filter(m => m.alpha > 0).map(m => `#${m.slot} ${m.state} ${(m.alpha * 100) | 0}% ${m.cur.speed.toFixed(1)}r/s`).join(' ');
+  }
+}
+function start() { if (!raf) { lastT = now(); raf = requestAnimationFrame(frame); } }
+function stop() { cancelAnimationFrame(raf); raf = 0; }
+let hostPaused = false;
+document.addEventListener('visibilitychange', () => (document.hidden || hostPaused ? stop() : start()));
+// the host (tools/wallpaper.js) pauses us while a window covers the whole desktop
+window.wpPause = on => { hostPaused = !!on; if (hostPaused) stop(); else if (!document.hidden) start(); };
+if (!document.hidden) start();
+
+// cost measurement: median / p90 GPU time of one frame's draws (readPixels sync before and after)
+function bench(frames = 60) {
+  const px = new Uint8Array(4), gpu = [];
+  const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  for (let i = 0; i < frames; i++) {
+    const sk = advance(now(), 1 / FPS);
+    sync(); const t0 = performance.now(); render(sk); sync(); gpu.push(performance.now() - t0);
+  }
+  gpu.sort((a, b) => a - b);
+  return { median: +gpu[frames >> 1].toFixed(2), p90: +gpu[Math.floor(frames * 0.9)].toFixed(2), res: canvas.width + 'x' + canvas.height, particles: parts.length };
+}
+
+// testing hooks (themes/demo.html looks for window.theme)
+window.theme = window.meadow = {
+  requestState, applyState, STATES, PARAMS, CONFIG, sky, bench,
+  setOverride(o) { override = o; },
+  gust(strength = 1, burst = true, front) { spawnGust(strength, burst, front); },
+  setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; },
+  get sessions() { return effectiveSlots(); }, mills, MILL_HOMES, MILL_STATES, LAYERS, layerTex, loadLayer, ATLAS, atlasTex, loadAtlas, cards, STRIPS,
+  get gusts() { return gusts.map(g => ({ ...g })); }, get particles() { return parts.length; },
+  get current() { return { ...current }; }, get state() { return stateName; },
+};
+</script>
+</body>
+</html>
