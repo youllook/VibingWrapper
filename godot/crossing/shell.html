@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>平交道</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0f14; }
+  /* the canvas renders at CONFIG.scale of the window (full by default) */
+  #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; }
+  /* loading veil: download percentage, then "準備中" while the shaders compile; fades out on the first real frame */
+  #veil { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: #0d0f14; color: #9aa3b2; font: 15px/1.4 "Microsoft JhengHei", "Noto Sans TC", sans-serif; letter-spacing: .08em;
+    transition: opacity 1.2s ease; z-index: 2; }
+  #veil.gone { opacity: 0; pointer-events: none; }
+  #veil .bar { width: 220px; height: 3px; background: #222733; border-radius: 2px; overflow: hidden; }
+  #veil .bar i { display: block; height: 100%; width: 0; background: #c8402e; transition: width .3s ease; }
+  #veil .lamp { width: 10px; height: 10px; border-radius: 50%; background: #c8402e; box-shadow: 0 0 12px #c8402e; animation: blink 1.33s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: .15; box-shadow: none; } }
+</style>
+$GODOT_HEAD_INCLUDE
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="veil"><div class="lamp"></div><div id="veil-text">平交道 載入中 0%</div><div class="bar"><i id="veil-bar"></i></div></div>
+<script>
+// ---- VibingWrapper theme glue (see themes/README.md) ----
+// Godot polls window.wpCtl through JavaScriptBridge; this page owns state.json polling, the clock, the 30 fps cap and pause.
+(() => {
+  const q = new URLSearchParams(location.search);
+  const CONFIG = {
+    polling: true,
+    clockHours: /[?&]day=1/.test(location.search) ? 10.5 : /[?&]night=1/.test(location.search) ? 22 : (q.has('hours') ? +q.get('hours') : null),
+    fps: 30,
+    scale: q.has('scale') ? +q.get('scale') : 1.0,   // full resolution (2026-10-02): the foreground grass needs it; this scene is cheap on the GPU
+  };
+  const ctl = window.wpCtl = { state: q.get('state') || 'clear', sessions: [], hours: 12, rev: 0, warp: +(q.get('warp') || 0), dbg: q.get('dbg') || '' };
+  const hoursNow = () => { if (CONFIG.clockHours != null) return CONFIG.clockHours; const d = new Date(); return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600; };
+  if (q.has('sessions')) ctl.sessions = q.get('sessions').split(',').map(x => x || null);   // tests: ?sessions=storm,storm,,
+  const applyState = (s, sessions) => { if (s && s !== ctl.state) { ctl.state = s; ctl.rev++; } if (sessions) ctl.sessions = sessions; };
+  // moon phase 0..1 (0 new, 0.5 full) from a known new moon (2000-01-06 18:14 UTC), synodic month 29.530588 d
+  const moonNow = () => q.has('moon') ? +q.get('moon') : (((Date.now() / 86400000 - 10962.7597) % 29.530588) + 29.530588) % 29.530588 / 29.530588;
+  async function poll() {
+    ctl.hours = hoursNow();
+    ctl.moon = moonNow();
+    if (CONFIG.polling && !q.has('state')) {
+      try { const r = await fetch('state.json?' + Date.now(), { cache: 'no-store' }); if (r.ok) { const j = await r.json(); applyState(j.state, q.has('sessions') ? null : (j.sessions || [])); } } catch (e) {}
+    }
+  }
+  poll(); setInterval(poll, 1000);
+  window.theme = { CONFIG, STATES: ['clear', 'overcast', 'storm', 'clearing', 'waiting'], applyState: s => { CONFIG.polling = false; applyState(s); },
+    requestState: s => applyState(s), get state() { return ctl.state; } };
+
+  // 30 fps cap + pause, by thinning requestAnimationFrame (Godot's own max_fps busy-waits on the web)
+  const raf = window.requestAnimationFrame.bind(window);
+  let last = 0, paused = false, held = null;
+  const run0 = window.__wpWrap || (f => f());
+  let frames = 0;
+  const run = f => { run0(f); if (window.__wpStarted && ++frames === 3) window.__wpReady(); };
+  window.requestAnimationFrame = cb => raf(function tick(ts) {
+    if (paused || document.hidden) { held = cb; return; }
+    if (ts - last < 1000 / CONFIG.fps - 3) { raf(tick); return; }
+    last = ts; run(() => cb(ts));
+  });
+  const resume = () => { if (!paused && !document.hidden && held) { const c = held; held = null; window.requestAnimationFrame(c); } };
+  window.wpPause = on => { paused = !!on; resume(); };
+  document.addEventListener('visibilitychange', resume);
+
+  // half-resolution canvas
+  const cv = document.getElementById('canvas');
+  const size = () => { cv.width = Math.round(innerWidth * CONFIG.scale); cv.height = Math.round(innerHeight * CONFIG.scale); };
+  size(); addEventListener('resize', size);
+})();
+</script>
+<script src="$GODOT_URL"></script>
+<script>
+const GODOT_CONFIG = $GODOT_CONFIG;
+const engine = new Engine(GODOT_CONFIG);
+const veilText = document.getElementById('veil-text'), veilBar = document.getElementById('veil-bar');
+window.__wpReady = () => document.getElementById('veil').classList.add('gone');
+engine.startGame({
+  canvasResizePolicy: 0, focusCanvas: false,
+  onProgress: (cur, total) => {
+    const p = total > 0 ? Math.min(100, Math.floor(cur / total * 100)) : 0;
+    veilBar.style.width = p + '%';
+    veilText.textContent = p < 100 ? '平交道 載入中 ' + p + '%' : '平交道 準備中…';
+  },
+}).then(() => { veilText.textContent = '平交道 準備中…'; veilBar.style.width = '100%'; window.__wpStarted = true; })
+  .catch(e => { console.error('godot start failed', e); veilText.textContent = '平交道 載入失敗'; });
+</script>
+</body>
+</html>

@@ -40,7 +40,7 @@
 /* ------------------------------ config ------------------------------ */
 const FPS = 30;
 const RES_SCALE = 0.5;
-const CONFIG = { fullTransition: 4.0, polling: true, clockHours: /[?&]day=1/.test(location.search) ? 10.5 : null, paintedLayers: true, skip: '' };   // skip: debug, e.g. 'cards,blades' leaves passes out   // clockHours: test override (0–24), null = real time
+const CONFIG = { fullTransition: 4.0, polling: true, clockHours: /[?&]day=1/.test(location.search) ? 10.5 : /[?&]night=1/.test(location.search) ? 22 : null, paintedLayers: true, skip: '' };   // skip: debug, e.g. 'cards,blades' leaves passes out   // clockHours: test override (0–24), null = real time
 const DEBOUNCE_MS = 300;
 const POLL_MS = 1000;
 const HORIZON = 0.45;                        // where the flat meadow meets the near hills (screen fraction from the bottom)

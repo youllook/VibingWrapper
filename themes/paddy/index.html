@@ -41,7 +41,7 @@
 /* ------------------------------ config ------------------------------ */
 const FPS = 30;
 const RES_SCALE = 0.5;
-const CONFIG = { fullTransition: 4.0, polling: true, clockHours: /[?&]day=1/.test(location.search) ? 10.5 : null, skip: '',
+const CONFIG = { fullTransition: 4.0, polling: true, clockHours: /[?&]day=1/.test(location.search) ? 10.5 : /[?&]night=1/.test(location.search) ? 22 : null, skip: '',
                  bladesHigh: 80000, bladesLow: 200000, expoHigh: 1.4, expoLow: 2.25, msaa: true };   // clockHours: test override (0–24), null = real time
 const DEBOUNCE_MS = 300;
 const POLL_MS = 1000;

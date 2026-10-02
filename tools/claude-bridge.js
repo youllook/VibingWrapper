@@ -13,7 +13,8 @@ const PORT = 47321;
 const THEMES_DIR = path.join(__dirname, '..', 'themes');
 const STATE_FILE = path.join(THEMES_DIR, 'state.json');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.json': 'application/json', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png',
-  '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.glsl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8' };
+  '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.glsl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+  '.wasm': 'application/wasm', '.pck': 'application/octet-stream' };   // Godot web exports
 
 // Claude Code event → weather. Working = storm, thinking = overcast, done = clearing → clear.
 const EVENT_WEATHER = {
