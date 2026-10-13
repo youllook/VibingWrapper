@@ -39,6 +39,7 @@
 2. **暫停**：提供 `window.wpPause(on)`。桌面被最大化／全螢幕視窗蓋住、或一鍵隱藏時會呼叫；`document.hidden` 時也要停止渲染。
 3. **模式**（齒輪選單「模式」：預設／日間／夜間）：預設跟著真實時間；網址帶 `?day=1` 時時鐘固定在白天（`clockHours = 10.5`），帶 `?night=1` 時固定在夜晚（`clockHours = 22`）。
 4. **效能**：30 fps 上限、半解析度渲染，GPU 每格最好在 12 ms 以內。
+   例外（2026-10-13）：雪山雲海（`snowpeak`）的地形、帳篷、天空是全解析度＋FXAA，只有雲海算半解析度再依深度放大接回（半解析度放大後雲和稜線會有明顯鋸齒）；整體仍在預算內。
 5. **測試介面（選配）**：把 `requestState`、`applyState`、`STATES`、`PARAMS`、`CONFIG`（含 `clockHours`、`polling`）掛在 `window` 上
    （現有主題用 `window.weather` / `window.ocean` / `window.network`，新主題可以用 `window.theme`），
    [demo.html](demo.html) 就能切狀態、調參數、拉時間軸。
