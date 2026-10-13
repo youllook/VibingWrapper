@@ -2,7 +2,7 @@
 
 # VibingWrapper
 
-A Windows live wallpaper whose weather follows your Claude Code sessions — sky, sea, and a small fleet of boats.
+A Windows live wallpaper that follows your Claude Code sessions — sky, sea, snow peaks, rice paddies, and a level crossing.
 
 When Claude is thinking, the sky clouds over. When it starts running tools, a thunderstorm rolls in. When it's done, the rain stops and the sun breaks through.
 And when it stops to ask you a question or wait for your approval, a single star lights up and slowly pulses.
@@ -23,18 +23,36 @@ You never have to switch windows: the corner of your eye tells you what your AI 
 **Several sessions at once (up to 5):** each session keeps its own state, and the sky shows the most urgent one (waiting > storm > overcast > clearing > clear).
 On the sea wallpapers every session is a boat: busy boats get underway with a wake behind them, and the boat that is waiting for you blinks its lamps — so you can tell at a glance which session needs you.
 
-## Three wallpapers
+## Wallpapers
 
-Gear menu → 桌布 (wallpaper) cycles through them:
+Gear menu → 桌布 (wallpaper) cycles through them. Each one acts out the same states in its own way:
 
-- **Weather (天氣)** — sky only: clouds, rain, lightning, crepuscular rays, following the real sunrise and sunset in Taipei.
-- **Weather + sea (天氣＋海)** — a distant sea fills the lower part of the screen, mirroring the same sky, with the fleet on it.
-- **Sea (海)** — a 3D ocean seen from just above the water: crests, foam, moonlight, and the fleet riding the swell.
+| Wallpaper | Scene | When Claude gets busy |
+|---|---|---|
+| **Weather (天氣)** | Sky only: clouds, rain, lightning, crepuscular rays, following the real sunrise and sunset in Taipei | Clouds over, then a thunderstorm |
+| **Weather + sea (天氣＋海)** | A distant sea mirroring the same sky; one boat per session | Storm; boats get underway with a wake |
+| **Sea (海)** | A 3D ocean seen from just above the water: crests, foam, moonlight, the fleet riding the swell | Storm and whitecaps |
+| **Snow peaks (雪山雲海)** | A sea of clouds seen from a Taiwanese high ridge; one mountaineering tent per session | The sky stays clear (real cloud seas happen in fair weather); the cloud sea rises, pours over the saddle, and spindrift blows off the ridge |
+| **Paddy (稻田)** | Rice paddies in rural Pingtung, blue hills, a cabin, blazing sun | Stronger wind, bigger waves in the rice, more chimney smoke |
+| **Meadow (寫實草原)** | Hundreds of thousands of grass blades bending in the wind; one cabin per session | Gusts sweep across the grass like waves, kicking up dry leaves |
+| **Level crossing (平交道)** | A Taiwan Railway level crossing in the countryside (Godot 4) | Bells ring and the barriers drop while it thinks; the train keeps passing for as long as it works |
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/weather-storm.jpg" alt="Weather: thunderstorm with lightning"><br>Weather · working (thunderstorm)</td>
-<td width="50%"><img src="docs/screenshots/sky-sea-dusk.jpg" alt="Weather + sea: the fleet at dusk"><br>Weather + sea · the fleet at dusk</td>
+<td width="50%"><img src="docs/screenshots/snowpeak-dawn.jpg" alt="Snow peaks: morning"><br>Snow peaks · morning</td>
+<td width="50%"><img src="docs/screenshots/snowpeak-night.jpg" alt="Snow peaks: churning cloud sea at night"><br>Snow peaks · working at night, the cloud sea churns</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/crossing-day.jpg" alt="Level crossing: a train passing"><br>Level crossing · working, the train rolls by car after car</td>
+<td><img src="docs/screenshots/crossing-night.jpg" alt="Level crossing: alarm at night"><br>Level crossing · alarm at night</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/paddy-day.jpg" alt="Paddy"><br>Paddy · full sun</td>
+<td><img src="docs/screenshots/meadow-real-dusk.jpg" alt="Meadow: dusk"><br>Meadow · dusk</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/weather-storm.jpg" alt="Weather: thunderstorm with lightning"><br>Weather · working (thunderstorm)</td>
+<td><img src="docs/screenshots/sky-sea-dusk.jpg" alt="Weather + sea: the fleet at dusk"><br>Weather + sea · the fleet at dusk</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/ocean-day.jpg" alt="Sea: daytime"><br>Sea · daytime</td>
@@ -42,7 +60,11 @@ Gear menu → 桌布 (wallpaper) cycles through them:
 </tr>
 </table>
 
+The gear menu's 模式 (mode) switches between following the real clock, always day, and always night.
+
 The wallpaper lives behind your desktop icons and never gets in the way. It pauses itself while a maximized or full-screen window covers the desktop.
+
+**The level crossing needs a build step**: it is a Godot 4 web export (about 60 MB), so git only holds the source (`godot/crossing/`). See [themes/crossing/README.md](themes/crossing/README.md) (Chinese; two `godot --headless` commands). Without the build it shows up blank.
 
 ### Make your own theme
 
@@ -104,14 +126,17 @@ Received events are logged by name and the first 8 characters of the session ID 
 | `prototype/hud.html` | The top-right AI state icon + gear menu |
 | `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `themes/state.json`; also serves the `themes/` pages and the theme list |
 | `tools/wallpaper.js`, `attach-wallpaper.ps1` | Parents the wallpaper window behind the desktop icons (WorkerW) |
-| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean` (`network` disabled) |
+| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `meadow-real`, `crossing` (`network` disabled) |
+| `godot/crossing/` | Godot 4 source for the level crossing (the scene is built in code; `shell.html` is the web shell) |
 | `themes/demo.html` | Tuning page: pick a theme, switch states, scrub the clock through day and night |
 | `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, eyedropper / screenshot |
 
 ## Credits
 
 - Cloud rendering after [power418/skygl](https://github.com/power418/skygl) (MIT), squeezed into a single 2D pass.
-- The 3D ocean and the fleet were designed and built by Claude (Fable); the AI state icons and the logo were designed by Codex.
+- The grass in the paddy and meadow is ported from SimonDev's [Quick_Grass](https://github.com/simondevyoutube/Quick_Grass) (MIT), itself based on Ghost of Tsushima's GDC 2021 talk.
+- The level crossing is built with [Godot 4](https://godotengine.org/).
+- The 3D ocean, the fleet and the first pass of the snow peaks were designed and built by Claude (Fable); the AI state icons, the logo and the level-crossing textures were painted by Codex.
 - The whole project was written with Claude Code.
 
 ## License
