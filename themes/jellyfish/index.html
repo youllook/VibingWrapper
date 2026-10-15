@@ -12,12 +12,28 @@
          background: rgba(0,0,0,.4); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
   body.debug #hud { display: block; }
   #nogl { display: none; position: fixed; inset: 0; color: #dde; font: 14px sans-serif; padding: 24px; }
+  /* whale tuning panel (?tune=1 or W) */
+  #tune { position: fixed; top: 12px; right: 12px; width: 300px; display: none; z-index: 10; padding: 12px 14px 10px;
+          background: rgba(6, 18, 30, .82); color: #d6e8f2; font: 13px/1.4 "Microsoft JhengHei UI", sans-serif;
+          border: 1px solid rgba(140, 200, 230, .25); border-radius: 8px; user-select: auto; -webkit-user-select: auto; cursor: auto; }
+  body.tune #tune { display: block; }
+  #tune h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+  #tune .row { display: grid; grid-template-columns: 92px 1fr 46px; align-items: center; gap: 6px; margin: 5px 0; }
+  #tune .row label { color: #9fc3d6; }
+  #tune input[type=range] { width: 100%; }
+  #tune .val { text-align: right; font-variant-numeric: tabular-nums; }
+  #tune .hint { color: #7ea4b8; font-size: 12px; margin: 2px 0 6px; }
+  #tune .btns { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  #tune button, #tune select { background: #12344a; color: #d6e8f2; border: 1px solid #2c5a74; border-radius: 5px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  #tune button:hover { background: #1a4762; }
+  #tune .status { color: #7ea4b8; font-size: 12px; margin-top: 6px; min-height: 16px; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="hud"></div>
 <div id="nogl">這個主題需要 WebGL2。</div>
+<div id="tune"></div>
 <script>
 /* =====================================================================================
  * 海月 (jellyfish) — a realistic sea floor with moon jellies as a live wallpaper
@@ -145,10 +161,11 @@ function requestState(name) {
 }
 
 /* ------------------------------ inputs ------------------------------ */
-for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => { if (!(e.target.closest && e.target.closest('#tune'))) e.preventDefault(); });
 addEventListener('keydown', e => {
   if (KEYS[e.key]) requestState(KEYS[e.key]);
   if (e.key === 'd') document.body.classList.toggle('debug');
+  if (e.key === 'w' || e.key === 'W') document.body.classList.toggle('tune');
 });
 let lastPolled = null, sessionsFile = null, sessionsOverride = null;
 async function poll() {
@@ -1898,6 +1915,55 @@ window.theme = window.jellyfish = {
   get current() { return { ...current }; }, get state() { return stateName; },
   get sceneTime() { return sceneTime; }, compileMs, get bumps() { return bumps; },
 };
+
+/* ------------------------------ whale tuning panel (?tune=1 or W; for a browser tab — the wallpaper itself takes no clicks) ------------------------------ */
+(function whaleTuner() {
+  const KEY = 'jellyfish.whale.v1';
+  const MODES = { bottom: '貼底', near: '近景', far: '遠景' };
+  const SPEC = {                                            // [label, min, max, step, hint]
+    dist:   ['距離 (m)', 2.5, 30, 0.1, '離鏡頭多遠（每趟在兩值之間隨機）'],
+    backAt: ['背的高度', 0.2, 0.9, 0.01, '貼底：背的最高點在畫面多高（0 底、1 頂）'],
+    y:      ['深度 (m)', 1, 9, 0.1, '近景／遠景：鯨魚中心的高度'],
+    speed:  ['速度 (m/s)', 0.2, 2.5, 0.05, '每趟在兩值之間隨機'],
+    bob:    ['上下起伏 (m)', 0, 1.2, 0.05, ''],
+    dz:     ['前後漂移 (m)', 0, 8, 0.1, '一趟中往前或往後斜多少'],
+    fade:   ['淡入淡出', 0, 0.4, 0.01, '前後各佔整趟的比例（貼底）'],
+  };
+  try { const saved = JSON.parse(localStorage.getItem(KEY) || 'null'); if (saved && saved.mode) { WHALE.mode = saved.mode; for (const m in MODES) if (saved[m]) Object.assign(WHALE[m], saved[m]); } } catch { /* storage blocked: defaults */ }
+  const save = () => { try { const o = { mode: WHALE.mode }; for (const m in MODES) o[m] = WHALE[m]; localStorage.setItem(KEY, JSON.stringify(o)); } catch { /* fine */ } };
+  const el = document.getElementById('tune');
+  const fmt = v => (Math.round(v * 100) / 100).toString();
+  const line = () => { const M = WHALE[WHALE.mode], parts = Object.keys(M).map(k => k + ': ' + (Array.isArray(M[k]) ? '[' + M[k].map(fmt).join(', ') + ']' : fmt(M[k]))); return WHALE.mode + ': { ' + parts.join(', ') + ' },'; };
+  function build() {
+    const M = WHALE[WHALE.mode];
+    let h = '<h3>鯨魚調整</h3><div class="row"><label>模式</label><select id="tmode">' + Object.entries(MODES).map(([k, v]) => '<option value="' + k + '"' + (k === WHALE.mode ? ' selected' : '') + '>' + v + '</option>').join('') + '</select><span></span></div>';
+    for (const k of Object.keys(M)) {
+      const sp = SPEC[k]; if (!sp) continue;
+      const vals = Array.isArray(M[k]) ? M[k] : [M[k]];
+      vals.forEach((v, i) => {
+        const lab = sp[0] + (vals.length > 1 ? (i ? ' 最大' : ' 最小') : '');
+        h += '<div class="row"><label>' + lab + '</label><input type="range" data-k="' + k + '" data-i="' + (vals.length > 1 ? i : -1) + '" min="' + sp[1] + '" max="' + sp[2] + '" step="' + sp[3] + '" value="' + v + '"><span class="val">' + fmt(v) + '</span></div>';
+      });
+      if (sp[4]) h += '<div class="hint">' + sp[4] + '</div>';
+    }
+    h += '<div class="btns"><button id="tgo">游一趟</button><button id="tcopy">複製設定</button><button id="treset">重設</button></div><div class="status" id="tstat">W 關閉面板</div>';
+    el.innerHTML = h;
+    el.querySelector('#tmode').onchange = e => { WHALE.mode = e.target.value; save(); build(); };
+    el.querySelectorAll('input[type=range]').forEach(inp => inp.oninput = () => {
+      const k = inp.dataset.k, i = +inp.dataset.i, v = +inp.value, M2 = WHALE[WHALE.mode];
+      if (i >= 0) { M2[k][i] = v; if (M2[k][0] > M2[k][1]) M2[k][1 - i] = v; } else M2[k] = v;
+      inp.nextElementSibling.textContent = fmt(v);
+      save();
+    });
+    el.querySelector('#tgo').onclick = () => { whale.active = false; whale.quietUntil = 0; startWhale(); status('出發！約 ' + Math.round(whale.dur) + ' 秒'); };
+    el.querySelector('#tcopy').onclick = async () => { try { await navigator.clipboard.writeText(line()); status('已複製：' + line()); } catch { status(line()); } };
+    el.querySelector('#treset').onclick = () => { try { localStorage.removeItem(KEY); } catch { } location.reload(); };
+  }
+  const status = t => { const s = el.querySelector('#tstat'); if (s) s.textContent = t; };
+  build();
+  if (/[?&]tune=1/.test(location.search)) document.body.classList.add('tune');
+  window.theme.tuneLine = line;
+})();
 </script>
 </body>
 </html>
