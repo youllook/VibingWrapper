@@ -33,6 +33,9 @@ const CLEAR_AFTER_MS = 20000;  // clearing → clear once things stay quiet
 // plan approval). The wallpaper dims and one star pulses until the user answers.
 const WAIT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const WAIT_NOTIFY = new Set(['permission_prompt', 'elicitation_dialog']);
+// Background probes, not work (2026-10-15): idle Claude desktop sessions poll the Chrome extension every
+// ~20 s. Counting them kept those sessions storming forever and filled all 5 slots; onEvent drops them unlogged.
+const PROBE_TOOLS = new Set(['mcp__claude-in-chrome__list_connected_browsers']);
 function weatherFor(j) {
   const name = j.hook_event_name;
   if (name === 'PreToolUse' && WAIT_TOOLS.has(j.tool_name)) return 'waiting';
@@ -113,6 +116,7 @@ function publish() {
   return changed;
 }
 function onEvent(j) {
+  if (PROBE_TOOLS.has(j.tool_name)) return;
   const name = j.hook_event_name;
   const id = typeof j.session_id === 'string' && j.session_id ? j.session_id : 'default';
   const base = {
