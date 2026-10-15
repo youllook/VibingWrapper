@@ -13,8 +13,6 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 
 *陰 → 雷雨 → 放晴 → 星星閃，對應 Claude 思考、跑工具、做完、等你。*
 
-![夜晚的海：五個 Claude Code session 是五艘船，天上那顆星和其中一艘的燈正在閃——它在等你](docs/screenshots/ocean-night.jpg)
-
 ## 狀態對照
 
 | Claude Code 在做的事 | 天氣 | 右上角 HUD |
@@ -27,6 +25,8 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 
 **同時開好幾個 session（最多 5 個）**：每個 session 各記一份狀態，天空顯示最需要注意的那個（等你 > 雷雨 > 陰 > 轉晴 > 晴）。
 有海的桌布上，每個 session 是一艘船：忙的船開動、拖出航跡，等你的船燈會閃，一眼就知道是哪一個在叫你。
+
+![夜晚的海：五個 Claude Code session 是五艘船，天上那顆星和其中一艘的燈正在閃——它在等你](docs/screenshots/ocean-night.jpg)
 
 ## 桌布
 

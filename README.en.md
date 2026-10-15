@@ -12,8 +12,6 @@ You never have to switch windows: the corner of your eye tells you what your AI 
 
 *Overcast → storm → clearing → star: Claude thinking, running tools, done, waiting for you.*
 
-![The sea at night: five Claude Code sessions are five boats. The star overhead and one boat's lamps are pulsing — that session is waiting for you](docs/screenshots/ocean-night.jpg)
-
 ## States
 
 | What Claude Code is doing | Weather | Top-right HUD |
@@ -26,6 +24,8 @@ You never have to switch windows: the corner of your eye tells you what your AI 
 
 **Several sessions at once (up to 5):** each session keeps its own state, and the sky shows the most urgent one (waiting > storm > overcast > clearing > clear).
 On the sea wallpapers every session is a boat: busy boats get underway with a wake behind them, and the boat that is waiting for you blinks its lamps — so you can tell at a glance which session needs you.
+
+![The sea at night: five Claude Code sessions are five boats. The star overhead and one boat's lamps are pulsing — that session is waiting for you](docs/screenshots/ocean-night.jpg)
 
 ## Wallpapers
 
