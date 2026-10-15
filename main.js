@@ -8,6 +8,7 @@ const claudeBridge = require('./tools/claude-bridge'); // Claude Code hooks → 
 const wallpaper = require('./tools/wallpaper');       // weather wallpaper behind the desktop icons (replaces Lively)
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
 const bossKey = require('./tools/boss-key');           // 一鍵隱藏: user-defined hotkey hides every 星圖 window (boss key)
+const claudeHooks = require('./tools/claude-hooks');   // 一鍵安裝 Claude hook → ~/.claude/settings.json
 
 if (!app.requestSingleInstanceLock()) app.quit();
 // 2026-10-01: render on the high-performance GPU (RTX 2060 SUPER). Chromium picked the Intel UHD 630 that
@@ -108,6 +109,8 @@ ipcMain.handle('pet:set-boss-key', (_e, acc) => {
   if (r.ok) { settings.bossKey = r.key; saveSettings(); }
   return r;
 });
+ipcMain.handle('pet:hooks-status', () => claudeHooks.status());
+ipcMain.handle('pet:install-hooks', () => { const r = claudeHooks.install(); buildTrayMenu(); return r; });
 ipcMain.on('pet:restart', () => { app.relaunch(); app.exit(0); });
 
 // 32×32 tray icon drawn in code (an ice-blue diamond), so no image file is needed.
@@ -160,6 +163,7 @@ function buildTrayMenu() {
       label: '開機自動啟動', type: 'checkbox', checked: openAtLogin,
       click: item => { app.setLoginItemSettings({ openAtLogin: item.checked, ...loginItemArgs() }); buildTrayMenu(); },
     },
+    { label: claudeHooks.status() === 'on' ? 'Claude hook 已安裝' : '安裝 Claude hook', enabled: claudeHooks.status() !== 'on', click: () => { claudeHooks.install(); buildTrayMenu(); } },
     { type: 'separator' },
     { label: '開發者工具', click: () => win.webContents.openDevTools({ mode: 'detach' }) },
     { label: '重新載入', click: () => win.reload() },
@@ -174,7 +178,7 @@ app.whenReady().then(() => {
   createWindow();
   makeTray();
   capture.init(buildTrayMenu);
-  claudeBridge.start({ logDir: app.getPath('userData'), onState: s => alive() && win.webContents.send('pet:ai-state', s) });   // → %APPDATA%\vibing-wrapper\weather-log.jsonl
+  claudeBridge.start({ logDir: app.getPath('userData'), stateDir: app.getPath('userData'), onState: s => alive() && win.webContents.send('pet:ai-state', s) });   // → %APPDATA%\vibing-wrapper\weather-log.jsonl
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   desktopIcons.init(buildTrayMenu);
   // 一鍵隱藏: everything goes except the HUD, which shrinks to its gear (the way back); the tray icon goes too

@@ -81,7 +81,16 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 | 螢幕吸色（複製 #RRGGBB） | Ctrl+Q |
 | 範圍截圖（剪貼簿＋存到「圖片\Saved Pictures」） | Ctrl+R |
 
-## 安裝
+## 快速體驗（免安裝）
+
+1. 到 [Releases](https://github.com/youllook/VibingWrapper/releases/latest) 下載 `VibingWrapper-x.y.z-win-x64.zip`，解壓到任何資料夾。
+2. 執行 `VibingWrapper.exe`。程式沒有簽章，Windows 跳出「Windows 已保護您的電腦」的話，按「其他資訊」→「仍要執行」。
+3. 點右上角齒輪 →「Claude 連動」→ 點一下，自動把 hook 加進 `~/.claude/settings.json`（原檔會先備份成 `settings.json.vibing-backup`，已有的設定都會保留）。
+4. 重開 Claude Code，開始工作，天空就會跟著變。
+
+不需要 Node.js，七種桌布（含 Godot 做的平交道）都包在裡面。
+
+## 從原始碼執行
 
 需要：Windows 10／11、[Node.js](https://nodejs.org/) 18 以上、[Claude Code](https://claude.com/claude-code)。
 
@@ -92,11 +101,11 @@ npm install
 npm start
 ```
 
-`npm run shortcut` 會在桌面建立捷徑。系統匣選單可以設定開機自動啟動。
+`npm run shortcut` 會在桌面建立捷徑；`npm run dist` 打包成 `dist/VibingWrapper-x.y.z-win-x64.zip`（平交道要先用 Godot 匯出，見 `themes/crossing/README.md`）。系統匣選單可以設定開機自動啟動。
 
 ## 接上 Claude Code
 
-VibingWrapper 在本機 `127.0.0.1:47321` 收 Claude Code 的 hook 事件。把下面這段合併進 `~/.claude/settings.json` 的 `hooks`（已經有 hooks 的話，加進對應的陣列，不要整段覆蓋）：
+齒輪選單的「Claude 連動」可以一鍵安裝（見上面「快速體驗」）。想自己改的話：VibingWrapper 在本機 `127.0.0.1:47321` 收 Claude Code 的 hook 事件。把下面這段合併進 `~/.claude/settings.json` 的 `hooks`（已經有 hooks 的話，加進對應的陣列，不要整段覆蓋）：
 
 ```json
 {
@@ -123,7 +132,8 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 |---|---|
 | `main.js` | Electron 主程序：HUD 視窗、系統匣、設定 |
 | `prototype/hud.html` | 右上角的 AI 狀態圖示＋齒輪選單 |
-| `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `themes/state.json`；也負責提供 `themes/` 頁面與主題清單 |
+| `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `%APPDATA%\vibing-wrapper\state.json`；也負責提供 `themes/` 頁面與主題清單 |
+| `tools/claude-hooks.js` | 齒輪「Claude 連動」：把 hook 補進 `~/.claude/settings.json` |
 | `tools/wallpaper.js`、`attach-wallpaper.ps1` | 把桌布視窗掛到桌面圖示底下（WorkerW） |
 | `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`、`snowpeak`、`paddy`、`meadow-real`、`crossing`（`network` 停用） |
 | `godot/crossing/` | 平交道的 Godot 4 原始碼（場景全用程式生成，`shell.html` 是網頁外殼） |

@@ -11,7 +11,7 @@ const path = require('path');
 
 const PORT = 47321;
 const THEMES_DIR = path.join(__dirname, '..', 'themes');
-const STATE_FILE = path.join(THEMES_DIR, 'state.json');
+let STATE_FILE = path.join(THEMES_DIR, 'state.json');   // start({ stateDir }) moves it out of the app folder (read-only once packaged)
 const TYPES = { '.html': 'text/html; charset=utf-8', '.json': 'application/json', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png',
   '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.glsl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
   '.wasm': 'application/wasm', '.pck': 'application/octet-stream' };   // Godot web exports
@@ -178,6 +178,7 @@ function serveThemes(req, res) {
 
 function start(opts = {}) {
   if (opts.logDir) logFile = require('path').join(opts.logDir, 'weather-log.jsonl');
+  if (opts.stateDir) STATE_FILE = path.join(opts.stateDir, 'state.json');
   if (opts.onState) listeners.push(opts.onState);
   // pick up the last state; if it is older than 2 min (app was closed / Claude died mid-turn) start clear
   try {
