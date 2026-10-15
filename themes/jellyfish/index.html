@@ -93,9 +93,10 @@ const REEF_TILES = [
 // 2026-10-15 (user: "a big whale gliding past in the background now and then"): humpbacks winter in Okinawa
 // (Kerama, Jan–Mar). "High-Poly Humbpack Whale" by K9239 (Sketchfab, CC BY 4.0), body only, 2K texture.
 // The model is 16.1 m along x with the head at −x; scaled to a 14 m adult. It crosses far behind the jellies,
-// every 6–15 min at a random time, half-hidden in the haze (its water extinction is scaled by `fog`).
+// when Claude finishes something (user, 2026-10-15): a session (or the whole sky) turning to clearing re-arms a
+// debounce, and the whale sets off 30–60 s after the LAST finish; half-hidden in the haze (extinction × `fog`).
 const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, headX: -8.11, dist: [17, 23], y: [3.0, 7.0],
-                speed: [1.2, 1.7], first: [90, 240], gap: [360, 900], stroke: 5.0, fog: 0.6 };
+                speed: [1.2, 1.7], debounce: [30, 60], stroke: 5.0, fog: 0.6 };
 // the sand height under a tile (a CPU copy of the large features of dunes())
 const sandAt = (x, z) => -0.05 + 0.9 * smooth(Math.min(1, Math.max(0, (z - 12) / 33))) + 0.5 * smooth(Math.min(1, Math.max(0, (-5 - x) / 11))) * smooth(Math.min(1, Math.max(0, (z - 4) / 12)));
 const VENTS = [[1.3, 0.0, 7.2], [-2.6, 0.0, 11.5], [5.1, 0.0, 13.0], [3.4, 0.0, 9.0], [-0.6, 0.0, 16.0]];   // bubble streams (y filled from the floor)
@@ -1109,7 +1110,7 @@ function floorAt(x, z) {                                   // the sand, or the h
 if (gl) loadReef().catch(e => console.warn('reef not loaded:', e.message));
 
 /* ------------------------------ the whale: load, schedule, path ------------------------------ */
-const whale = { ready: false, active: false, next: 0 };
+const whale = { ready: false, active: false, due: Infinity, prev: null };
 const rr = ([a, b]) => a + (b - a) * rnd();
 async function loadWhale() {
   const m = await readGLB(WHALE.url, true);
@@ -1119,7 +1120,6 @@ async function loadWhale() {
   gl.generateMipmap(gl.TEXTURE_2D);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   whale.tex = tex;
-  whale.next = sceneTime + rr(WHALE.first);
   whale.ready = true;
 }
 if (gl) loadWhale().catch(e => console.warn('whale not loaded:', e.message));
@@ -1183,10 +1183,14 @@ function startWhale() {                                    // a pass: in from on
 }
 function updateWhale() {
   if (!whale.ready) return;
-  if (!whale.active && sceneTime >= whale.next) startWhale();
+  // Claude finished something: any slot (or the sky) newly in clearing → (re)arm the debounce
+  const now5 = [stateName, ...effectiveSlots()];
+  if (whale.prev && now5.some((st, i) => st === "clearing" && whale.prev[i] !== "clearing")) whale.due = sceneTime + rr(WHALE.debounce);
+  whale.prev = now5;
+  if (sceneTime >= whale.due) { whale.due = Infinity; if (!whale.active) startWhale(); }
   if (!whale.active) return;
   const k = (sceneTime - whale.t0) / whale.dur;
-  if (k >= 1) { whale.active = false; whale.next = sceneTime + rr(WHALE.gap); return; }
+  if (k >= 1) { whale.active = false; return; }
   const x = whale.x0 + (whale.x1 - whale.x0) * k;
   const y = whale.y0 + 0.8 * Math.sin(k * 3.1 + whale.bob) + 0.2 * Math.sin(sceneTime * 2 * Math.PI / WHALE.stroke * 0.5);
   const z = whale.z + whale.dz * (k - 0.5);
