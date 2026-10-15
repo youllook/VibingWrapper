@@ -58,6 +58,9 @@ const DEBOUNCE_MS = 300;
 const POLL_MS = 1000;
 const CAM = { pos: [0, 1.1, 0], pitch: 0.20, vfov: 0.85 };
 const SURF = 9.0;                            // the surface, metres above the sand datum
+// how fast the light moves (user, 2026-10-15: "too fast, like a time-lapse" â†’ about half): god rays drifting,
+// caustics flowing (floor, reef, jellies, whale), the surface ripples and its light net. 1 = the first version.
+const LIGHT_SPEED = { rays: 0.45, caustics: 0.5, surface: 0.55 };
 
 const PARAMS = {
   turbidity:  [0, 1],                        // murk: shorter visibility, more marine snow
@@ -227,6 +230,7 @@ uniform int uNRocks, uSteps;
 uniform float uSurgeK;                     // overall surge strength (state, waiting stills it)
 uniform vec4 uRocks[${ROCKS.length}];
 const float SURF = ${SURF.toFixed(2)};
+const float LS_RAYS = ${LIGHT_SPEED.rays.toFixed(3)}, LS_CAUSTICS = ${LIGHT_SPEED.caustics.toFixed(3)}, LS_SURFACE = ${LIGHT_SPEED.surface.toFixed(3)};
 #define saturate(x) clamp(x, 0.0, 1.0)
 uvec2 pcg2d(uvec2 v) {
   v = v * 1664525u + 1013904223u; v.x += v.y * 1664525u; v.y += v.x * 1664525u; v ^= v >> 16u;
@@ -291,7 +295,7 @@ float surge(float x, float z) {             // signed: + the push downstream, âˆ
   return clamp(v * env * uSurgeK * 1.6, -1.0, 1.0);
 }
 float shaft(vec2 q) {                       // the god-ray pattern on the surface (shared: rays pass, jellies)
-  vec2 dr = vec2(uTime * 0.05, -uTime * 0.03) * (1.0 + uChop) + uFlow * 0.15;
+  vec2 dr = (vec2(uTime * 0.05, -uTime * 0.03) * (1.0 + uChop) + uFlow * 0.15) * LS_RAYS;
   float n = noise(q * 0.32 + dr) * 0.65 + noise(q * 0.9 - dr * 1.7 + 7.0) * 0.35;
   return pow(smoothstep(0.42, 0.86, n), 2.0);
 }
@@ -386,7 +390,7 @@ void main() {
     vec3 alb = B.rgb; float ao = B.a;
     vec3 down = downwell(p.y);
     float ndl = saturate(dot(N, -uLd));
-    float ca = caustic(p.xz * 0.85 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop));
+    float ca = caustic(p.xz * 0.85 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop) * LS_CAUSTICS);
     vec3 direct = down * ndl * (0.22 + 1.5 * ca * uCaust);
     vec3 amb = (uUpC * 1.1 + uDeep * 0.3) * (0.45 + 0.55 * N.y) * uBright * (1.0 + 2.5 * uNight * step(1.5, abs(A.w)));   // the reef keeps its shape at night
     col = alb * (direct + amb) * ao;
@@ -395,7 +399,7 @@ void main() {
     float ts = (SURF - ro.y) / rd.y;
     vec2 q = ro.xz + rd.xz * ts;
     // rippled underside of the surface
-    float k = 0.30 + 0.55 * uChop, sp = 0.25 + 0.5 * uChop;
+    float k = 0.30 + 0.55 * uChop, sp = (0.25 + 0.5 * uChop) * LS_SURFACE;
     vec2 g = vec2(noise(q * 0.9 + vec2(uTime * sp, 0.0)) - noise(q * 0.9 + vec2(0.37, 0.0) + vec2(uTime * sp, 0.0)),
                   noise(q * 0.9 + vec2(0.0, uTime * sp * 0.7)) - noise(q * 0.9 + vec2(0.0, 0.37) + vec2(0.0, uTime * sp * 0.7)));
     g += 0.5 * vec2(noise(q * 2.3 - uTime * sp * 1.3) - noise(q * 2.3 + vec2(0.2, 0) - uTime * sp * 1.3),
@@ -406,7 +410,7 @@ void main() {
     vec3 skyC = uLsurf * 0.55 * uBright;
     vec3 refl = water(reflect(rd, n)) * 0.7;
     vec3 sc = mix(refl, skyC, window);
-    sc += uLsurf * caustic(q * 0.30, uTime * (0.6 + 0.6 * uChop)) * 0.10 * uBright;
+    sc += uLsurf * caustic(q * 0.30, uTime * (0.6 + 0.6 * uChop) * LS_SURFACE) * 0.10 * uBright;
     col = fogW(sc, ts, rd);
   } else {
     col = water(rd);
@@ -452,7 +456,7 @@ void main() {
   vec3 alb = texture(uTex, vUV).rgb;
   vec3 down = downwell(vW.y);
   float wrap = saturate(dot(N, -uLd) * 0.5 + 0.5);
-  float ca = caustic(vW.xz * 0.6 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop));
+  float ca = caustic(vW.xz * 0.6 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop) * LS_CAUSTICS);
   vec3 light = down * (0.20 + 0.80 * wrap) * (0.8 + 0.8 * ca * uCaust * saturate(N.y)) + (uUpC * 1.2 + uDeep * 0.4) * uBright;
   vec3 col = alb * light;
   float d = length(uCamPos - vW);
@@ -558,7 +562,7 @@ vec3 trail(float s, float lag, float L) {   // where this part of a trailing str
 }
 vec3 shadeJelly(vec3 W, vec3 N, vec3 V, float aBody, float tintA, float whiteA, out float alpha) {
   vec3 down = downwell(W.y);
-  float ca = caustic(W.xz * 0.85 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop));
+  float ca = caustic(W.xz * 0.85 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop) * LS_CAUSTICS);
   float wrap = saturate(dot(N, -uLd) * 0.5 + 0.5);
   float top = saturate(N.y);
   vec3 light = down * (0.25 + 0.75 * wrap) * (0.6 + 1.6 * ca * uCaust * top) + (uUpC * 1.3 + uDeep * 0.4) * uBright;   // the light net runs over the bell's back
