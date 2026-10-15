@@ -8,7 +8,8 @@
     "start": "electron .",
     "icon": "node scripts/make-icon.js",
     "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1",
-    "dist": "electron-builder --win zip"
+    "dist": "electron-builder --win zip",
+    "dist:lite": "node scripts/dist-lite.js"
   },
   "devDependencies": {
     "electron": "^44.4.5",
