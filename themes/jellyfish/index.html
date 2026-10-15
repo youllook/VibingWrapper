@@ -103,7 +103,11 @@ const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, 
                 below: 3.44, above: 2.93,              // the scaled model reaches this far below (fin tips) / above its centre, m
                 // "near" (user, 2026-10-15: "right in front of the screen, like a giant monster going by"): bigger than the
                 // frame, its belly and pectoral fins sweeping overhead; "far": a shape crossing the haze
-                mode: 'near',
+                mode: 'bottom',
+                // 'bottom' (user, 2026-10-15: "move it to the bottom of the screen, showing its upper half", then "higher, a bit
+                // further, and not so sudden"): 4.6–5.6 m away, its back reaching ~60% up the frame, the rest below the bottom
+                // edge; it comes out of the haze and goes back into it; nothing of it is drawn under the sand
+                bottom: { dist: [4.6, 5.6], backAt: 0.60, speed: [0.7, 0.95], bob: 0.25, dz: 0.4, fade: 0.18 },   // fade: share of the pass spent coming out of / going back into the haze
                 near: { dist: [5.5, 8.0], y: [4.0, 4.8], speed: [0.9, 1.25], bob: 0.3, dz: 1.0 },
                 far:  { dist: [17, 23],   y: [4.0, 5.5], speed: [1.2, 1.7],  bob: 0.6, dz: 6.0 } };
 // the sand height under a tile (a CPU copy of the large features of dunes())
@@ -452,10 +456,11 @@ void main() {
 }`;
 const FS_WHALE = COMMON + `
 uniform sampler2D uTex;
-uniform float uWFog;
+uniform float uWFog, uWFade;
 in vec3 vW, vN; in vec2 vUV;
 out vec4 o;
 void main() {
+  if (vW.y < seabed(vW.xz) - 0.02) discard;                // under the sand: not drawn (the sand writes no depth)
   vec3 V = normalize(uCamPos - vW), N = normalize(vN);
   if (dot(N, V) < 0.0) N = -N;
   vec3 alb = texture(uTex, vUV).rgb;
@@ -467,7 +472,7 @@ void main() {
   float d = length(uCamPos - vW);
   col += water(-V) * pow(1.0 - abs(dot(N, V)), 3.0) * (0.5 + 2.0 * uNight);   // a soft edge against the water (reads at night)
   vec3 T = exp(-uSigma * d * uWFog * (1.0 - 0.35 * uNight));  // a shape in the haze, not lost in it
-  o = vec4(col * T + water(-V) * (1.0 - T), 1.0);
+  o = vec4(mix(water(-V), col * T + water(-V) * (1.0 - T), uWFade), 1.0);   // out of the haze at the start, back into it at the end
 }`;
 
 /* ---------- sea fireflies: blue-green sparks where the water is disturbed (CPU pool → points) ---------- */
@@ -1193,6 +1198,13 @@ function startWhale() {                                    // a pass: in from on
   // no clipping: the fin tips stay clear of the reef along the whole path (body half-width ~3 m), the back under the surface
   let reefTop = 0;
   for (let x = -half; x <= half; x += 0.5) for (const oz of [-3, -1.5, 0, 1.5, 3]) reefTop = Math.max(reefTop, floorAt(x, z + oz));
+  if (WHALE.mode === 'bottom') {                        // place it by the frame: its back at backAt of the screen height
+    const yb = CAM.pos[1] + z * Math.tan(CAM.pitch - CAM.vfov / 2), yt = CAM.pos[1] + z * Math.tan(CAM.pitch + CAM.vfov / 2);
+    const y0b = yb + M.backAt * (yt - yb) - WHALE.above;
+    Object.assign(whale, { active: true, dir, z, y0: y0b, bobA: M.bob, x0: -dir * half, x1: dir * half, t0: sceneTime, dur: 2 * half / rr(M.speed),
+                           bob: rnd() * 6.28, dz: (rnd() - 0.5) * M.dz, phase0: rnd() * 6.28 });
+    return;
+  }
   // (near: the back may rise past the surface — at 5–8 m that height is above the top of the frame, and the reef is tall)
   const lo = reefTop + WHALE.below + M.bob + 0.2 + 0.55, hi = (WHALE.mode === 'near' ? SURF + 2.0 : SURF) - WHALE.above - M.bob - 0.3 - 0.55;
   const y0 = Math.min(hi, Math.max(lo, rr(M.y)));
@@ -1743,6 +1755,8 @@ function render(sk) {
     gl.uniform1f(u.uWScale, WHALE.length / WHALE.modelLen);
     gl.uniform1f(u.uWPhase, sceneTime * 2 * Math.PI / WHALE.stroke + whale.phase0); gl.uniform1f(u.uWAmp, 0.55);
     gl.uniform1f(u.uWFog, WHALE.fog);
+    const fk = (sceneTime - whale.t0) / whale.dur, fd = (WHALE[WHALE.mode] || {}).fade || 0;
+    gl.uniform1f(u.uWFade, fd > 0 ? smooth(Math.min(1, fk / fd)) * smooth(Math.min(1, (1 - fk) / fd)) : 1);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, whale.tex); gl.uniform1i(u.uTex, 0);
     gl.bindVertexArray(whale.vao); gl.drawElements(gl.TRIANGLES, whale.count, gl.UNSIGNED_INT, 0); gl.bindVertexArray(vao);
   }
