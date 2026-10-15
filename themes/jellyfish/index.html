@@ -35,8 +35,8 @@
  *    reflection of the dark water elsewhere.
  *  - Sea floor: a heightfield (fbm dunes, a far rise, rocks as noisy domes) ray-marched per pixel, sand ripples,
  *    animated caustics (two layers of moving-point Worley edges, domain-warped).
- *  - Eelgrass: instanced ribbon blades (gl_VertexID, no buffers), each bent along a circular arc by the current and
- *    a slow sway; lit per vertex.
+ *  - The reef: one photogrammetry scan of an Okinawa reef (Sketchfab, CC BY, see README) laid down nine times over the
+ *    floor, rasterised into the floor G-buffer once; a low-poly proxy goes into the depth buffer every frame.
  *  - Moon jellies: the bell is a surface of revolution driven by a pulse curve (fast contraction, slower relaxation,
  *    a rest), the contraction travels from the apex to the margin; body physics on the CPU (thrust from the
  *    contraction, drag, slight negative buoyancy, steering toward a wandering home). The oral arms and the marginal
@@ -61,7 +61,7 @@ const SURF = 9.0;                            // the surface, metres above the sa
 
 const PARAMS = {
   turbidity:  [0, 1],                        // murk: shorter visibility, more marine snow
-  current:    [0, 1],                        // water flow: grass lean, drift, particles
+  current:    [0, 1],                        // water flow: drift, particles, jellies
   shafts:     [0, 1],                        // god-ray strength
   caustics:   [0, 1],                        // caustic strength on the sand / jellies
   chop:       [0, 1],                        // surface agitation (faster, harder ripples and caustics)
@@ -70,35 +70,35 @@ const PARAMS = {
   beacon:     [0, 1],                        // 等你 star
 };
 const STATES = {
-  clear:    { turbidity: 0.25, current: 0.12, shafts: 0.70, caustics: 0.75, chop: 0.25, bubbles: 0.15, brightness: 1.00, beacon: 0 },
-  overcast: { turbidity: 0.60, current: 0.35, shafts: 0.40, caustics: 0.40, chop: 0.40, bubbles: 0.30, brightness: 0.92, beacon: 0 },
+  clear:    { turbidity: 0.25, current: 0.12, shafts: 0.70, caustics: 0.75, chop: 0.25, bubbles: 0.50, brightness: 1.00, beacon: 0 },
+  overcast: { turbidity: 0.60, current: 0.35, shafts: 0.40, caustics: 0.40, chop: 0.40, bubbles: 0.60, brightness: 0.92, beacon: 0 },
   storm:    { turbidity: 0.75, current: 1.00, shafts: 0.45, caustics: 0.55, chop: 1.00, bubbles: 1.00, brightness: 0.90, beacon: 0 },
-  clearing: { turbidity: 0.15, current: 0.08, shafts: 1.00, caustics: 1.00, chop: 0.30, bubbles: 0.20, brightness: 1.00, beacon: 0 },
-  waiting:  { turbidity: 0.30, current: 0.00, shafts: 0.55, caustics: 0.50, chop: 0.10, bubbles: 0.00, brightness: 0.82, beacon: 1 },
+  clearing: { turbidity: 0.15, current: 0.08, shafts: 1.00, caustics: 1.00, chop: 0.30, bubbles: 0.55, brightness: 1.00, beacon: 0 },
+  waiting:  { turbidity: 0.30, current: 0.00, shafts: 0.55, caustics: 0.50, chop: 0.10, bubbles: 0.30, brightness: 0.82, beacon: 1 },
 };
 const KEYS = { '1': 'clear', '2': 'overcast', '3': 'storm', '4': 'clearing', '5': 'waiting' };
 
-/* ------------------------------ the floor: rocks and eelgrass meadows ------------------------------ */
-// rocks: [x, z, radius, height]; the left third (desktop icons) stays calm and low
-const ROCKS = [[-4.6, 6.4, 0.95, 0.55], [-3.5, 7.3, 0.55, 0.35], [3.9, 5.4, 0.70, 0.42], [6.2, 10.0, 1.50, 0.95],
-               [-8.5, 15.0, 2.20, 1.30], [1.9, 8.8, 0.40, 0.22]];
-// seagrass beds: [x, z, radius, leaf scale]. Shoots are shared out by on-screen area (∝ area / distance²), so the
-// near beds read as a dense carpet and the far ones cost little; the open sand in the middle keeps the caustics
-const CLUSTERS = [[-3.9, 5.2, 2.30, 1.00], [4.4, 5.6, 2.50, 1.10], [7.8, 10.5, 3.20, 1.15], [-6.8, 10.5, 3.20, 1.10],
-                  [1.2, 14.5, 3.60, 1.05], [-3.2, 18.5, 4.20, 1.00],
-                  [7.2, 19.0, 4.20, 1.00], [-11.0, 16.0, 4.20, 1.00], [12.5, 13.5, 3.20, 1.05]];
-const LEAVES = 6;                            // leaves per shoot, fanning from one point
-const SHOOTS = 3000;
-const BLADES = SHOOTS * LEAVES;
-const GRASS_SEG = 6;
-const clusterStart = (() => {                // cumulative shoot counts per bed
-  const w = CLUSTERS.map(([x, z, r]) => Math.PI * r * r / Math.max(9, x * x + z * z));
-  const sum = w.reduce((a, b) => a + b, 0);
-  const out = [0];
-  w.forEach(v => out.push(out[out.length - 1] + v / sum * SHOOTS));
-  return new Float32Array(out.map(Math.round));
-})();
-const VENTS = [[1.3, 0.0, 7.2], [-2.6, 0.0, 11.5], [5.1, 0.0, 13.0]];   // bubble streams (y filled from the floor)
+/* ------------------------------ the floor ------------------------------ */
+// rocks: [x, z, radius, height] (kept as a hook in seabed())
+const ROCKS = [[0.0, -300.0, 0.1, 0.0]];          // 2026-10-15: the procedural rock domes are gone (the scanned reef covers the floor)
+const REEF = { url: 'assets/reef_okinawa.glb', proxy: 'assets/reef_okinawa_proxy.glb', sink: 0.12, gain: 1.7 };
+// 2026-10-15 (user: "大範圍鋪滿"): the one scan (≈ 9.7 × 17 m) laid down many times, overlapping, each turned and
+// scaled differently so the repeat does not read; [x, z, yaw (rad), scale, lift (m)]. The long side runs across
+// (yaw ≈ ±π/2) so a row is ~15–19 m wide; rows at ~8, ~18 and ~29 m, the far ones lost in the haze.
+const REEF_TILES = [
+  [-5.5, 8.0, 1.62, 0.90, 0.00], [7.5, 8.5, -1.45, 0.92, 0.05],
+  [-13.0, 17.5, -1.70, 1.00, 0.10], [1.5, 18.5, 1.48, 1.05, 0.00], [16.0, 17.0, -1.55, 1.00, 0.08],
+  [-22.0, 29.0, 1.60, 1.15, 0.15], [-5.0, 30.0, -1.52, 1.20, 0.05], [12.0, 29.5, 1.66, 1.15, 0.10], [28.0, 28.0, -1.60, 1.10, 0.10],
+];
+// 2026-10-15 (user: "a big whale gliding past in the background now and then"): humpbacks winter in Okinawa
+// (Kerama, Jan–Mar). "High-Poly Humbpack Whale" by K9239 (Sketchfab, CC BY 4.0), body only, 2K texture.
+// The model is 16.1 m along x with the head at −x; scaled to a 14 m adult. It crosses far behind the jellies,
+// every 6–15 min at a random time, half-hidden in the haze (its water extinction is scaled by `fog`).
+const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, headX: -8.11, dist: [17, 23], y: [3.0, 7.0],
+                speed: [1.2, 1.7], first: [90, 240], gap: [360, 900], stroke: 5.0, fog: 0.6 };
+// the sand height under a tile (a CPU copy of the large features of dunes())
+const sandAt = (x, z) => -0.05 + 0.9 * smooth(Math.min(1, Math.max(0, (z - 12) / 33))) + 0.5 * smooth(Math.min(1, Math.max(0, (-5 - x) / 11))) * smooth(Math.min(1, Math.max(0, (z - 4) / 12)));
+const VENTS = [[1.3, 0.0, 7.2], [-2.6, 0.0, 11.5], [5.1, 0.0, 13.0], [3.4, 0.0, 9.0], [-0.6, 0.0, 16.0]];   // bubble streams (y filled from the floor)
 
 /* ------------------------------ state machine (same as the other themes) ------------------------------ */
 const smooth = t => t * t * (3 - 2 * t);
@@ -190,6 +190,13 @@ function dirFromNdc(x, y, th = tanHalf) {
   return d.map(v => v / l);
 }
 const TAN_169 = [Math.tan(CAM.vfov / 2) * 16 / 9, Math.tan(CAM.vfov / 2)];
+function toScreen(p) {                         // world → screen (0..1, y down) on a 16:9 frame; null behind the camera
+  const r = [p[0] - CAM.pos[0], p[1] - CAM.pos[1], p[2] - CAM.pos[2]];
+  const w = r[0] * cam.fwd[0] + r[1] * cam.fwd[1] + r[2] * cam.fwd[2];
+  if (w < 0.1) return null;
+  return [0.5 + 0.5 * (r[0] * cam.right[0] + r[1] * cam.right[1] + r[2] * cam.right[2]) / (w * TAN_169[0]),
+          0.5 - 0.5 * (r[0] * cam.up[0] + r[1] * cam.up[1] + r[2] * cam.up[2]) / (w * TAN_169[1])];
+}
 function fromScreen(sx, sy, dist) {             // a world point at screen position (0..1, y down) on a 16:9 frame
   const d = dirFromNdc(sx * 2 - 1, (1 - sy) * 2 - 1, TAN_169);
   return d.map((v, i) => CAM.pos[i] + v * dist);
@@ -215,7 +222,7 @@ uniform vec3 uSigma, uSigK;        // view extinction, down-welling extinction (
 uniform float uCaust, uShafts, uTurb, uChop, uNight, uBright, uCurrent;
 uniform vec2 uFlow;                // integrated flow offset (m), for drifting patterns
 uniform int uNRocks, uSteps;
-uniform vec4 uClustersBG[${CLUSTERS.length}];       // loop bounds as uniforms: keeps the compiler from unrolling (compile time)
+uniform float uSurgeK;                     // overall surge strength (state, waiting stills it)
 uniform vec4 uRocks[${ROCKS.length}];
 const float SURF = ${SURF.toFixed(2)};
 #define saturate(x) clamp(x, 0.0, 1.0)
@@ -273,6 +280,19 @@ float caustic(vec2 p, float t) {
   }
   return c;
 }
+// the current comes in waves: every ~10 s a surge rolls in from the left (1.6 m/s), some light, some heavy
+float surge(float x, float z) {             // signed: + the push downstream, − the weaker backflow
+  float tt = uTime - (x - 0.25 * z) / 1.6;
+  float w = sin(0.60 * tt + 0.8 * sin(0.137 * tt));
+  float env = 0.30 + 0.70 * (0.5 + 0.5 * sin(0.071 * tt + 1.7)) * (0.6 + 0.4 * sin(0.043 * tt + 0.4));
+  float v = w > 0.0 ? w * w * w : 0.4 * w * w * w;
+  return clamp(v * env * uSurgeK * 1.6, -1.0, 1.0);
+}
+float shaft(vec2 q) {                       // the god-ray pattern on the surface (shared: rays pass, jellies)
+  vec2 dr = vec2(uTime * 0.05, -uTime * 0.03) * (1.0 + uChop) + uFlow * 0.15;
+  float n = noise(q * 0.32 + dr) * 0.65 + noise(q * 0.9 - dr * 1.7 + 7.0) * 0.35;
+  return pow(smoothstep(0.42, 0.86, n), 2.0);
+}
 vec3 water(vec3 rd) {                       // in-scattered water colour along a view direction
   vec3 c = mix(uDeep, uUpC, smoothstep(-0.55, 0.85, rd.y));
   c += uUpC * pow(saturate(dot(rd, -uLd)), 5.0) * 0.9;
@@ -283,6 +303,11 @@ vec3 downwell(float y) { return uLsurf * exp(-uSigK * max(SURF - y, 0.0)) * uBri
 vec3 rayDir(vec2 fc) {
   vec2 ndc = fc / uRes * 2.0 - 1.0;
   return normalize(uFwd + uRight * ndc.x * uTanHalf.x + uUp * ndc.y * uTanHalf.y);
+}
+float depthOf(float t, vec3 rd) {           // window depth of a point at distance t along rd (same projection as proj())
+  float w = max(t * dot(rd, uFwd), 0.06);
+  const float n = 0.05, f = 150.0;
+  return 0.5 * ((w * (f + n) - 2.0 * f * n) / (f - n)) / w + 0.5;
 }
 vec4 proj(vec3 p) {
   vec3 r = p - uCamPos;
@@ -328,7 +353,8 @@ void main() {
   vec3 ro = uCamPos, rd = rayDir(gl_FragCoord.xy);
 #ifdef BAKE
   float t = marchFloor(ro, rd);
-  if (t <= 0.0) { oA = vec4(-1.0, 0.0, 0.0, 0.0); oB = vec4(0.0); return; }
+  if (t <= 0.0) { oA = vec4(-1.0, 0.0, 0.0, 0.0); oB = vec4(0.0); gl_FragDepth = 1.0; return; }
+  gl_FragDepth = depthOf(t, rd);
   {
     vec3 p = ro + rd * t;
     float e = 0.015 + 0.002 * t;
@@ -343,9 +369,6 @@ void main() {
     vec3 stone = mix(vec3(0.20, 0.21, 0.20), vec3(0.16, 0.22, 0.12), smoothstep(0.4, 0.8, noise(p.xz * 3.0 + 2.0)));
     stone *= 0.7 + 0.5 * noise(p.xz * 18.0);
     vec3 alb = mix(sand, stone, rock);
-    float bed = 0.0;                                       // darker, detritus-covered sand under the beds
-    for (int i = 0; i < ${CLUSTERS.length}; i++) { vec4 C = uClustersBG[i]; bed = max(bed, smoothstep(1.05, 0.55, length(p.xz - C.xy) / C.z)); }
-    alb = mix(alb, vec3(0.16, 0.15, 0.09) * (0.7 + 0.6 * noise(p.xz * 9.0)), bed * 0.85 * (1.0 - rock));
     float ao = mix(1.0, 0.55 + 0.45 * smoothstep(-0.1, 0.25, hd - hr + 0.3), 1.0 - rock) * (0.75 + 0.25 * N.y);
     oA = vec4(t, N.x, N.z, rock); oB = vec4(alb, ao);
   }
@@ -357,7 +380,7 @@ void main() {
   if (t > 0.0) {
     vec4 B = texelFetch(uGB, px, 0);
     vec3 p = ro + rd * t;
-    vec3 N = vec3(A.y, sqrt(max(0.0, 1.0 - A.y * A.y - A.z * A.z)), A.z);
+    vec3 N = vec3(A.y, (A.w < 0.0 ? -1.0 : 1.0) * sqrt(max(0.0, 1.0 - A.y * A.y - A.z * A.z)), A.z);   // A.w < 0: a reef face looking down
     vec3 alb = B.rgb; float ao = B.a;
     vec3 down = downwell(p.y);
     float ndl = saturate(dot(N, -uLd));
@@ -390,121 +413,90 @@ void main() {
 #endif
 }`;
 
-/* ---------- heightmap of the sea floor (baked once; the grass samples it) ---------- */
-const HMAP = { n: 512, x0: -19, x1: 19, z0: -1, z1: 37 };
-const FS_HMAP = COMMON + `
-out vec4 o;
+/* ---------- the whale: opaque, depth-tested, a vertical body wave (whales stroke up and down) ---------- */
+const VS_WHALE = COMMON + `
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNrm;
+layout(location = 2) in vec2 aUV;
+uniform vec3 uWPos, uWX, uWY, uWZ;          // world position, world directions of the model's x / y / z
+uniform float uWScale, uWPhase, uWAmp;
+out vec3 vW, vN; out vec2 vUV;
 void main() {
-  vec2 uv = gl_FragCoord.xy / ${HMAP.n.toFixed(1)};
-  vec2 p = vec2(mix(${HMAP.x0.toFixed(1)}, ${HMAP.x1.toFixed(1)}, uv.x), mix(${HMAP.z0.toFixed(1)}, ${HMAP.z1.toFixed(1)}, uv.y));
-  o = vec4(seabed(p), 0.0, 0.0, 1.0);
+  vec3 p = aPos;
+  float u = clamp((p.x - (${WHALE.headX.toFixed(2)})) / ${WHALE.modelLen.toFixed(2)}, 0.0, 1.0);   // 0 head … 1 flukes
+  // the tail beats up and down; the wave runs backward, grows toward the flukes; the head answers a little
+  float tail = pow(smoothstep(0.30, 1.0, u), 2.0);
+  float dy = uWAmp * (tail * sin(uWPhase - u * 3.2) - 0.06 * (1.0 - u) * sin(uWPhase + 0.6));
+  // the long pectoral fins row slowly
+  float fin = smoothstep(1.1, 3.0, abs(p.z)) * (1.0 - smoothstep(0.55, 0.75, u));
+  dy += fin * 0.22 * (abs(p.z) - 1.1) * sin(uWPhase * 0.5 + 1.2);
+  p.y += dy;
+  // bend the normal along with the tail (slope of the wave)
+  float slope = uWAmp * tail * cos(uWPhase - u * 3.2) * -3.2 / ${WHALE.modelLen.toFixed(2)};
+  vec3 n = normalize(aNrm + vec3(-slope * aNrm.y, 0.0, 0.0));
+  vW = uWPos + (uWX * p.x + uWY * p.y + uWZ * p.z) * uWScale;
+  vN = uWX * n.x + uWY * n.y + uWZ * n.z;
+  vUV = aUV;
+  gl_Position = proj(vW);
 }`;
-
-/* ---------- seagrass: shoots of flat ribbon leaves ---------- */
-const VS_GRASS = COMMON + `
-uniform vec4 uClusters[${CLUSTERS.length}];
-uniform float uClusterStart[${CLUSTERS.length + 1}];
-uniform sampler2D uHmap;
-centroid out vec3 vW, vN; centroid out vec2 vUV; centroid out vec4 vH; centroid out float vCa;   // centroid: no MSAA extrapolation
-float floorH(vec2 p) { return texture(uHmap, (p - vec2(${HMAP.x0.toFixed(1)}, ${HMAP.z0.toFixed(1)})) / vec2(${(HMAP.x1 - HMAP.x0).toFixed(1)}, ${(HMAP.z1 - HMAP.z0).toFixed(1)})).r; }
-const int SEG = ${GRASS_SEG}, LEAVES = ${LEAVES};
-void main() {
-  int blade = gl_VertexID / (SEG * 6), k = gl_VertexID % (SEG * 6);
-  int seg = k / 6, c = k % 6;
-  int cx = (c == 1 || c == 3 || c == 4) ? 1 : 0;
-  int cy = (c == 2 || c == 4 || c == 5) ? 1 : 0;
-  int shoot = blade / LEAVES, leaf = blade % LEAVES;
-  int ci = 0;
-  for (int i = 1; i < ${CLUSTERS.length}; i++) if (float(shoot) >= uClusterStart[i]) ci = i;
-  vec4 C = uClusters[ci];
-  vec2 hs = hash22(vec2(float(shoot), 11.0)), hs2 = hash22(vec2(float(shoot), 29.0));
-  vec2 hl = hash22(vec2(float(blade), 23.0)), hl2 = hash22(vec2(float(blade), 41.0));
-  // shoot position: denser toward the middle of the bed, a ragged edge
-  float rr = pow(hs.x, 0.62) * C.z * (0.85 + 0.3 * noise(vec2(hs.y * 6.0, float(ci)) * 3.0)), ang = hs.y * 6.2831853;
-  vec2 base = C.xy + rr * vec2(cos(ang), sin(ang));
-  float edge = 1.0 - 0.5 * pow(rr / C.z, 2.5);
-  // the fan: outer leaves longer and leaning out further, the inner ones young and upright
-  float li = float(leaf) - float(LEAVES - 1) * 0.5;
-  float outer = abs(li) / (float(LEAVES - 1) * 0.5);
-  float L = C.w * edge * (0.55 + 0.55 * hs2.x) * (0.60 + 0.40 * outer) * (0.85 + 0.3 * hl.x);
-  float W = 0.0105 * (0.75 + 0.5 * hl.y) * (0.85 + 0.15 * C.w);
-  float s = float(seg + cy) / float(SEG);
-  // bending direction: the fan spread, combed toward the current (+x)
-  float yaw0 = hs2.y * 6.2831853 + li * 0.42;
-  vec2 fan = vec2(cos(yaw0), sin(yaw0));
-  vec2 bd = normalize(mix(fan, vec2(1.0, 0.18), 0.35 + 0.5 * uCurrent));
-  // monami: the whole meadow moves in long travelling waves, plus a little flutter per leaf
-  float wave = sin(dot(base, vec2(1.05, 0.30)) - uTime * (0.75 + 0.9 * uCurrent));
-  float wave2 = sin(dot(base, vec2(0.37, -0.81)) * 1.7 - uTime * 0.53 + 1.3);
-  float a = 0.45 + 0.75 * outer + 0.30 * hl2.x + uCurrent * 1.0
-          + (0.16 + 0.32 * uCurrent) * (wave * 0.75 + wave2 * 0.25)
-          + 0.05 * sin(uTime * 1.9 + hl.x * 40.0 + s * 3.0);
-  a = clamp(a, -0.6, 2.3);
-  float as = a * s, x, y;
-  if (abs(a) < 1e-3) { x = 0.0; y = L * s; } else { x = L * (1.0 - cos(as)) / a; y = L * sin(as) / a; }
-  vec3 tang = normalize(vec3(bd.x * sin(as), cos(as), bd.y * sin(as)));
-  // flat ribbon, twisting along its length
-  float tw = (hl.x - 0.5) * 1.0 + s * (hl2.y - 0.5) * 2.6;
-  vec3 side0 = vec3(-bd.y, 0.0, bd.x), bin = cross(side0, tang);
-  vec3 side = side0 * cos(tw) + bin * sin(tw);
-  float w = W * (1.0 - 0.75 * pow(s, 4.0)) * (cy == 1 && seg == SEG - 1 ? 0.35 : 1.0);
-  vec3 P = vec3(base.x, floorH(base) - 0.03, base.y) + vec3(bd.x * x, y, bd.y * x);
-  // never thinner than ~1.4 px: sub-pixel leaves shimmer against the bright sand
-  float pxm = 2.0 * uTanHalf.y * max(dot(P - uCamPos, uFwd), 0.1) / uRes.y;
-  w = max(w, 0.7 * pxm * (1.0 - 0.5 * s));
-  P += side * w * (float(cx) * 2.0 - 1.0);
-  P.y = max(P.y, floorH(P.xz) + 0.004);                 // drooping tips lie on the sand, not under it
-  gl_Position = proj(P);
-  vW = P; vN = normalize(cross(side, tang)); vUV = vec2(float(cx) * 2.0 - 1.0, s);
-  vH = vec4(hs2.x, hl.x, hl.y, outer);
-  vCa = caustic(P.xz * 0.85 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop));   // per vertex: cheap, and the leaves are thin
-}`;
-const FS_GRASS = COMMON + `
-centroid in vec3 vW, vN; centroid in vec2 vUV; centroid in vec4 vH; centroid in float vCa;
+const FS_WHALE = COMMON + `
+uniform sampler2D uTex;
+uniform float uWFog;
+in vec3 vW, vN; in vec2 vUV;
 out vec4 o;
 void main() {
   vec3 V = normalize(uCamPos - vW), N = normalize(vN);
-  if (dot(N, V) < 0.0) N = -N;                            // two-sided ribbon: shade the face we see
-  float s = saturate(vUV.y);                              // MSAA samples outside the triangle extrapolate (pow of a negative = NaN)
-  // leaf colour: per-leaf hue (fresh green … olive), browned old tips on the outer leaves, epiphyte speckles
-  vec3 fresh = mix(vec3(0.045, 0.150, 0.030), vec3(0.120, 0.210, 0.035), vH.y);
-  vec3 olive = vec3(0.090, 0.110, 0.035);
-  vec3 alb = mix(fresh, olive, smoothstep(0.4, 1.0, vH.z) * 0.7);
-  float old = vH.w * step(0.35, vH.x);
-  float dead = smoothstep(0.50 + 0.35 * vH.y, 0.80 + 0.25 * vH.y, s) * old;
-  alb = mix(alb, vec3(0.14, 0.095, 0.040), dead);
-  float sp = smoothstep(0.70, 0.80, noise(vec2(vUV.x * 2.2 + vH.y * 91.0, s * 60.0 + vH.x * 37.0)));
-  sp *= saturate(1.0 - 2.0 * fwidth(s * 60.0));                // fade the speckles out before they alias
-  alb = mix(alb, vec3(0.42, 0.42, 0.36), sp * smoothstep(0.25, 0.8, s) * (0.25 + 0.75 * old));
-  alb *= 0.88 + 0.12 * cos(vUV.x * 9.0);                 // longitudinal veins
-  alb *= 1.0 - 0.25 * pow(abs(vUV.x), 6.0);              // darker margins
-  // light: reflection on the lit side, transmission (yellow-green glow) when the light is behind the leaf
+  if (dot(N, V) < 0.0) N = -N;
+  vec3 alb = texture(uTex, vUV).rgb;
   vec3 down = downwell(vW.y);
-  float ca = vCa;
-  float ndl = dot(N, -uLd);
-  float refl = saturate(ndl) * 0.85 + 0.15;
-  float trans = saturate(-ndl) * 0.9;
-  vec3 H = normalize(V - uLd);
-  float spec = pow(saturate(dot(N, H)), 32.0) * 0.03 * (1.0 - dead) * exp(-length(vW - uCamPos) * 0.15);
-  float ao = mix(0.15, 1.0, pow(s, 0.55));               // deep in the meadow is dark
-  vec3 lit = down * (0.45 + 1.4 * ca * uCaust);
-  vec3 col = (alb * refl + alb * vec3(1.3, 1.6, 0.55) * trans) * lit * ao + spec * lit
-           + alb * (uUpC * 1.3 + uDeep * 0.3) * uBright * ao;
-  col = fogW(col, length(vW - uCamPos), -V);
-  o = vec4(col, 1.0);
+  float wrap = saturate(dot(N, -uLd) * 0.5 + 0.5);
+  float ca = caustic(vW.xz * 0.6 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop));
+  vec3 light = down * (0.20 + 0.80 * wrap) * (0.8 + 0.8 * ca * uCaust * saturate(N.y)) + (uUpC * 1.2 + uDeep * 0.4) * uBright;
+  vec3 col = alb * light;
+  float d = length(uCamPos - vW);
+  vec3 T = exp(-uSigma * d * uWFog);                        // half the water's extinction: a shape in the haze, not lost in it
+  o = vec4(col * T + water(-V) * (1.0 - T), 1.0);
+}`;
+
+/* ---------- the reef: rasterised into the floor G-buffer once ---------- */
+const VS_REEF = COMMON + `
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNrm;
+layout(location = 2) in vec2 aUV;
+uniform mat3 uTileR;                       // yaw
+uniform vec4 uTileT;                       // xyz offset, w scale (the mesh is centred on its footprint, base at 0)
+out vec3 vW, vN; out vec2 vUV;
+void main() { vW = uTileR * aPos * uTileT.w + uTileT.xyz; vN = uTileR * aNrm; vUV = aUV; gl_Position = proj(vW); }`;
+const FS_REEF = COMMON + `
+uniform sampler2D uTex;
+uniform float uGain;
+in vec3 vW, vN; in vec2 vUV;
+layout(location = 0) out vec4 oA;
+layout(location = 1) out vec4 oB;
+void main() {
+  vec3 rd = normalize(vW - uCamPos);
+  vec3 N = normalize(vN);
+  if (dot(N, rd) > 0.0) N = -N;                            // double-sided scan
+  vec3 alb = texture(uTex, vUV).rgb;                        // sRGB texture → linear
+  alb = mix(alb, vec3(dot(alb, vec3(0.3, 0.5, 0.2))), 0.15) * vec3(1.12, 1.0, 0.88) * uGain;   // take some of the baked blue out
+  float cav = smoothstep(0.02, 0.25, dot(alb, vec3(0.33)));  // dark texels are crevices: a little extra occlusion
+  // where the scan meets the sand it turns into sand (hides the cut edge of the scan)
+  vec3 sandC = vec3(0.62, 0.57, 0.47) * (0.85 + 0.25 * noise(vW.xz * 6.0));
+  float foot = smoothstep(0.05, 0.40, vW.y - seabed(vW.xz));
+  alb = mix(sandC, alb, foot); cav = mix(1.0, cav, foot);
+  oA = vec4(length(vW - uCamPos), N.x, N.z, N.y < 0.0 ? -2.0 : 2.0);
+  oB = vec4(min(alb, vec3(1.0)), 0.55 + 0.45 * cav);
 }`;
 
 /* ---------- moon jellies ---------- */
 const JELLY_COMMON = COMMON + `
 uniform vec3 uJPos, uJX, uJY, uJZ;
-uniform float uJR, uJPhase, uJYaw, uJAlpha, uJGlow;
+uniform float uJR, uJPhase, uJYaw, uJAlpha, uJGlow, uJAmp, uJSurge, uJTurn, uJTurnDir, uJAspect;
 uniform vec3 uJTint;
 uniform vec3 uHist[16];                     // the bell's past positions (0 = now, 0.12 s apart), in the water frame + now's flow
-float pc(float ph) {                        // pulse: fast contraction, slower relaxation, a short rest
-  float f = fract(ph);
-  if (f < 0.24) return smoothstep(0.0, 0.24, f);
-  if (f < 0.78) return 1.0 - smoothstep(0.24, 0.78, f);
-  return 0.0;
+float pc(float u) {                         // one pulse (u = 0 at its start, in pulse lengths): fast contraction, slower relaxation
+  if (u < 0.0 || u >= 1.0) return 0.0;
+  return uJAmp * (u < 0.30 ? smoothstep(0.0, 0.30, u) : 1.0 - smoothstep(0.30, 1.0, u));
 }
 vec3 bellLocal(float th, float s, float c) {
   float R = uJR * mix(1.0, 0.80, c), aM = mix(1.70, 1.90, c), H = uJR * mix(0.59, 0.71, c);
@@ -521,23 +513,28 @@ vec3 histAt(float d) {
 }
 vec3 trail(float s, float lag, float L) {   // where this part of a trailing strand has been dragged to
   vec3 d = histAt(s * lag) - uHist[0];
-  float m = length(d), lim = 0.9 * s * L;
+  float m = length(d), lim = 0.7 * s * L;                // bends the strand rather than stretching it straight
   return m > lim ? d * (lim / m) : d;
 }
 vec3 shadeJelly(vec3 W, vec3 N, vec3 V, float aBody, float tintA, float whiteA, out float alpha) {
   vec3 down = downwell(W.y);
   float ca = caustic(W.xz * 0.85 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop));
   float wrap = saturate(dot(N, -uLd) * 0.5 + 0.5);
-  vec3 light = down * (0.30 + 0.70 * wrap) * (0.7 + 1.0 * ca * uCaust) + (uUpC * 1.3 + uDeep * 0.4) * uBright;
+  float top = saturate(N.y);
+  vec3 light = down * (0.25 + 0.75 * wrap) * (0.6 + 1.6 * ca * uCaust * top) + (uUpC * 1.3 + uDeep * 0.4) * uBright;   // the light net runs over the bell's back
+  light += down * shaft(W.xz - uLd.xz * ((SURF - W.y) / -uLd.y)) * uShafts * 0.6;                                       // brighter inside a ray
   float fw = pow(saturate(dot(-V, uLd) * -1.0), 3.0);        // looking toward the light: the bell glows (forward scatter)
   light += down * fw * 0.8;
-  vec3 col = vec3(0.80, 0.88, 0.96) * light * aBody + uJTint * light * tintA + vec3(0.95) * light * whiteA;
+  float lum = dot(light, vec3(0.30, 0.55, 0.15));         // the gonads keep their own colour (not just tinted water light)
+  vec3 col = vec3(0.80, 0.88, 0.96) * light * aBody + vec3(0.95) * light * whiteA;
+  vec3 tint = uJTint * mix(light, vec3(lum), 0.85) * 0.85 * tintA;
   alpha = aBody + tintA + whiteA;
   float pulse = pow(0.5 + 0.5 * sin(uTime * 2.2 - 1.57), 2.0);
   col += mix(uJTint, vec3(0.6, 0.9, 1.0), 0.5) * uJGlow * pulse * (0.04 + 1.5 * tintA + 0.6 * aBody) * (0.3 + 0.7 * uNight);
   float d = length(uCamPos - W);
   vec3 T = exp(-uSigma * d);
-  col = col * T + water(-V) * (1.0 - T) * alpha;
+  // the school colour (gonads) is only partly washed out by the water, so each session stays recognisable
+  col = col * T + tint * mix(T, vec3(1.0), 0.65) + water(-V) * (1.0 - T) * alpha;
   return col;
 }
 `;
@@ -628,8 +625,67 @@ void main() {
   vec3 col = shadeJelly(vW, normalize(vN), V, a, 0.06 * (1.0 - vS), 0.0, alpha);
   o = vec4(col, alpha) * uJAlpha;
 }`;
+// the modelled jelly (assets/moon_jelly.glb, by Gemini 4 Argon): bell, 4 gonads, 4 oral arms, radial canals, rhopalia;
+// every part has a "contract" morph target, the arms carry a root → tip weight (COLOR_0.r) for the trailing
+const GLB_R = 0.1496;                        // the model's bell radius (relaxed), m
+const VS_MESH = JELLY_COMMON + `
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNrm;
+layout(location = 2) in vec3 aDPos;
+layout(location = 3) in vec3 aDNrm;
+layout(location = 4) in float aW;
+uniform int uPart;                           // 0 bell, 1 gonads, 2 arms, 3 canals, 4 rhopalia
+centroid out vec3 vW, vN; centroid out float vS, vWt;   // centroid: no MSAA extrapolation (NaN)
+void main() {
+  float s = clamp(1.0 - aPos.y / 0.10, 0.0, 1.0);            // apex 0 … margin 1: the contraction runs down the bell
+  float u = uJPhase - (uPart == 2 ? 0.15 : s * 0.22);          // the contraction visibly travels from apex to margin
+  float c = pc(u);
+  // the margin rebounds as the bell opens (lappets flutter), only near the rim
+  if (u > 0.30 && u < 1.0) c += uJAmp * sin((u - 0.30) * 28.0) * exp(-(u - 0.30) * 7.0) * 0.10 * smoothstep(0.6, 1.0, s);
+  // turning = one side contracts harder
+  float thw = atan(aPos.z, aPos.x) + uJYaw;
+  c *= 1.0 + 0.3 * uJTurn * cos(thw - uJTurnDir) * s;
+  float k = uJR / ${GLB_R.toFixed(4)};
+  vec3 l = (aPos + aDPos * c) * k, n = normalize(aNrm + aDNrm * c);
+  l.y *= uJAspect;                                            // every bell a little flatter or taller
+  float cy = cos(uJYaw), sy = sin(uJYaw);
+  l.xz = mat2(cy, sy, -sy, cy) * l.xz; n.xz = mat2(cy, sy, -sy, cy) * n.xz;
+  vec3 W = toWorld(l), N = uJX * n.x + uJY * n.y + uJZ * n.z;
+  if (uPart == 2) {                                           // oral arms trail the bell and flutter
+    float w = aW, L = 0.22 * k;
+    vec3 radW = normalize(uJX * l.x + uJZ * l.z + uJX * 1e-4);
+    vec3 tanW = cross(uJY, radW);
+    float a = atan(l.z, l.x);
+    vec3 hang = normalize(mix(-uJY, vec3(0.0, -1.0, 0.0), 0.35 + 0.5 * w));   // root follows the bell, the heavy tip hangs
+    W += (hang + uJY) * w * L * 0.9;
+    W += trail(w, 2.2, L) + vec3(1.0, 0.15, 0.1) * uJSurge * w * L * 0.9
+       + (radW * sin(uTime * 0.9 + a * 2.0 + w * 4.0) + tanW * cos(uTime * 0.7 + a + w * 3.0)) * 0.06 * L * w
+       + N * sin(w * 26.0 + uTime * 1.3 + a * 3.0) * 0.012 * k * w;
+  }
+  vW = W; vN = N; vS = s; vWt = aW;
+  gl_Position = proj(W);
+}`;
+const FS_MESH = JELLY_COMMON + `
+uniform int uPart;
+centroid in vec3 vW, vN; centroid in float vS, vWt;
+out vec4 o;
+void main() {
+  vec3 V = normalize(uCamPos - vW), N = normalize(vN);
+  if (!gl_FrontFacing) N = -N;
+  float fres = pow(1.0 - abs(dot(N, V)), 2.5);
+  float aBody = 0.0, tintA = 0.0, whiteA = 0.0;
+  float ndv = abs(dot(N, V));
+  if (uPart == 0) aBody = 0.012 + 0.50 * pow(1.0 - ndv, 4.0) + 0.10 * smoothstep(0.85, 1.0, vS) + 0.06 * pow(1.0 - vS, 2.0) * saturate(N.y);   // clear centre, thick jelly on top, bright margin
+  else if (uPart == 1) { aBody = 0.02 + 0.10 * fres; tintA = 0.62 + 0.20 * fres; }
+  else if (uPart == 2) { aBody = (0.07 + 0.30 * fres) * (1.0 - 0.45 * vWt); tintA = 0.05 * (1.0 - vWt); }
+  else if (uPart == 3) whiteA = 0.07 + 0.12 * fres;
+  else whiteA = 0.45;
+  float alpha;
+  vec3 col = shadeJelly(vW, N, V, aBody, tintA, whiteA, alpha);
+  o = vec4(col, alpha) * uJAlpha;
+}`;
 // marginal tentacles: fine short hairs all round the margin, drawn as lines
-const TENT_N = 120, TENT_SEG = 10;
+const TENT_N = 96, TENT_SEG = 10;
 const VS_TENT = JELLY_COMMON + `
 const int NT = ${TENT_N}, SEG = ${TENT_SEG};
 out vec3 vW; out float vS;
@@ -639,13 +695,13 @@ void main() {
   float s = float(seg + end) / float(SEG);
   vec2 h = hash22(vec2(float(t), 5.0));
   float th = (float(t) + 0.5 * h.x) / float(NT) * 6.2831853 + uJYaw;
-  float cr = pc(uJPhase - 0.10);
-  vec3 rl = bellLocal(th, 0.985, cr) + vec3(0.0, -0.004, 0.0);
+  float cr = pc(uJPhase - 0.22);
+  vec3 rl = vec3(cos(th), 0.0, sin(th)) * uJR * mix(0.99, 0.78, cr) + vec3(0.0, 0.002, 0.0) * uJR / 0.15;
   vec3 radW = uJX * cos(th) + uJZ * sin(th), tanW = -uJX * sin(th) + uJZ * cos(th);
   float L = uJR * (0.35 + 0.55 * h.y);
-  vec3 P = toWorld(rl) + (radW * (0.25 + 0.9 * cr) * (1.0 - 0.6 * s) - uJY) * s * L
-         + vec3(0.0, -0.25, 0.0) * s * s * L
-         + trail(s, 1.1, L)
+  vec3 hang = normalize(mix(-uJY, vec3(0.0, -1.0, 0.0), 0.3 + 0.5 * s));
+  vec3 P = toWorld(rl) + (radW * (0.25 + 0.9 * cr) * (1.0 - 0.6 * s) + hang) * s * L
+         + trail(s, 1.1, L) + vec3(1.0, 0.2, 0.1) * uJSurge * s * L * 1.1
          + (radW * sin(uTime * 1.6 + th * 7.0 + s * 5.0) + tanW * cos(uTime * 1.3 + th * 5.0 + s * 4.0)) * 0.05 * L * s;
   vW = P; vS = s;
   gl_Position = proj(P);
@@ -656,15 +712,15 @@ out vec4 o;
 void main() {
   vec3 V = normalize(uCamPos - vW);
   float alpha;
-  vec3 col = shadeJelly(vW, -uLd, V, 0.20 * (1.0 - 0.7 * vS), 0.0, 0.0, alpha);
+  vec3 col = shadeJelly(vW, -uLd, V, 0.09 * (1.0 - 0.7 * vS), 0.0, 0.0, alpha);
   o = vec4(col, alpha) * uJAlpha;
 }`;
 
 /* ---------- particles: marine snow, bubbles, a few bioluminescent specks ---------- */
-const N_SNOW = 1600, N_BUB = 180, N_BIO = 90;
+const N_SNOW = 1600, N_BUB = 400, N_BIO = 90;
 const VS_PART = COMMON + `
 uniform vec3 uSnowOff;
-uniform vec3 uVents[3];
+uniform vec3 uVents[${VENTS.length}];
 uniform float uBubbles, uBio;
 flat out int vKind;
 out vec3 vCol; out float vA;
@@ -679,20 +735,26 @@ void main() {
     r = mod(r, box);
     P = vec3(r.x - 10.0, r.y, r.z + 0.6);
     size = 0.004 + 0.010 * h2.y * h2.y;
-    float keep = step(h.x * 0.6 + h2.y * 0.4, 0.35 + 0.65 * uTurb);
+    float th0 = h.x * 0.6 + h2.y * 0.4;
+    float keep = smoothstep(th0 - 0.05, th0 + 0.05, 0.35 + 0.65 * uTurb);   // fades in/out with the murk, no popping
     vA = keep * (0.35 + 0.65 * h.y);
     vCol = (downwell(P.y) * 0.9 + uUpC * 1.6) * vec3(0.9, 0.95, 1.0);
   } else if (id < ${N_SNOW + N_BUB}) {
     int j = id - ${N_SNOW};
-    int v = j % 3, k = j / 3;
+    int v = j % ${VENTS.length}, k = j / ${VENTS.length};
     vec2 h = hash22(vec2(float(j), 3.0));
     vec3 B = uVents[v];
     float rise = SURF - B.y;
-    float ph = fract(uTime * (0.22 + 0.10 * h.x) / rise + h.y);
-    P = B + vec3(0.04 * sin(uTime * 5.0 + h.x * 30.0) + 0.05 * ph * (h.y - 0.5), ph * rise, 0.04 * cos(uTime * 4.3 + h.y * 30.0));
+    float spd = 0.22 + 0.10 * h.x, cyc = uTime * spd / rise + h.y;
+    float ph = fract(cyc);
     size = (0.0025 + 0.004 * h.x) * (1.0 + 0.6 * ph);
+    float big = smoothstep(0.003, 0.007, size);               // big bubbles spiral, small ones rise straight
+    float wob = 0.006 + big * 0.04 * (1.0 + 0.6 * ph), ang = uTime * (7.0 - 3.0 * big) + h.x * 30.0;
+    P = B + vec3(wob * cos(ang) + 0.05 * ph * (h.y - 0.5) + surge(B.x, B.z) * ph * 0.6, ph * rise, wob * sin(ang));
+    float emitT = (floor(cyc) - h.y) * rise / spd;            // when this one left the vent: they come in bursts
+    float burst = smoothstep(0.35, 0.6, noise(vec2(float(v) * 7.0, emitT * 0.25)));
     vKind = 1;
-    vA = step(float(k) / ${(N_BUB / 3).toFixed(1)}, uBubbles) * smoothstep(0.0, 0.03, ph) * smoothstep(1.0, 0.9, ph);
+    vA = burst * step(float(k) / ${(N_BUB / VENTS.length).toFixed(1)}, uBubbles) * smoothstep(0.0, 0.03, ph) * smoothstep(1.0, 0.9, ph);
     vCol = downwell(P.y) * 1.2 + uUpC * 2.0;
   } else {
     int j = id - ${N_SNOW + N_BUB};
@@ -739,11 +801,6 @@ void main() {
 /* ---------- god rays (additive) ---------- */
 const FS_RAYS = COMMON + `
 out vec4 o;
-float shaft(vec2 q) {
-  vec2 dr = vec2(uTime * 0.05, -uTime * 0.03) * (1.0 + uChop) + uFlow * 0.15;
-  float n = noise(q * 0.32 + dr) * 0.65 + noise(q * 0.9 - dr * 1.7 + 7.0) * 0.35;
-  return pow(smoothstep(0.42, 0.86, n), 2.0);
-}
 void main() {
   vec3 ro = uCamPos, rd = rayDir(gl_FragCoord.xy * 2.0);   // drawn at half resolution
   float tEnd = 32.0;
@@ -771,7 +828,7 @@ const FS_FINAL = `#version 300 es
 precision highp float;
 uniform sampler2D uTex, uRays;
 uniform vec2 uRes;
-uniform float uExposure, uEnc, uBeacon, uTime;
+uniform float uExposure, uEnc, uBeacon, uTime, uSurge0;
 out vec4 o;
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 uvec2 pcg2d(uvec2 v) {
@@ -781,10 +838,11 @@ uvec2 pcg2d(uvec2 v) {
 vec2 hash2c(vec2 c) { return vec2(pcg2d(uvec2(ivec2(c) + 32768))) * (1.0 / 4294967295.0); }
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 uvs = 0.5 + (uv - 0.5) * (1.0 - 0.004 * (0.5 + 0.5 * sin(uTime * 0.09))) + vec2(uSurge0 * 0.0015, 0.0);   // zoom in only, never shows an edge
   vec2 rp = 1.5 / uRes;                                           // 4 bilinear taps: smooths the half-res ray jitter
-  vec3 rays = 0.25 * (texture(uRays, uv + vec2(rp.x, rp.y)).rgb + texture(uRays, uv + vec2(-rp.x, rp.y)).rgb
-                    + texture(uRays, uv + vec2(rp.x, -rp.y)).rgb + texture(uRays, uv - rp).rgb);
-  vec3 c = texture(uTex, uv).rgb / uEnc + rays;
+  vec3 rays = 0.25 * (texture(uRays, uvs + vec2(rp.x, rp.y)).rgb + texture(uRays, uvs + vec2(-rp.x, rp.y)).rgb
+                    + texture(uRays, uvs + vec2(rp.x, -rp.y)).rgb + texture(uRays, uvs - rp).rgb);
+  vec3 c = texture(uTex, uvs).rgb / uEnc + rays;
   c = clamp(c, 0.0, 64.0);
   if (any(isnan(c))) c = vec3(0.0);
   vec2 vq = uv - 0.5;
@@ -829,15 +887,20 @@ function program(vs, fs, name) {
   compileMs[name] = +(performance.now() - t0).toFixed(1);
   return { p, u };
 }
-let P_BAKE, P_HMAP, P_BG, P_GRASS, P_BELL, P_ARM, P_TENT, P_PART, P_RAYS, P_FINAL, bufTri, vao;
+let P_WHALE, P_REEF, P_REEF_D, P_MESH, P_BAKE, P_BG, P_BELL, P_ARM, P_TENT, P_PART, P_RAYS, P_FINAL, bufTri, vao;
 if (gl) {
   P_BG = program(VS_TRI, FS_BG, 'bg');
   P_BAKE = program(VS_TRI, FS_BG.replace('#version 300 es\n', '#version 300 es\n#define BAKE 1\n'), 'bake');
-  P_HMAP = program(VS_TRI, FS_HMAP, 'hmap');
-  P_GRASS = program(VS_GRASS, FS_GRASS, 'grass');
+  P_REEF = program(VS_REEF, FS_REEF, 'reef');
+  P_WHALE = program(VS_WHALE, FS_WHALE, 'whale');
+  P_REEF_D = program(VS_REEF, `#version 300 es
+precision mediump float;
+out vec4 o;
+void main() { o = vec4(0.0); }`, 'reefD');
   P_BELL = program(VS_BELL, FS_BELL, 'bell');
   P_ARM = program(VS_ARM, FS_ARM, 'arm');
   P_TENT = program(VS_TENT, FS_TENT, 'tent');
+  P_MESH = program(VS_MESH, FS_MESH, 'mesh');
   P_PART = program(VS_PART, FS_PART, 'part');
   P_RAYS = program(VS_TRI, FS_RAYS, 'rays');
   P_FINAL = program(VS_TRI, FS_FINAL, 'final');
@@ -872,11 +935,14 @@ function allocRT(w, h) {
   const mk = (tw, th, filt) => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA16F, tw, th);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
-  if (rt.gA) { gl.deleteTexture(rt.gA); gl.deleteTexture(rt.gB); gl.deleteFramebuffer(rt.fbG); gl.deleteTexture(rt.rays); gl.deleteFramebuffer(rt.fbRays); }
+  if (rt.gA) { gl.deleteTexture(rt.gA); gl.deleteTexture(rt.gB); gl.deleteFramebuffer(rt.fbG); gl.deleteRenderbuffer(rt.rbG); gl.deleteTexture(rt.rays); gl.deleteFramebuffer(rt.fbRays); }
   rt.gA = mk(w, h, gl.NEAREST); rt.gB = mk(w, h, gl.NEAREST);
   rt.fbG = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, rt.fbG);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rt.gA, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, rt.gB, 0);
+  rt.rbG = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, rt.rbG);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rt.rbG);
   gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
   rt.rw = Math.ceil(w / 2); rt.rh = Math.ceil(h / 2);
   rt.rays = mk(rt.rw, rt.rh, gl.LINEAR);
@@ -885,41 +951,227 @@ function allocRT(w, h) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   rt.baked = false;
 }
-const hmap = { tex: null };
-function bakeStatic() {                      // the floor never moves: march it once (heightmap first time, G-buffer per size)
+function bakeStatic() {                      // the floor never moves: march it once per size (and again when the reef arrives)
   const L = lighting(lastSky || sky()), sk = lastSky || sky();
   gl.bindVertexArray(vao); gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
-  if (!hmap.tex) {
-    hmap.tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, hmap.tex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, HMAP.n, HMAP.n);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, hmap.tex, 0);
-    gl.viewport(0, 0, HMAP.n, HMAP.n);
-    gl.useProgram(P_HMAP.p); setCommon(P_HMAP.u, L, sk); gl.drawArrays(gl.TRIANGLES, 0, 3);
-    gl.deleteFramebuffer(fb);
-  }
   gl.bindFramebuffer(gl.FRAMEBUFFER, rt.fbG);
   gl.viewport(0, 0, rt.w, rt.h);
+  gl.clearDepth(1); gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.ALWAYS);       // the floor writes its depth…
   gl.useProgram(P_BAKE.p); setCommon(P_BAKE.u, L, sk); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if (reef.ready) {                                       // …then the reef wherever it is nearer
+    gl.depthFunc(gl.LESS);
+    gl.useProgram(P_REEF.p); setCommon(P_REEF.u, L, sk);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, reef.tex); gl.uniform1i(P_REEF.u.uTex, 0); gl.uniform1f(P_REEF.u.uGain, REEF.gain);
+    drawReefTiles(P_REEF.u, reef.vao, reef.count);
+  }
+  gl.disable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   rt.baked = true;
 }
+
+/* ------------------------------ the reef (GLB → world-space VAO + a coarse height grid for the jellies) ------------------------------ */
+const reef = { ready: false, grid: null };
+async function readGLB(url, withAttrs) {                   // → node-rotated positions (and normals / uv / texture) of the first mesh
+  const buf = await (await fetch(url)).arrayBuffer();
+  const dv = new DataView(buf), jl = dv.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jl)));
+  const bin = 20 + jl + 8, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }, CT = { 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+  const acc = i => {                                       // tightly packed or interleaved (byteStride) accessors
+    const a = json.accessors[i], v = json.bufferViews[a.bufferView], T = CT[a.componentType], k = NC[a.type], es = T.BYTES_PER_ELEMENT;
+    const off = bin + (v.byteOffset || 0) + (a.byteOffset || 0), stride = v.byteStride || k * es;
+    if (stride === k * es) return new T(buf.slice(off, off + a.count * k * es));
+    const out = new T(a.count * k), src = new DataView(buf);
+    const get = es === 4 ? (T === Float32Array ? (o => src.getFloat32(o, true)) : (o => src.getUint32(o, true))) : (o => src.getUint16(o, true));
+    for (let e = 0; e < a.count; e++) for (let c = 0; c < k; c++) out[e * k + c] = get(off + e * stride + c * es);
+    return out;
+  };
+  const node = json.nodes.find(n => n.mesh != null), p = json.meshes[node.mesh].primitives[0];
+  const [qx, qy, qz, qw] = node.rotation || [0, 0, 0, 1];
+  const rotQ = (x, y, z) => {                             // v + 2w(q×v) + 2q×(q×v)
+    const tx = 2 * (qy * z - qz * y), ty = 2 * (qz * x - qx * z), tz = 2 * (qx * y - qy * x);
+    return [x + qw * tx + (qy * tz - qz * ty), y + qw * ty + (qz * tx - qx * tz), z + qw * tz + (qx * ty - qy * tx)]; };
+  const rot = A => { const o = new Float32Array(A.length); for (let i = 0; i < A.length; i += 3) o.set(rotQ(A[i], A[i + 1], A[i + 2]), i); return o; };
+  const out = { P: rot(acc(p.attributes.POSITION)), I: acc(p.indices) };
+  if (withAttrs) {
+    out.N = rot(acc(p.attributes.NORMAL)); out.UV = acc(p.attributes.TEXCOORD_0);
+    const img = json.images[json.textures[json.materials[p.material].pbrMetallicRoughness.baseColorTexture.index].source], iv = json.bufferViews[img.bufferView];
+    out.bmp = await createImageBitmap(new Blob([new Uint8Array(buf, bin + (iv.byteOffset || 0), iv.byteLength)], { type: img.mimeType }));
+  }
+  return out;
+}
+function makeVAO(arrays, I) {
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  arrays.forEach(([arr, k], loc) => { if (!arr) return; const bf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bf); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, k, gl.FLOAT, false, 0, 0); });
+  const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, I instanceof Uint32Array ? I : new Uint32Array(I), gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  return vao;
+}
+async function loadReef() {
+  const m = await readGLB(REEF.url, true);
+  // centre the mesh on its footprint and put its "ground" (a low percentile of heights) at y = 0
+  const n = m.P.length / 3;
+  let mx = 0, mz = 0; for (let i = 0; i < n; i++) { mx += m.P[i * 3]; mz += m.P[i * 3 + 2]; } mx /= n; mz /= n;
+  const ys = Array.from({ length: Math.min(n, 20000) }, (_, k) => m.P[Math.floor(k * n / Math.min(n, 20000)) * 3 + 1]).sort((a, b) => a - b);
+  const c = [mx, ys[Math.floor(ys.length * REEF.sink)], mz];
+  const centre = P => { for (let i = 0; i < P.length; i += 3) { P[i] -= c[0]; P[i + 1] -= c[1]; P[i + 2] -= c[2]; } return P; };
+  centre(m.P);
+  // a local height grid (max height per cell) for the jellies
+  const b = [1e9, -1e9, 1e9, -1e9];
+  for (let i = 0; i < n; i++) { b[0] = Math.min(b[0], m.P[i * 3]); b[1] = Math.max(b[1], m.P[i * 3]); b[2] = Math.min(b[2], m.P[i * 3 + 2]); b[3] = Math.max(b[3], m.P[i * 3 + 2]); }
+  const G = 64, grid = new Float32Array(G * G).fill(-9);
+  for (let i = 0; i < n; i++) {
+    const gx = Math.min(G - 1, Math.floor((m.P[i * 3] - b[0]) / (b[1] - b[0]) * G)), gz = Math.min(G - 1, Math.floor((m.P[i * 3 + 2] - b[2]) / (b[3] - b[2]) * G));
+    grid[gz * G + gx] = Math.max(grid[gz * G + gx], m.P[i * 3 + 1]);
+  }
+  reef.grid = { G, grid, b };
+  reef.vao = makeVAO([[m.P, 3], [m.N, 3], [m.UV, 2]], m.I); reef.count = m.I.length;
+  const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, m.bmp);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  const an = gl.getExtension('EXT_texture_filter_anisotropic'); if (an) gl.texParameterf(gl.TEXTURE_2D, an.TEXTURE_MAX_ANISOTROPY_EXT, 8);
+  reef.tex = tex; reef.tris = m.I.length / 3;
+  // the low-poly proxy for the per-frame depth pass (same frame of reference)
+  try { const px = await readGLB(REEF.proxy, false); centre(px.P); reef.proxyVao = makeVAO([[px.P, 3]], px.I); reef.proxyCount = px.I.length; }
+  catch (e) { reef.proxyVao = reef.vao; reef.proxyCount = reef.count; }
+  // tile placements
+  reef.tiles = REEF_TILES.map(([x, z, yaw, sc, lift]) => {
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    return { R: new Float32Array([cy, 0, -sy, 0, 1, 0, sy, 0, cy]), T: new Float32Array([x, sandAt(x, z) + lift, z, sc]), x, z, cy, sy, sc, y: sandAt(x, z) + lift };
+  });
+  reef.ready = true;
+  rt.baked = false;                                       // re-bake the floor with the reef in it
+  rt.baked = false;
+}
+function drawReefTiles(u, vao, count) {                    // every placement of the one mesh
+  gl.bindVertexArray(vao);
+  for (const t of reef.tiles) { gl.uniformMatrix3fv(u.uTileR, false, t.R); gl.uniform4fv(u.uTileT, t.T); gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, 0); }
+  gl.bindVertexArray(vao_default());
+}
+const vao_default = () => vao;
+function floorAt(x, z) {                                   // the sand, or the highest reef tile standing there
+  let h = sandAt(x, z);
+  const g = reef.grid; if (!g || !reef.tiles) return h;
+  const { G, grid, b } = g;
+  for (const t of reef.tiles) {
+    const dx = (x - t.x) / t.sc, dz = (z - t.z) / t.sc;
+    const lx = t.cy * dx - t.sy * dz, lz = t.sy * dx + t.cy * dz;   // inverse yaw (R is column-major: x' = cy·x + sy·z, z' = −sy·x + cy·z)
+    const fx = (lx - b[0]) / (b[1] - b[0]) * G, fz = (lz - b[2]) / (b[3] - b[2]) * G;
+    if (fx < -1 || fz < -1 || fx > G || fz > G) continue;
+    for (let oz = -1; oz <= 1; oz++) for (let ox = -1; ox <= 1; ox++) {
+      const ix = Math.floor(fx) + ox, iz = Math.floor(fz) + oz;
+      if (ix >= 0 && iz >= 0 && ix < G && iz < G && grid[iz * G + ix] > -9) h = Math.max(h, grid[iz * G + ix] * t.sc + t.y);
+    }
+  }
+  return h;
+}
+if (gl) loadReef().catch(e => console.warn('reef not loaded:', e.message));
+
+/* ------------------------------ the whale: load, schedule, path ------------------------------ */
+const whale = { ready: false, active: false, next: 0 };
+const rr = ([a, b]) => a + (b - a) * rnd();
+async function loadWhale() {
+  const m = await readGLB(WHALE.url, true);
+  whale.vao = makeVAO([[m.P, 3], [m.N, 3], [m.UV, 2]], m.I); whale.count = m.I.length;
+  const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, m.bmp);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  whale.tex = tex;
+  whale.next = sceneTime + rr(WHALE.first);
+  whale.ready = true;
+}
+if (gl) loadWhale().catch(e => console.warn('whale not loaded:', e.message));
+function startWhale() {                                    // a pass: in from one side well off screen, out the other
+  const dir = rnd() < 0.5 ? 1 : -1, z = rr(WHALE.dist), y0 = rr(WHALE.y);
+  const half = z * TAN_169[0] * 1.15 + WHALE.length;       // beyond the frame edge, body included
+  Object.assign(whale, { active: true, dir, z, y0, x0: -dir * half, x1: dir * half, t0: sceneTime, dur: 2 * half / rr(WHALE.speed),
+                         bob: rnd() * 6.28, dz: (rnd() - 0.5) * 6, phase0: rnd() * 6.28 });
+}
+function updateWhale() {
+  if (!whale.ready) return;
+  if (!whale.active && sceneTime >= whale.next) startWhale();
+  if (!whale.active) return;
+  const k = (sceneTime - whale.t0) / whale.dur;
+  if (k >= 1) { whale.active = false; whale.next = sceneTime + rr(WHALE.gap); return; }
+  const x = whale.x0 + (whale.x1 - whale.x0) * k;
+  const y = whale.y0 + 0.8 * Math.sin(k * 3.1 + whale.bob) + 0.2 * Math.sin(sceneTime * 2 * Math.PI / WHALE.stroke * 0.5);
+  const z = whale.z + whale.dz * (k - 0.5);
+  const dy = 0.8 * 3.1 / whale.dur * Math.cos(k * 3.1 + whale.bob);   // heading follows the path (gentle pitch)
+  const F = norm3([whale.dir * (whale.x1 - whale.x0) / whale.dur * whale.dir, dy, whale.dz / whale.dur]);
+  const U0 = [0, 1, 0], S = norm3(cross3(F, U0)), U = cross3(S, F);
+  // the model's −x is forward, +y up, so x → −F, y → U, z → x × y
+  whale.X = F.map(v => -v); whale.Y = U; whale.Z = cross3(whale.X, whale.Y);
+  whale.pos = [x, y, z];
+}
+
+/* ------------------------------ the jelly model (GLB → one VAO per part) ------------------------------ */
+// Minimal glTF 2.0 binary reader: positions, normals, the first morph target, COLOR_0.r, uint32/uint16 indices.
+// Until it has loaded (or if it cannot load) the procedural stand-in jelly is drawn.
+const glb = { ready: false, parts: [] };
+const GLB_PARTS = [['bell'], ['gonad_0', 'gonad_1', 'gonad_2', 'gonad_3'], ['arm_0', 'arm_1', 'arm_2', 'arm_3'], ['canal'], ['rhopalia']];
+async function loadGLB(url) {
+  const buf = await (await fetch(url)).arrayBuffer();
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('not a GLB');
+  const jl = dv.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jl)));
+  const bin = 20 + jl + 8;
+  const NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }, CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+  const acc = i => {
+    const a = json.accessors[i], v = json.bufferViews[a.bufferView], n = NC[a.type];
+    const T = CT[a.componentType], stride = v.byteStride || 0, off = bin + (v.byteOffset || 0) + (a.byteOffset || 0);
+    if (stride && stride !== n * T.BYTES_PER_ELEMENT) throw new Error('interleaved accessors are not supported');
+    return { n, count: a.count, data: new T(buf.slice(off, off + a.count * n * T.BYTES_PER_ELEMENT)) };
+  };
+  const byName = Object.fromEntries(json.meshes.map(m => [m.name, m]));
+  glb.parts = GLB_PARTS.map(names => {
+    const P = [], N = [], DP = [], DN = [], W = [], I = [];
+    for (const nm of names) {
+      const m = byName[nm]; if (!m) throw new Error('missing mesh ' + nm);
+      const p = m.primitives[0], base = P.length / 3;
+      const pos = acc(p.attributes.POSITION), nrm = acc(p.attributes.NORMAL);
+      const t = (p.targets || [])[0] || {};
+      const dpos = t.POSITION != null ? acc(t.POSITION).data : new Float32Array(pos.count * 3);
+      const dnrm = t.NORMAL != null ? acc(t.NORMAL).data : new Float32Array(pos.count * 3);
+      const col = p.attributes.COLOR_0 != null ? acc(p.attributes.COLOR_0) : null;
+      P.push(...pos.data); N.push(...nrm.data); DP.push(...dpos); DN.push(...dnrm);
+      for (let k = 0; k < pos.count; k++) W.push(col ? col.data[k * col.n] / (col.data instanceof Float32Array ? 1 : col.data instanceof Uint16Array ? 65535 : 255) : 0);
+      const ix = acc(p.indices).data;
+      for (let k = 0; k < ix.length; k++) I.push(ix[k] + base);
+    }
+    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    [[P, 3], [N, 3], [DP, 3], [DN, 3], [W, 1]].forEach(([arr, n], loc) => {
+      const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 0, 0);
+    });
+    const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(I), gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    return { vao, count: I.length };
+  });
+  glb.tris = glb.parts.reduce((a, p) => a + p.count / 3, 0);
+  glb.ready = true;
+}
+if (gl) loadGLB('assets/moon_jelly.glb').catch(e => console.warn('moon_jelly.glb not loaded, using the stand-in jelly:', e.message));
 
 /* ------------------------------ the floor height on the CPU (for placing vents) ------------------------------ */
 // (a rough copy of dunes() — vents only need to sit near the sand)
 VENTS.forEach(v => { v[1] = -0.05 + 0.9 * smooth(Math.min(1, Math.max(0, (v[2] - 12) / 33))); });
 
-/* ------------------------------ jellies: one per Claude session, plus a few far away ------------------------------ */
-// slot i of state.json "sessions" always gets home i (screen position on a 16:9 frame + distance), off the left third
-const JELLY_SPOTS = [
-  { sx: 0.600, sy: 0.40, dist: 5.0, R: 0.300, tint: [0.78, 0.58, 0.88] },   // lavender (ambient jelly when there are no sessions)
-  { sx: 0.455, sy: 0.30, dist: 6.0, R: 0.270, tint: [0.95, 0.58, 0.68] },   // pink
-  { sx: 0.770, sy: 0.46, dist: 4.6, R: 0.300, tint: [0.96, 0.72, 0.52] },   // peach
-  { sx: 0.690, sy: 0.25, dist: 7.0, R: 0.260, tint: [0.70, 0.80, 0.98] },   // pale blue
-  { sx: 0.400, sy: 0.50, dist: 5.6, R: 0.280, tint: [0.66, 0.50, 0.96] },   // violet
+/* ------------------------------ jellies: a small school per Claude session, plus a few far away ------------------------------ */
+// slot i of state.json "sessions" always gets school i: a home (screen position on a 16:9 frame + distance, off the
+// left third), 8–12 members of mixed sizes spread around it, one gonad colour per school
+const SCHOOLS = [
+  { sx: 0.620, sy: 0.40, dist: 6.5, n: 10, tint: [0.62, 0.28, 1.00] },   // lavender (the ambient school when there are no sessions)
+  { sx: 0.420, sy: 0.25, dist: 8.5, n: 9,  tint: [1.00, 0.22, 0.48] },   // pink
+  { sx: 0.850, sy: 0.56, dist: 6.0, n: 12, tint: [1.00, 0.50, 0.12] },   // peach
+  { sx: 0.800, sy: 0.17, dist: 9.5, n: 8,  tint: [0.20, 0.62, 1.00] },   // pale blue
+  { sx: 0.440, sy: 0.60, dist: 7.0, n: 11, tint: [0.85, 0.20, 0.95] },   // violet
 ];
+const SCHOOL = { spread: [0.95, 0.60, 2.0], R: 0.20, arrive: 0.35 };
+const ROAM = { sx: [0.06, 0.96], sy: [0.08, 0.78], dist: [2.8, 16.0], release: 25, glide: 0.08, iconDist: 9.5, tether: 0.065 };   // roam box (16:9 screen, m), how fast the target glides to a waypoint (1/s), min depth over the icons   // depth range wide on purpose: near ones big, far ones hazy   // where released jellies drift (16:9 screen, m), s to spread out   // half-extent (m), base bell radius, s between arrivals
 const JPARAMS = { rate: [0, 1.5], effort: [0, 1], glow: [0, 1] };
 const JELLY_STATES = {
   clear:    { rate: 0.55, effort: 0.55, glow: 0 },
@@ -929,19 +1181,51 @@ const JELLY_STATES = {
   waiting:  { rate: 0.30, effort: 0.30, glow: 1 },
 };
 const JELLY = { fade: 2.5, histDt: 0.06, histN: 40 };
+// Rhythm: a school shares one beat (its tempo = the state's rate, beats per second); every member plays its own
+// pattern on it — beat lengths with an accent per step — from its own offset, with a little human timing slop,
+// so the school reads like a small ensemble rather than a metronome. "strength" scales how deep each jelly contracts.
+const RHYTHMS = [
+  { beats: [1],                acc: [1] },
+  { beats: [2],                acc: [1] },
+  { beats: [1, 1, 2],          acc: [1, 0.6, 0.8] },
+  { beats: [0.5, 0.5, 1],      acc: [0.7, 0.55, 1] },
+  { beats: [1.5, 1.5, 1],      acc: [1, 0.7, 0.6] },
+  { beats: [1, 0.5, 0.5, 2],   acc: [1, 0.5, 0.6, 0.9] },
+  { beats: [3],                acc: [1] },
+  { beats: [0.75, 0.75, 0.5, 2], acc: [0.8, 0.6, 0.5, 1] },
+  { beats: [2, 1, 1],          acc: [1, 0.55, 0.7] },
+];
+const PULSE = { len: 1.25, minAmp: 0.25 };   // pulse length (s) at rate 0.55, shortest allowed depth
 let rngSeed = 12345;
 const rnd = () => (rngSeed = (rngSeed * 16807) % 2147483647) / 2147483647;
-function makeJelly(home, R, tint, slot) {
-  return { slot, home, R, tint, pos: home.slice(), vel: [0, 0, 0], axis: [0, 1, 0], phase: rnd() * 10, cPrev: 0, yaw: rnd() * 6.28, yawRate: (rnd() - 0.5) * 0.08,
+function makeJelly(home, R, tint, slot, order = 0) {
+  const rh = Math.floor(rnd() * RHYTHMS.length);
+  return { slot, order, arriveAt: 0, home, R, tint,
+           rhythm: rh, step: 0, beat: -(Math.floor(rnd() * 4) * 0.25 + Math.floor(rnd() * 3)), nextBeat: 0,
+           roam: Array.from({ length: 12 }, () => rnd()), releasedAt: -1e9,
+           strength: 0.5 + 0.5 * rnd(), amp: 0, pulseT: 99, pulseLen: 1.2, eddy: [0, 0, 0],
+           tiltMax: 0.5 + 0.45 * rnd(), aspect: 0.88 + 0.24 * rnd(),
+           shake: [rnd() * 6.28, rnd() * 6.28, rnd() * 6.28, 1.8 + 1.4 * rnd()], pos: home.slice(), vel: [0, 0, 0], axis: [0, 1, 0], phase: rnd() * 10, cPrev: 0, yaw: rnd() * 6.28, yawRate: (rnd() - 0.5) * 0.08,
            seed: rnd() * 100, alpha: slot < 0 ? 1 : 0, active: slot < 0, state: null, cur: { ...JELLY_STATES.clear }, from: null, to: null, tStart: 0, tDur: 0,
            hist: [], histT: 0, histOut: new Float32Array(48) };
 }
-const jellies = JELLY_SPOTS.map((s, i) => makeJelly(fromScreen(s.sx, s.sy, s.dist), s.R, s.tint, i));
+// bell radius 0.07–0.42 m (a 6× spread: juveniles to big adults), mostly middling, now and then a big one
+const jellySize = () => SCHOOL.R * (0.35 + 1.75 * Math.pow(rnd(), 1.6));
+const jellies = [];
+SCHOOLS.forEach((sc, g) => {
+  const c = fromScreen(sc.sx, sc.sy, sc.dist);
+  for (let i = 0; i < sc.n; i++) {
+    let o; do { o = [rnd() * 2 - 1, rnd() * 2 - 1, rnd() * 2 - 1]; } while (o[0] * o[0] + o[1] * o[1] + o[2] * o[2] > 1);
+    const home = c.map((v, d) => v + o[d] * SCHOOL.spread[d]);
+    const tint = sc.tint.map(v => Math.min(1, v * (0.9 + 0.2 * rnd())));
+    jellies.push(makeJelly(home, jellySize(), tint, g, i));
+  }
+});
 // far ones: always there, small in the haze
-for (let i = 0; i < 7; i++) {
+for (let i = 0; i < 5; i++) {
   const home = [-7 + 17 * rnd(), 2.0 + 5.0 * rnd(), 13 + 9 * rnd()];
   if (home[0] < -3) home[0] += 4;                         // keep the left third quiet
-  const j = makeJelly(home, 0.20 + 0.10 * rnd(), [0.80, 0.62, 0.86], -1);
+  const j = makeJelly(home, jellySize(), [0.80, 0.62, 0.86], -1);
   j.cur = { rate: 0.45 + 0.2 * rnd(), effort: 0.5, glow: 0 };
   jellies.push(j);
 }
@@ -962,10 +1246,67 @@ function effectiveSlots() {
   if (s && s.some(x => x)) return s;
   return [stateName, null, null, null, null];
 }
-const pcJS = ph => { const f = ph - Math.floor(ph); return f < 0.24 ? smooth(f / 0.24) : f < 0.78 ? 1 - smooth((f - 0.24) / 0.54) : 0; };
+const pcJS = u => u < 0 || u >= 1 ? 0 : u < 0.30 ? smooth(u / 0.30) : 1 - smooth((u - 0.30) / 0.70);
 const norm3 = v => { const l = Math.hypot(...v) || 1; return v.map(x => x / l); };
 const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 let flowDisp = [0, 0, 0];                                 // integrated drift of the water itself
+let surgeK = 1;
+function surgeAt(x, z = 8, t = sceneTime) {               // = surge() in the shaders
+  const tt = t - (x - 0.25 * z) / 1.6;
+  const w = Math.sin(0.60 * tt + 0.8 * Math.sin(0.137 * tt));
+  const env = 0.30 + 0.70 * (0.5 + 0.5 * Math.sin(0.071 * tt + 1.7)) * (0.6 + 0.4 * Math.sin(0.043 * tt + 0.4));
+  const v = w > 0 ? w * w * w : 0.4 * w * w * w;
+  return Math.max(-1, Math.min(1, v * env * surgeK * 1.6));
+}
+// a light current that never stops: slow eddies a few metres across, a few cm/s (half the drift, half the tremble)
+function eddyAt(p, t) {
+  const a = 0.034 * (1 - 0.7 * current.beacon);
+  return [a * (Math.sin(p[1] * 0.9 + t * 0.11) + 0.6 * Math.sin(p[2] * 0.7 - t * 0.07 + 1.3)),
+          a * 0.55 * (Math.sin(p[0] * 0.8 - t * 0.09 + 2.1) + 0.5 * Math.sin(p[2] * 1.1 + t * 0.13)),
+          a * 0.8 * (Math.cos(p[0] * 0.6 + t * 0.08 + 0.7) + 0.5 * Math.sin(p[1] * 1.2 - t * 0.12))];
+}
+// bumps: when two bells touch (or a bell meets the sand or the surface) they bounce apart with a little restitution,
+// get knocked askew (and spun) and flinch — an immediate, deeper pulse — then settle back; 2 s cooldown per jelly
+const BUMP = { restitution: 0.35, push: 0.05, tilt: 0.55, spin: 0.8, cooldown: 2.0, floor: 0.35 };
+function flinch(m, t) {
+  if (t - (m.bumpT || -9) < BUMP.cooldown) return false;
+  m.bumpT = t;
+  m.burst = 3 + (rnd() < 0.5 ? 1 : 0); m.nextBeat = m.beat;   // 3–4 quick pulses on 1/4 beats, starting now
+  m.yawRate += (rnd() - 0.5) * 2 * BUMP.spin;
+  return true;
+}
+function knock(m, n) { m.axis = norm3(m.axis.map((v, i) => v + n[i] * BUMP.tilt)); }
+let bumps = 0;
+function collideJellies(t) {
+  const act = jellies.filter(m => m.alpha > 0.05);
+  for (let a = 0; a < act.length; a++) {
+    const m = act[a];
+    for (let b = a + 1; b < act.length; b++) {
+      const o = act[b];
+      if ((m.slot < 0) !== (o.slot < 0)) continue;            // the far ones live in their own layer
+      const d = [m.pos[0] - o.pos[0], (m.pos[1] - o.pos[1]) * 0.75, m.pos[2] - o.pos[2]];   // bells are wider than tall
+      const l = Math.hypot(...d), touch = (m.R + o.R) * 1.05;
+      if (l >= touch || l < 1e-5) continue;
+      const n = d.map(v => v / l);
+      const rv = (m.vel[0] - o.vel[0]) * n[0] + (m.vel[1] - o.vel[1]) * n[1] + (m.vel[2] - o.vel[2]) * n[2];
+      const wm = o.R ** 3 / (m.R ** 3 + o.R ** 3), wo = 1 - wm;  // the small one gets knocked more
+      if (rv < 0) {                                            // closing in: exchange momentum along the contact normal
+        const j = -(1 + BUMP.restitution) * rv;
+        for (let i = 0; i < 3; i++) { m.vel[i] += n[i] * j * wm; o.vel[i] -= n[i] * j * wo; }
+      }
+      for (let i = 0; i < 3; i++) { m.vel[i] += n[i] * BUMP.push * wm; o.vel[i] -= n[i] * BUMP.push * wo; }   // and part
+      const pen = (touch - l) * 0.5;
+      for (let i = 0; i < 3; i++) { m.pos[i] += n[i] * pen * wm; o.pos[i] -= n[i] * pen * wo; }
+      if (flinch(m, t)) knock(m, n);
+      if (flinch(o, t)) knock(o, n.map(v => -v));
+      bumps++;
+    }
+    // the sand below, the surface above
+    const low = m.pos[1] - m.R * 1.6 - BUMP.floor - floorAt(m.pos[0], m.pos[2]), high = m.pos[1] + m.R * 0.7 - (SURF - 0.3);
+    if (low < 0) { m.pos[1] -= low * 0.5; if (m.vel[1] < 0) m.vel[1] = -m.vel[1] * BUMP.restitution; m.vel[1] += BUMP.push; if (flinch(m, t)) knock(m, [0, 1, 0]); }
+    if (high > 0) { m.pos[1] -= high * 0.5; if (m.vel[1] > 0) m.vel[1] = -m.vel[1] * BUMP.restitution; m.vel[1] -= BUMP.push; if (flinch(m, t)) knock(m, [(rnd() - 0.5), -0.3, (rnd() - 0.5)]); }
+  }
+}
 function updateJellies(dt, t, flowV) {
   const eff = effectiveSlots();
   for (const m of jellies) {
@@ -973,41 +1314,139 @@ function updateJellies(dt, t, flowV) {
       const want = JELLY_STATES[eff[m.slot]] ? eff[m.slot] : null;
       if (want && !m.active) {
         m.active = true;
-        if (m.alpha <= 0) {                               // arrive from the haze, a little deeper and further away
+        if (m.alpha <= 0) {                               // arrive from the haze one by one, a little deeper and further away
           m.cur = { ...JELLY_STATES[want] }; m.from = null; m.state = want;
           m.pos = [m.home[0] + 0.5, m.home[1] - 0.8, m.home[2] + 2.5]; m.vel = [0, 0, 0]; m.hist = [];
+          m.arriveAt = t + m.order * SCHOOL.arrive; m.releasedAt = sceneTime + m.order * SCHOOL.arrive;
         }
       }
-      if (!want && m.active) m.active = false;
+      if (!want && m.active) { m.active = false; m.arriveAt = t + m.order * SCHOOL.arrive * 0.5; }
       if (want && want !== m.state) applyJState(m, want, t);
-      m.alpha = Math.min(1, Math.max(0, m.alpha + (m.active ? 1 : -1) * dt / JELLY.fade));
+      if (t >= m.arriveAt) m.alpha = Math.min(1, Math.max(0, m.alpha + (m.active ? 1 : -1) * dt / JELLY.fade));
       if (m.alpha <= 0) continue;
       stepJ(m, t);
     }
-    // pulse → thrust along the bell axis
-    m.phase = (m.phase + m.cur.rate * dt) % 1000;
-    const c = pcJS(m.phase);
+    // rhythm: advance this jelly's beat clock, fire a pulse when its pattern says so
+    const rate = Math.max(0.05, m.cur.rate);
+    const sg = surgeAt(m.pos[0], m.pos[2]), sgp = Math.max(0, sg);
+    m.surge = sg;
+    m.beat += rate * Math.pow(0.2 / m.R, 0.3) * (1 + 1.1 * sgp) * dt;   // small ones pulse quicker, big ones slower                // a surge quickens the rhythm…
+    if (sg > 0.35 && (m.sPrev || 0) <= 0.35 && m.phase > 0.85) {   // …and its front startles the jelly into a pulse
+      m.nextBeat = m.beat; m.startle = true;
+    }
+    m.sPrev = sg;
+    if (m.beat >= m.nextBeat) {
+      const cNow = m.phase < 1 ? pcJS(m.phase) * m.amp : 0;
+      if (m.burst > 0) {                                     // flinch after a bump: quick pulses on 1/4 beats
+        const gap = 0.25, gapSec = gap / rate;
+        m.pulseLen = gapSec * 0.95;
+        m.amp = Math.min(1, 0.45 + 0.4 * m.strength) * (0.7 + 0.1 * m.burst);
+        m.nextBeat = m.beat + gap;
+        m.burst--;
+      } else {
+        const rh = RHYTHMS[m.rhythm], i = m.step % rh.beats.length;
+        let gap = rh.beats[i] * (1 + 0.06 * (rnd() - 0.5));          // human slop
+        const rest = i === rh.beats.length - 1 && rnd() < 0.25;     // end of a phrase: sometimes glide for 2–4 beats
+        if (rest) gap += 2 + Math.floor(rnd() * 3);
+        const gapSec = gap / rate;
+        m.pulseLen = Math.min(PULSE.len * Math.sqrt(0.55 / rate) * Math.pow(m.R / 0.2, 0.3), gapSec * 0.95);
+        m.amp = Math.min(1, Math.max(PULSE.minAmp, m.strength * rh.acc[i] * (0.9 + 0.2 * rnd())) * (1 + 0.8 * sgp) + (m.startle ? 0.25 : 0));
+        if (m.startle) { m.pulseLen *= 0.8; m.startle = false; }
+        if (m.restBoost) { m.amp = Math.min(1, m.amp * 1.3); m.restBoost = false; }   // the first beat after a rest is strong
+        if (rest) m.restBoost = true;
+        m.nextBeat += gap;
+        m.step++;
+      }
+      // a pulse that interrupts one in progress picks up from the current contraction (no snap back to open)
+      m.pulseT = cNow > 0.01 ? 0.30 * Math.pow(Math.min(1, cNow / m.amp), 0.6) * m.pulseLen : 0;
+      if (m.nextBeat < m.beat) m.nextBeat = m.beat;                 // after a long pause, do not fire a burst
+    }
+    m.pulseT += dt;
+    m.phase = m.pulseT / m.pulseLen;
+    const c = pcJS(m.phase) * m.amp;
     const dc = Math.max(0, c - m.cPrev); m.cPrev = c;
-    const k = 0.085 * m.cur.effort * (m.R / 0.15);
+    // each pulse is a visible shove (~0.08–0.12 m/s) that dies quickly in a speed-dependent drag, then the bell
+    // sinks a little while it relaxes: the saw-tooth "pulse, coast, sink" of a real moon jelly
+    // to go down a moon jelly stops trying: when its goal lies against the bell axis the pulses go weak and it sinks
+    const mt = m.toTarget || [0, 1, 0], al = m.axis[0] * mt[0] + m.axis[1] * mt[1] + m.axis[2] * mt[2];
+    const k = 0.22 * m.cur.effort * (m.R / 0.15) * (0.25 + 0.75 * smooth(Math.min(1, Math.max(0, (al + 0.3) / 0.6))));
     for (let i = 0; i < 3; i++) m.vel[i] += m.axis[i] * dc * k;
-    const drag = Math.exp(-1.4 * dt);
+    const sp0 = Math.hypot(...m.vel);
+    const drag = Math.exp(-(1.0 + 6.0 * sp0) * dt);
     for (let i = 0; i < 3; i++) m.vel[i] *= drag;
-    m.vel[1] -= 0.006 * dt;                               // slightly heavier than water: sinks between pulses
-    for (let i = 0; i < 3; i++) m.pos[i] += (m.vel[i] + flowV[i] * 0.7) * dt;
+    m.vel[1] -= 0.025 * dt;
+    for (const o of jellies) {                            // jellies keep a little apart
+      if (o === m || o.alpha <= 0 || (m.slot < 0) !== (o.slot < 0)) continue;
+      const d = [m.pos[0] - o.pos[0], m.pos[1] - o.pos[1], m.pos[2] - o.pos[2]];
+      const l = Math.hypot(...d), min = (m.R + o.R) * 1.15;
+      if (l < min && l > 1e-4) for (let i = 0; i < 3; i++) m.vel[i] += d[i] / l * (min - l) * 0.25 * dt;
+    }
+    const ed = eddyAt(m.pos, t);
+    ed[0] += sg * 0.11; ed[1] += sg * 0.015;               // the surge carries it along (the strands stream, see uJSurge)
+    for (let i = 0; i < 3; i++) { m.pos[i] += (m.vel[i] + flowV[i] * 0.35 + ed[i]) * dt; m.eddy[i] += ed[i] * dt; }
+    if (m.slot >= 0) {                                    // near the frame edges a gentle push back in (they turn around, not vanish)
+      const sp = toScreen(m.pos);
+      if (sp) {
+        const ex = Math.max(0, sp[0] - 0.92) - Math.max(0, 0.02 - sp[0]), ey = Math.max(0, 0.04 - sp[1]);
+        m.vel[0] -= ex * 0.8 * dt; m.vel[1] -= ey * 0.8 * dt;
+      }
+    }
+    const cd = [m.pos[0] - CAM.pos[0], m.pos[1] - CAM.pos[1], m.pos[2] - CAM.pos[2]], cl = Math.hypot(...cd);
+    if (cl < 2.2) for (let i = 0; i < 3; i++) m.vel[i] += cd[i] / cl * (2.2 - cl) * 0.5 * dt;   // never bump into the lens
+    m.lastEddy = ed;
     // steer the bell toward a slowly wandering point near home (and against a strong current)
     const ts = t * 1 + m.seed;
-    const target = [m.home[0] + 0.7 * Math.sin(ts * 0.031), m.home[1] + 0.45 * Math.sin(ts * 0.047 + 1.3), m.home[2] + 0.8 * Math.sin(ts * 0.023 + 2.1)];
-    let want = [target[0] - m.pos[0] - flowV[0] * 4, target[1] - m.pos[1] + 0.35, target[2] - m.pos[2]];
+    // a session releases its school at one spot; from there each jelly drifts off on its own, toward a point that
+    // roams through the whole visible water from waypoint to waypoint
+    let target;
+    if (m.slot >= 0) {
+      // waypoints: pick any point of the visible water (its own preferred depth mixed in), drift there, pick the next
+      // one on arrival or after a minute or two; the target glides toward the waypoint so the path stays smooth
+      const st = sceneTime, r = m.roam;
+      if (!m.wp || st > m.wpUntil || Math.hypot(m.pos[0] - m.wp[0], m.pos[1] - m.wp[1], m.pos[2] - m.wp[2]) < 1.2) {
+        const sx = ROAM.sx[0] + (ROAM.sx[1] - ROAM.sx[0]) * rnd();
+        let dist = ROAM.dist[0] + (ROAM.dist[1] - ROAM.dist[0]) * (0.4 * r[8] + 0.6 * rnd());           // each has its own depth, near or far
+        dist = Math.max(dist, ROAM.iconDist * smooth(Math.min(1, Math.max(0, (0.36 - sx) / 0.08))));     // over the desktop icons: only far and faint
+        m.wp = fromScreen(sx, ROAM.sy[0] + (ROAM.sy[1] - ROAM.sy[0]) * rnd(), dist);
+        m.wp[1] = Math.max(m.wp[1], floorAt(m.wp[0], m.wp[2]) + 1.0);   // not inside the reef
+        m.wpUntil = st + 60 + 70 * rnd();
+      }
+      if (!m.tgt) m.tgt = m.home.slice();
+      const g = 1 - Math.exp(-dt * ROAM.glide);
+      for (let d = 0; d < 3; d++) m.tgt[d] += (m.wp[d] - m.tgt[d]) * g;
+      const rp = m.tgt;
+      const k = smooth(Math.min(1, Math.max(0, (st - m.releasedAt) / ROAM.release)));
+      target = m.home.map((v, i) => v + (rp[i] - v) * k);
+    } else {
+      target = [m.home[0] + 0.7 * Math.sin(ts * 0.031), m.home[1] + 0.45 * Math.sin(ts * 0.047 + 1.3), m.home[2] + 0.8 * Math.sin(ts * 0.023 + 2.1)];
+    }
+    m.target = target;
+    // a soft tether to the wandering target: barely felt nearby, firm when the current has carried it off
+    const off = [target[0] - m.pos[0], target[1] - m.pos[1], target[2] - m.pos[2]], dOff = Math.hypot(...off);
+    m.toTarget = dOff > 1e-4 ? off.map(v => v / dOff) : [0, 1, 0];
+    // the tether stays in the background (capped, a slow drift); getting there is mostly the jelly swimming
+    const acc = Math.min(ROAM.tether, 0.03 * (1 + dOff * dOff * 0.15) * dOff);
+    if (dOff > 1e-4) for (let i = 0; i < 3; i++) m.vel[i] += off[i] / dOff * acc * dt;
+    const sp = Math.hypot(...m.vel);
+    if (sp > 0.4) for (let i = 0; i < 3; i++) m.vel[i] *= 0.4 / sp;   // safety only
+    let want = [target[0] - m.pos[0] - flowV[0] * (0.5 + m.roam[9]), target[1] - m.pos[1] + 0.35, target[2] - m.pos[2]];
     want = norm3(want);
-    if (want[1] < 0.15) want = norm3([want[0], 0.15, want[2]]);
-    const turn = Math.min(1, 0.35 * dt);
+    if (want[1] < Math.cos(m.tiltMax)) {                  // moon jellies swim mostly upward; each has its own limit (29°–54°)
+      const hz = Math.hypot(want[0], want[2]) || 1;
+      want = [want[0] / hz * Math.sin(m.tiltMax), Math.cos(m.tiltMax), want[2] / hz * Math.sin(m.tiltMax)];
+    }
+    m.want = want;
+    // a jelly can only turn by contracting harder on one side: the axis moves during the contraction, barely between
+    const turn = Math.min(1, dc * 0.9 + 0.05 * dt);
     m.axis = norm3(m.axis.map((v, i) => v + (want[i] - v) * turn));
     m.yaw += m.yawRate * dt;
+    if (m.yawBase == null) m.yawBase = m.yawRate;
+    m.yawRate += (m.yawBase - m.yawRate) * Math.min(1, 0.4 * dt);   // a spin from a bump dies away
     // position history in the water's frame (the strands trail the bell, not the drift)
     m.histT += dt;
     if (!m.hist.length || m.histT >= JELLY.histDt) {
       m.histT = 0;
-      m.hist.unshift({ t, p: [m.pos[0] - flowDisp[0], m.pos[1] - flowDisp[1], m.pos[2] - flowDisp[2]] });
+      m.hist.unshift({ t, p: [m.pos[0] - flowDisp[0] - m.eddy[0], m.pos[1] - flowDisp[1] - m.eddy[1], m.pos[2] - flowDisp[2] - m.eddy[2]] });
       if (m.hist.length > JELLY.histN) m.hist.pop();
     }
     const H = m.histOut;
@@ -1017,13 +1456,21 @@ function updateJellies(dt, t, flowV) {
       let a = m.hist[m.hist.length - 1];
       let b = a, f = 0;
       for (let q = 0; q + 1 < m.hist.length; q++) if (m.hist[q + 1].t <= tt) { a = m.hist[q + 1]; b = m.hist[q]; f = (tt - a.t) / Math.max(1e-4, b.t - a.t); break; }
-      for (let d = 0; d < 3; d++) H[i * 3 + d] = a.p[d] + (b.p[d] - a.p[d]) * Math.min(1, Math.max(0, f)) + flowDisp[d];
+      for (let d = 0; d < 3; d++) H[i * 3 + d] = a.p[d] + (b.p[d] - a.p[d]) * Math.min(1, Math.max(0, f)) + flowDisp[d] + m.eddy[d];
     }
   }
 }
 
 /* ------------------------------ lighting (CPU, once per frame; linear colours) ------------------------------ */
 const lerp = (a, b, k) => a + (b - a) * k;
+// every 3–6 minutes a cloud passes over the sun: rays, caustics and the bells dim for ~20 s and come back
+function cloudShade(t) {
+  const W = 270, i = Math.floor(t / W);
+  const h = n => { const v = Math.sin(n * 91.7 + 13.1) * 43758.5453; return v - Math.floor(v); };
+  let d = 0;
+  for (const j of [i - 1, i]) { const c = j * W + 35 + 200 * h(j), x = (t - c) / 10; d = Math.max(d, Math.exp(-x * x) * (0.15 + 0.15 * h(j + 0.5))); }
+  return d;
+}
 const mix3 = (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
 const scale3 = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
 function lighting(sk) {
@@ -1036,7 +1483,7 @@ function lighting(sk) {
   const Ld = norm3([hx / hl * Math.sin(thW), -Math.cos(thW), 0.45 / hl * Math.sin(thW)]);
   const sunI = lerp(0.35, 1.0, smooth(Math.min(1, Math.max(0, alt / 45)))) * sk.sunUp;
   const lowSun = Math.exp(-Math.max(0, sk.alt) / 10) * sk.sunUp;
-  let Lsurf = scale3(mix3([1.0, 0.97, 0.92], [1.0, 0.80, 0.60], lowSun), 4.0 * sunI);
+  let Lsurf = scale3(mix3([1.0, 0.97, 0.92], [1.0, 0.80, 0.60], lowSun), 4.0 * sunI * (1 - cloudShade(sceneTime)));
   Lsurf = Lsurf.map((v, i) => v + [0.45, 0.55, 0.80][i] * 0.06 * sk.night + [0.9, 0.6, 0.5][i] * 0.25 * sk.twilight);   // moonlight, dusk
   const I = Math.max(0.02, (Lsurf[0] + Lsurf[1] + Lsurf[2]) / 9.6);
   const deep = scale3([0.0010, 0.008, 0.026], I);
@@ -1052,7 +1499,7 @@ function lighting(sk) {
 let raf = 0, lastT = now(), sceneTime = 0, nextFrame = 0, fps = 0, fpsCount = 0, fpsT = now();
 const FRAME_MS = 1000 / FPS;
 let flowOff = [0, 0], snowOff = [0, 0, 0];
-const rocksU = new Float32Array(ROCKS.flat()), clustersU = new Float32Array(CLUSTERS.flat()), ventsU = new Float32Array(VENTS.flat());
+const rocksU = new Float32Array(ROCKS.flat()), ventsU = new Float32Array(VENTS.flat());
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const pw = Math.round(innerWidth * dpr), ph = Math.round(innerHeight * dpr);
@@ -1067,18 +1514,31 @@ let lastSky = null;
 function advance(t, dt) {
   step(t);
   if (override) Object.assign(current, override);
+  // the weather drifts a little on a ten-minute scale, so a long watch never repeats
+  else {
+    const n = (k, p) => vnoise1(sceneTime / p + k * 17.3) * 2 - 1;
+    current.turbidity = Math.min(1, Math.max(0, current.turbidity + 0.08 * n(1, 240)));
+    current.current = Math.min(1, Math.max(0, current.current + 0.06 * n(2, 300)));
+    current.shafts = Math.min(1, Math.max(0, current.shafts + 0.10 * n(3, 200)));
+  }
   sceneTime += dt;
   const still = 1 - 0.9 * current.beacon;
   const cv = 0.03 + 0.14 * current.current;              // current speed, m/s, toward +x
   const flowV = [cv * still, 0, 0.01 * still];
+  surgeK = (0.55 + 0.45 * current.current) * still;
   for (let i = 0; i < 3; i++) flowDisp[i] += flowV[i] * 0.7 * dt;
   flowOff[0] += flowV[0] * dt; flowOff[1] += flowV[2] * dt;
-  snowOff[0] += flowV[0] * dt; snowOff[1] += 0.012 * dt; snowOff[2] += flowV[2] * dt;
+  snowOff[0] += (flowV[0] + surgeAt(0, 8) * 0.14) * dt; snowOff[1] += 0.012 * dt; snowOff[2] += flowV[2] * dt;
   updateJellies(dt, t, flowV);
+  updateWhale();
+  collideJellies(t);
   lastSky = sky();
   return lastSky;
 }
+let frameNo = 0;
 function setCommon(u, L, sk) {
+  if (u.__frame === frameNo) return;                      // the shared uniforms only change once per frame
+  u.__frame = frameNo;
   gl.uniform2f(u.uRes, canvas.width, canvas.height);
   gl.uniform3fv(u.uCamPos, CAM.pos); gl.uniform3fv(u.uFwd, cam.fwd); gl.uniform3fv(u.uRight, cam.right); gl.uniform3fv(u.uUp, cam.up);
   gl.uniform2fv(u.uTanHalf, tanHalf);
@@ -1089,22 +1549,39 @@ function setCommon(u, L, sk) {
   gl.uniform1f(u.uChop, current.chop); gl.uniform1f(u.uNight, sk.night); gl.uniform1f(u.uBright, current.brightness);
   gl.uniform1f(u.uCurrent, current.current * (1 - 0.9 * current.beacon));
   gl.uniform2fv(u.uFlow, flowOff);
+  gl.uniform1f(u.uSurgeK, surgeK);
   if (u.uRocks) gl.uniform4fv(u.uRocks, rocksU);
-  if (u.uClustersBG) gl.uniform4fv(u.uClustersBG, clustersU);
   if (u.uNRocks) gl.uniform1i(u.uNRocks, ROCKS.length);
   if (u.uSteps) gl.uniform1i(u.uSteps, 90);
 }
+function vnoise1(x) {                                    // 1D value noise, 0..1
+  const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f);
+  const h = n => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+  return h(i) + (h(i + 1) - h(i)) * u;
+}
 function setJelly(u, m) {
-  gl.uniform3fv(u.uJPos, m.pos);
-  const Y = m.axis, X = norm3(cross3(Y, Math.abs(Y[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0])), Z = cross3(X, Y);
+  // the tremble comes and goes (a few seconds now and then), instead of an ever-present shiver
+  const gate = 0.12 + 0.88 * smooth(Math.min(1, Math.max(0, (vnoise1(sceneTime * 0.07 + m.seed) - 0.55) / 0.25)));
+  const t = sceneTime, sh = m.shake, a = 0.010 * m.R / 0.2 * (1.2 - 0.4 * current.beacon) * gate;
+  const jit = [a * (Math.sin(t * sh[3] + sh[0]) + 0.5 * Math.sin(t * sh[3] * 1.73 + sh[1])),
+               a * 0.7 * (Math.sin(t * sh[3] * 1.31 + sh[1]) + 0.5 * Math.sin(t * sh[3] * 2.21 + sh[2])),
+               a * (Math.sin(t * sh[3] * 0.87 + sh[2]) + 0.5 * Math.sin(t * sh[3] * 1.57 + sh[0]))];
+  gl.uniform3fv(u.uJPos, m.pos.map((v, i) => v + jit[i]));
+  const ed = m.lastEddy || [0, 0, 0], wob = 0.05 * gate;
+  const Y = norm3([m.axis[0] + ed[0] * 2.5 + wob * Math.sin(t * sh[3] * 0.9 + sh[2]), m.axis[1], m.axis[2] + ed[2] * 2.5 + wob * Math.sin(t * sh[3] * 1.1 + sh[0])]), X = norm3(cross3(Y, Math.abs(Y[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0])), Z = cross3(X, Y);
   gl.uniform3fv(u.uJX, X); gl.uniform3fv(u.uJY, Y); gl.uniform3fv(u.uJZ, Z);
-  gl.uniform1f(u.uJR, m.R); gl.uniform1f(u.uJPhase, m.phase); gl.uniform1f(u.uJYaw, m.yaw);
+  gl.uniform1f(u.uJR, m.R); gl.uniform1f(u.uJPhase, m.phase); gl.uniform1f(u.uJAmp, m.amp); gl.uniform1f(u.uJSurge, m.surge || 0); gl.uniform1f(u.uJYaw, m.yaw);
   gl.uniform1f(u.uJAlpha, smooth(m.alpha)); gl.uniform1f(u.uJGlow, m.cur.glow);
+  const wv = m.want || Y;                                  // where it is turning to, in the bell's own frame
+  gl.uniform1f(u.uJTurn, Math.min(1, (1 - (wv[0] * Y[0] + wv[1] * Y[1] + wv[2] * Y[2])) * 4));
+  gl.uniform1f(u.uJTurnDir, Math.atan2(wv[0] * Z[0] + wv[1] * Z[1] + wv[2] * Z[2], wv[0] * X[0] + wv[1] * X[1] + wv[2] * X[2]));
+  gl.uniform1f(u.uJAspect, m.aspect || 1);
   gl.uniform3fv(u.uJTint, m.tint);
   gl.uniform3fv(u.uHist, m.histOut);
 }
 const skip = k => CONFIG.skip.includes(k);
 function render(sk) {
+  frameNo++;
   if (!rt.baked) bakeStatic();
   const L = lighting(sk);
   gl.bindFramebuffer(gl.FRAMEBUFFER, rt.fbMS);
@@ -1121,21 +1598,55 @@ function render(sk) {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, rt.gB); gl.uniform1i(P_BG.u.uGB, 1);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
-  // 2. eelgrass (opaque, depth-tested)
+  // the reef into the depth buffer only (writing gl_FragDepth from the full-screen pass cost ~14 ms on an iGPU),
+  // so the jellies and particles behind it are hidden
   gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS);
-  if (!skip('grass')) {
-    gl.useProgram(P_GRASS.p); setCommon(P_GRASS.u, L, sk);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, hmap.tex); gl.uniform1i(P_GRASS.u.uHmap, 0);
-    gl.uniform4fv(P_GRASS.u.uClusters, clustersU); gl.uniform1fv(P_GRASS.u.uClusterStart, clusterStart);
-    gl.drawArrays(gl.TRIANGLES, 0, BLADES * GRASS_SEG * 6);
+  if (reef.ready && !skip("reef")) {
+    gl.colorMask(false, false, false, false);
+    gl.useProgram(P_REEF_D.p); setCommon(P_REEF_D.u, L, sk);
+    drawReefTiles(P_REEF_D.u, reef.proxyVao, reef.proxyCount);   // the low-poly proxy is enough for depth
+    gl.colorMask(true, true, true, true);
+  }
+  // the whale, when it is passing (opaque, writes depth so the jellies in front blend over it)
+  if (whale.active && whale.pos && !skip('whale')) {
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
+    gl.useProgram(P_WHALE.p); setCommon(P_WHALE.u, L, sk);
+    const u = P_WHALE.u;
+    gl.uniform3fv(u.uWPos, whale.pos); gl.uniform3fv(u.uWX, whale.X); gl.uniform3fv(u.uWY, whale.Y); gl.uniform3fv(u.uWZ, whale.Z);
+    gl.uniform1f(u.uWScale, WHALE.length / WHALE.modelLen);
+    gl.uniform1f(u.uWPhase, sceneTime * 2 * Math.PI / WHALE.stroke + whale.phase0); gl.uniform1f(u.uWAmp, 0.55);
+    gl.uniform1f(u.uWFog, WHALE.fog);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, whale.tex); gl.uniform1i(u.uTex, 0);
+    gl.bindVertexArray(whale.vao); gl.drawElements(gl.TRIANGLES, whale.count, gl.UNSIGNED_INT, 0); gl.bindVertexArray(vao);
   }
   // 3. jellies, far → near, premultiplied alpha, no depth writes
   gl.depthMask(false);
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   if (!skip('jelly')) {
     const order = jellies.filter(m => m.alpha > 0).sort((a, b) => Math.hypot(b.pos[0], b.pos[1] - CAM.pos[1], b.pos[2]) - Math.hypot(a.pos[0], a.pos[1] - CAM.pos[1], a.pos[2]));
+    const drawPart = (i, m) => { gl.uniform1i(P_MESH.u.uPart, i); gl.bindVertexArray(glb.parts[i].vao); gl.drawElements(gl.TRIANGLES, glb.parts[i].count, gl.UNSIGNED_INT, 0); };
     for (const m of order) {
-      // inner side of the bell, the strands, then the outer side
+      if (glb.ready) {
+        // inner faces of the bell, the inside (canals, gonads, rhopalia), arms, tentacles, then the outer faces
+        const d = Math.max(0.5, Math.hypot(m.pos[0] - CAM.pos[0], m.pos[1] - CAM.pos[1], m.pos[2] - CAM.pos[2]));
+        const px = m.R * canvas.height / (2 * tanHalf[1] * d);   // on-screen bell radius: tiny ones skip the fine parts
+        gl.useProgram(P_MESH.p); setCommon(P_MESH.u, L, sk); setJelly(P_MESH.u, m);
+        gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT); drawPart(0, m);
+        gl.disable(gl.CULL_FACE);
+        if (px > 14) drawPart(3, m);
+        drawPart(1, m);
+        if (px > 14) drawPart(4, m);
+        drawPart(2, m);
+        gl.bindVertexArray(vao);
+        gl.useProgram(P_TENT.p); setCommon(P_TENT.u, L, sk); setJelly(P_TENT.u, m);
+        gl.drawArrays(gl.LINES, 0, TENT_N * TENT_SEG * 2);
+        gl.useProgram(P_MESH.p);
+        gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); drawPart(0, m);
+        gl.disable(gl.CULL_FACE);
+        gl.bindVertexArray(vao);
+        continue;
+      }
+      // stand-in: inner side of the bell, the strands, then the outer side
       gl.enable(gl.CULL_FACE);
       gl.useProgram(P_BELL.p); setCommon(P_BELL.u, L, sk); setJelly(P_BELL.u, m);
       gl.cullFace(gl.FRONT); gl.drawArrays(gl.TRIANGLES, 0, 56 * 18 * 6);
@@ -1176,6 +1687,7 @@ function render(sk) {
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, rt.rays); gl.uniform1i(P_FINAL.u.uRays, 1);
   gl.uniform1f(P_FINAL.u.uExposure, L.exposure); gl.uniform1f(P_FINAL.u.uEnc, rt.enc);
   gl.uniform1f(P_FINAL.u.uBeacon, current.beacon); gl.uniform1f(P_FINAL.u.uTime, sceneTime);
+  gl.uniform1f(P_FINAL.u.uSurge0, surgeAt(0, 8));
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 function frame(ms) {
@@ -1220,14 +1732,15 @@ function bench(frames = 60) {
 
 // testing hooks (themes/demo.html looks for window.theme)
 window.theme = window.jellyfish = {
-  requestState, applyState, STATES, PARAMS, CONFIG, sky, bench, lighting, ROCKS, CLUSTERS,
+  requestState, applyState, STATES, PARAMS, CONFIG, sky, bench, lighting, ROCKS,
   setOverride(o) { override = o; },
   frame(dt = 1 / FPS) { const t = now(); lastT = t; render(advance(t, dt)); },
   simulate(sec, dt = 1 / FPS) { let t = now(); for (let k = 0; k < sec / dt; k++) advance(t += dt, dt); },   // run the scene forward without drawing
   setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; },
-  get sessions() { return effectiveSlots(); }, jellies, JELLY_SPOTS, JELLY_STATES,
+  whale, WHALE, whaleNow() { if (whale.ready) startWhale(); return whale.ready; },
+  get sessions() { return effectiveSlots(); }, reef, REEF, REEF_TILES, floorAt, rebake() { rt.baked = false; }, jellies, SCHOOLS, SCHOOL, JELLY_STATES, glb,
   get current() { return { ...current }; }, get state() { return stateName; },
-  get sceneTime() { return sceneTime; }, compileMs,
+  get sceneTime() { return sceneTime; }, compileMs, get bumps() { return bumps; },
 };
 </script>
 </body>
