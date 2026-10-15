@@ -12,28 +12,12 @@
          background: rgba(0,0,0,.4); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
   body.debug #hud { display: block; }
   #nogl { display: none; position: fixed; inset: 0; color: #dde; font: 14px sans-serif; padding: 24px; }
-  /* whale tuning panel (?tune=1 or W) */
-  #tune { position: fixed; top: 12px; right: 12px; width: 300px; display: none; z-index: 10; padding: 12px 14px 10px;
-          background: rgba(6, 18, 30, .82); color: #d6e8f2; font: 13px/1.4 "Microsoft JhengHei UI", sans-serif;
-          border: 1px solid rgba(140, 200, 230, .25); border-radius: 8px; user-select: auto; -webkit-user-select: auto; cursor: auto; }
-  body.tune #tune { display: block; }
-  #tune h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
-  #tune .row { display: grid; grid-template-columns: 92px 1fr 46px; align-items: center; gap: 6px; margin: 5px 0; }
-  #tune .row label { color: #9fc3d6; }
-  #tune input[type=range] { width: 100%; }
-  #tune .val { text-align: right; font-variant-numeric: tabular-nums; }
-  #tune .hint { color: #7ea4b8; font-size: 12px; margin: 2px 0 6px; }
-  #tune .btns { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
-  #tune button, #tune select { background: #12344a; color: #d6e8f2; border: 1px solid #2c5a74; border-radius: 5px; padding: 4px 10px; font: inherit; cursor: pointer; }
-  #tune button:hover { background: #1a4762; }
-  #tune .status { color: #7ea4b8; font-size: 12px; margin-top: 6px; min-height: 16px; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="hud"></div>
 <div id="nogl">這個主題需要 WebGL2。</div>
-<div id="tune"></div>
 <script>
 /* =====================================================================================
  * 海月 (jellyfish) — a realistic sea floor with moon jellies as a live wallpaper
@@ -75,7 +59,7 @@ const POLL_MS = 1000;
 const CAM = { pos: [0, 1.1, 0], pitch: 0.20, vfov: 0.85 };
 const SURF = 9.0;                            // the surface, metres above the sand datum
 // how fast the light moves (user, 2026-10-15: "too fast, like a time-lapse" → about half): god rays drifting,
-// caustics flowing (floor, reef, jellies, whale), the surface ripples and its light net. 1 = the first version.
+// caustics flowing (floor, reef, jellies), the surface ripples and its light net. 1 = the first version.
 const LIGHT_SPEED = { rays: 0.45, caustics: 0.5, surface: 0.55 };
 
 const PARAMS = {
@@ -109,24 +93,6 @@ const REEF_TILES = [
   [-13.0, 17.5, -1.70, 1.00, 0.10], [1.5, 18.5, 1.48, 1.05, 0.00], [16.0, 17.0, -1.55, 1.00, 0.08],
   [-22.0, 29.0, 1.60, 1.15, 0.15], [-5.0, 30.0, -1.52, 1.20, 0.05], [12.0, 29.5, 1.66, 1.15, 0.10], [28.0, 28.0, -1.60, 1.10, 0.10],
 ];
-// 2026-10-15 (user: "a big whale gliding past in the background now and then"): humpbacks winter in Okinawa
-// (Kerama, Jan–Mar). "High-Poly Humbpack Whale" by K9239 (Sketchfab, CC BY 4.0), body only, 2K texture.
-// The model is 16.1 m along x with the head at −x; scaled to a 14 m adult. It crosses far behind the jellies,
-// when Claude finishes something (user, 2026-10-15): a session (or the whole sky) turning to clearing sends the whale
-// off right away; finishes while it swims, and for 30–60 s after it has gone, are ignored (a burst of finishes gives
-// one pass); half-hidden in the haze (extinction × `fog`).
-const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, headX: -8.11, cooldown: [0, 0], stroke: 5.0, fog: 0.6,   // cooldown: rest after a pass, s (2026-10-15: 0 for now — user tuning; was [30, 60])
-                loop: false,                            // tuning: start the next pass as soon as one ends
-                below: 3.44, above: 2.93,              // the scaled model reaches this far below (fin tips) / above its centre, m
-                // "near" (user, 2026-10-15: "right in front of the screen, like a giant monster going by"): bigger than the
-                // frame, its belly and pectoral fins sweeping overhead; "far": a shape crossing the haze
-                mode: 'bottom',
-                // 'bottom' (user, 2026-10-15: "move it to the bottom of the screen, showing its upper half", then "higher, a bit
-                // further, and not so sudden"): 4.6–5.6 m away, its back reaching ~60% up the frame, the rest below the bottom
-                // edge; it comes out of the haze and goes back into it; nothing of it is drawn under the sand
-                bottom: { dist: [4.6, 5.6], backAt: 0.60, speed: [0.7, 0.95], bob: 0.25, dz: 0.4, fade: 0.18 },   // fade: share of the pass spent coming out of / going back into the haze
-                near: { dist: [5.5, 8.0], y: [4.0, 4.8], speed: [0.9, 1.25], bob: 0.3, dz: 1.0 },
-                far:  { dist: [17, 23],   y: [4.0, 5.5], speed: [1.2, 1.7],  bob: 0.6, dz: 6.0 } };
 // the sand height under a tile (a CPU copy of the large features of dunes())
 const sandAt = (x, z) => -0.05 + 0.9 * smooth(Math.min(1, Math.max(0, (z - 12) / 33))) + 0.5 * smooth(Math.min(1, Math.max(0, (-5 - x) / 11))) * smooth(Math.min(1, Math.max(0, (z - 4) / 12)));
 const VENTS = [[1.3, 0.0, 7.2], [-2.6, 0.0, 11.5], [5.1, 0.0, 13.0], [3.4, 0.0, 9.0], [-0.6, 0.0, 16.0]];   // bubble streams (y filled from the floor)
@@ -162,11 +128,10 @@ function requestState(name) {
 }
 
 /* ------------------------------ inputs ------------------------------ */
-for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => { if (!(e.target.closest && e.target.closest('#tune'))) e.preventDefault(); });
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
 addEventListener('keydown', e => {
   if (KEYS[e.key]) requestState(KEYS[e.key]);
   if (e.key === 'd') document.body.classList.toggle('debug');
-  if (e.key === 'w' || e.key === 'W') document.body.classList.toggle('tune');
 });
 let lastPolled = null, sessionsFile = null, sessionsOverride = null;
 async function poll() {
@@ -444,53 +409,6 @@ void main() {
   }
   o = vec4(col, 1.0);
 #endif
-}`;
-
-/* ---------- the whale: opaque, depth-tested, a vertical body wave (whales stroke up and down) ---------- */
-const VS_WHALE = COMMON + `
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNrm;
-layout(location = 2) in vec2 aUV;
-uniform vec3 uWPos, uWX, uWY, uWZ;          // world position, world directions of the model's x / y / z
-uniform float uWScale, uWPhase, uWAmp;
-out vec3 vW, vN; out vec2 vUV;
-void main() {
-  vec3 p = aPos;
-  float u = clamp((p.x - (${WHALE.headX.toFixed(2)})) / ${WHALE.modelLen.toFixed(2)}, 0.0, 1.0);   // 0 head … 1 flukes
-  // the tail beats up and down; the wave runs backward, grows toward the flukes; the head answers a little
-  float tail = pow(smoothstep(0.30, 1.0, u), 2.0);
-  float dy = uWAmp * (tail * sin(uWPhase - u * 3.2) - 0.06 * (1.0 - u) * sin(uWPhase + 0.6));
-  // the long pectoral fins row slowly
-  float fin = smoothstep(1.1, 3.0, abs(p.z)) * (1.0 - smoothstep(0.55, 0.75, u));
-  dy += fin * 0.22 * (abs(p.z) - 1.1) * sin(uWPhase * 0.5 + 1.2);
-  p.y += dy;
-  // bend the normal along with the tail (slope of the wave)
-  float slope = uWAmp * tail * cos(uWPhase - u * 3.2) * -3.2 / ${WHALE.modelLen.toFixed(2)};
-  vec3 n = normalize(aNrm + vec3(-slope * aNrm.y, 0.0, 0.0));
-  vW = uWPos + (uWX * p.x + uWY * p.y + uWZ * p.z) * uWScale;
-  vN = uWX * n.x + uWY * n.y + uWZ * n.z;
-  vUV = aUV;
-  gl_Position = proj(vW);
-}`;
-const FS_WHALE = COMMON + `
-uniform sampler2D uTex;
-uniform float uWFog, uWFade;
-in vec3 vW, vN; in vec2 vUV;
-out vec4 o;
-void main() {
-  if (vW.y < seabed(vW.xz) - 0.02) discard;                // under the sand: not drawn (the sand writes no depth)
-  vec3 V = normalize(uCamPos - vW), N = normalize(vN);
-  if (dot(N, V) < 0.0) N = -N;
-  vec3 alb = texture(uTex, vUV).rgb;
-  vec3 down = downwell(vW.y);
-  float wrap = saturate(dot(N, -uLd) * 0.5 + 0.5);
-  float ca = caustic(vW.xz * 0.6 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop) * LS_CAUSTICS);
-  vec3 light = down * (0.20 + 0.80 * wrap) * (0.8 + 0.8 * ca * uCaust * saturate(N.y)) + (uUpC * 1.2 + uDeep * 0.4) * uBright;
-  vec3 col = alb * light;
-  float d = length(uCamPos - vW);
-  col += water(-V) * pow(1.0 - abs(dot(N, V)), 3.0) * (0.5 + 2.0 * uNight);   // a soft edge against the water (reads at night)
-  vec3 T = exp(-uSigma * d * uWFog * (1.0 - 0.35 * uNight));  // a shape in the haze, not lost in it
-  o = vec4(mix(water(-V), col * T + water(-V) * (1.0 - T), uWFade), 1.0);   // out of the haze at the start, back into it at the end
 }`;
 
 /* ---------- sea fireflies: blue-green sparks where the water is disturbed (CPU pool → points) ---------- */
@@ -959,12 +877,11 @@ function program(vs, fs, name) {
   compileMs[name] = +(performance.now() - t0).toFixed(1);
   return { p, u };
 }
-let P_SPARK, P_WHALE, P_REEF, P_REEF_D, P_MESH, P_BAKE, P_BG, P_BELL, P_ARM, P_TENT, P_PART, P_RAYS, P_FINAL, bufTri, vao;
+let P_SPARK, P_REEF, P_REEF_D, P_MESH, P_BAKE, P_BG, P_BELL, P_ARM, P_TENT, P_PART, P_RAYS, P_FINAL, bufTri, vao;
 if (gl) {
   P_BG = program(VS_TRI, FS_BG, 'bg');
   P_BAKE = program(VS_TRI, FS_BG.replace('#version 300 es\n', '#version 300 es\n#define BAKE 1\n'), 'bake');
   P_REEF = program(VS_REEF, FS_REEF, 'reef');
-  P_WHALE = program(VS_WHALE, FS_WHALE, 'whale');
   P_SPARK = program(VS_SPARK, FS_SPARK, 'spark');
   P_REEF_D = program(VS_REEF, `#version 300 es
 precision mediump float;
@@ -1142,20 +1059,6 @@ function floorAt(x, z) {                                   // the sand, or the h
 }
 if (gl) loadReef().catch(e => console.warn('reef not loaded:', e.message));
 
-/* ------------------------------ the whale: load, schedule, path ------------------------------ */
-const whale = { ready: false, active: false, quietUntil: 0, prev: null };
-const rr = ([a, b]) => a + (b - a) * rnd();
-async function loadWhale() {
-  const m = await readGLB(WHALE.url, true);
-  whale.vao = makeVAO([[m.P, 3], [m.N, 3], [m.UV, 2]], m.I); whale.count = m.I.length;
-  const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, m.bmp);
-  gl.generateMipmap(gl.TEXTURE_2D);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  whale.tex = tex;
-  whale.ready = true;
-}
-if (gl) loadWhale().catch(e => console.warn('whale not loaded:', e.message));
 /* ------------------------------ sea fireflies: the pool ------------------------------ */
 const sparks = { data: new Float32Array(SPARK.max * 9), head: 0, glow: 0, vao: null, buf: null };
 for (let i = 0; i < SPARK.max; i++) sparks.data[i * 9 + 3] = -1e4;   // all dead at start
@@ -1189,16 +1092,6 @@ function updateSparks(dt) {
       emitSpark([m.pos[0] + Math.cos(a) * m.R, m.pos[1] - m.R * (0.2 + 1.5 * rnd()), m.pos[2] + Math.sin(a) * m.R], rv(0.03), 0.009);
     }
   }
-  // the whale drags a wake of light, most of it off the tail
-  if (whale.active && whale.pos) {
-    const sc = WHALE.length / WHALE.modelLen;
-    for (let i = 0, n = emitN(110 * g, dt); i < n; i++) {
-      const u = Math.pow(rnd(), 0.6), xm = WHALE.headX + u * WHALE.modelLen;
-      const off = [(rnd() - 0.5) * 2.4, (rnd() - 0.5) * 2.4];
-      const p = [0, 1, 2].map(k => whale.pos[k] + (whale.X[k] * xm + whale.Y[k] * off[0] + whale.Z[k] * off[1]) * sc);
-      emitSpark(p, rv(0.25), 0.03);
-    }
-  }
 }
 function sparkPulse(m) {                                   // a jelly's contraction shakes light off its margin
   const g = sparks.glow; if (g < 0.03 || m.slot < 0 || m.alpha < 0.3) return;
@@ -1208,45 +1101,6 @@ function sparkPulse(m) {                                   // a jelly's contract
     const r = [Math.cos(a), 0, Math.sin(a)];
     emitSpark([m.pos[0] + r[0] * m.R * 1.05, m.pos[1] - m.R * (0.05 + down), m.pos[2] + r[2] * m.R * 1.05], [r[0] * 0.06, -0.02, r[2] * 0.06], 0.010);
   }
-}
-function startWhale() {                                    // a pass: in from one side well off screen, out the other
-  const M = WHALE[WHALE.mode] || WHALE.near;
-  const dir = rnd() < 0.5 ? 1 : -1, z = rr(M.dist);
-  const half = z * TAN_169[0] * 1.15 + WHALE.length;       // beyond the frame edge, body included
-  // no clipping: the fin tips stay clear of the reef along the whole path (body half-width ~3 m), the back under the surface
-  let reefTop = 0;
-  for (let x = -half; x <= half; x += 0.5) for (const oz of [-3, -1.5, 0, 1.5, 3]) reefTop = Math.max(reefTop, floorAt(x, z + oz));
-  if (WHALE.mode === 'bottom') {                        // place it by the frame: its back at backAt of the screen height
-    const yb = CAM.pos[1] + z * Math.tan(CAM.pitch - CAM.vfov / 2), yt = CAM.pos[1] + z * Math.tan(CAM.pitch + CAM.vfov / 2);
-    const y0b = yb + M.backAt * (yt - yb) - WHALE.above;
-    Object.assign(whale, { active: true, dir, z, y0: y0b, bobA: M.bob, x0: -dir * half, x1: dir * half, t0: sceneTime, dur: 2 * half / rr(M.speed),
-                           bob: rnd() * 6.28, dz: (rnd() - 0.5) * M.dz, phase0: rnd() * 6.28 });
-    return;
-  }
-  // (near: the back may rise past the surface — at 5–8 m that height is above the top of the frame, and the reef is tall)
-  const lo = reefTop + WHALE.below + M.bob + 0.2 + 0.55, hi = (WHALE.mode === 'near' ? SURF + 2.0 : SURF) - WHALE.above - M.bob - 0.3 - 0.55;
-  const y0 = Math.min(hi, Math.max(lo, rr(M.y)));
-  Object.assign(whale, { active: true, dir, z, y0, bobA: M.bob, x0: -dir * half, x1: dir * half, t0: sceneTime, dur: 2 * half / rr(M.speed),
-                         bob: rnd() * 6.28, dz: (rnd() - 0.5) * M.dz, phase0: rnd() * 6.28 });
-}
-function updateWhale() {
-  if (!whale.ready) return;
-  // Claude finished something: any slot (or the sky) newly in clearing → off it goes, unless it is swimming or resting
-  const now5 = [stateName, ...effectiveSlots()];
-  if (whale.prev && now5.some((st, i) => st === "clearing" && whale.prev[i] !== "clearing") && !whale.active && sceneTime >= whale.quietUntil) startWhale();
-  whale.prev = now5;
-  if (!whale.active) return;
-  const k = (sceneTime - whale.t0) / whale.dur;
-  if (k >= 1) { whale.active = false; whale.quietUntil = sceneTime + rr(WHALE.cooldown); if (WHALE.loop) startWhale(); return; }   // then a rest (or, tuning, straight on)
-  const x = whale.x0 + (whale.x1 - whale.x0) * k;
-  const y = whale.y0 + whale.bobA * Math.sin(k * 3.1 + whale.bob) + 0.2 * Math.sin(sceneTime * 2 * Math.PI / WHALE.stroke * 0.5);
-  const z = whale.z + whale.dz * (k - 0.5);
-  const dy = whale.bobA * 3.1 / whale.dur * Math.cos(k * 3.1 + whale.bob);   // heading follows the path (gentle pitch)
-  const F = norm3([whale.dir * (whale.x1 - whale.x0) / whale.dur * whale.dir, dy, whale.dz / whale.dur]);
-  const U0 = [0, 1, 0], S = norm3(cross3(F, U0)), U = cross3(S, F);
-  // the model's −x is forward, +y up, so x → −F, y → U, z → x × y
-  whale.X = F.map(v => -v); whale.Y = U; whale.Z = cross3(whale.X, whale.Y);
-  whale.pos = [x, y, z];
 }
 
 /* ------------------------------ the jelly model (GLB → one VAO per part) ------------------------------ */
@@ -1537,18 +1391,6 @@ function updateJellies(dt, t, flowV) {
     const cd = [m.pos[0] - CAM.pos[0], m.pos[1] - CAM.pos[1], m.pos[2] - CAM.pos[2]], cl = Math.hypot(...cd);
     if (cl < 2.2) for (let i = 0; i < 3; i++) m.vel[i] += cd[i] / cl * (2.2 - cl) * 0.5 * dt;   // never bump into the lens
     m.lastEddy = ed;
-    // the whale is coming through: jellies near its body are shoved aside and flinch
-    if (whale.active && whale.pos && m.slot >= 0) {
-      const sc = WHALE.length / WHALE.modelLen;
-      const a = whale.pos.map((v, i) => v + whale.X[i] * WHALE.headX * sc), b = whale.pos.map((v, i) => v + whale.X[i] * (WHALE.headX + WHALE.modelLen) * sc);
-      const ab = b.map((v, i) => v - a[i]), am = m.pos.map((v, i) => v - a[i]);
-      const tt = Math.max(0, Math.min(1, (am[0] * ab[0] + am[1] * ab[1] + am[2] * ab[2]) / (ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2])));
-      const d = m.pos.map((v, i) => v - (a[i] + ab[i] * tt)), dl = Math.hypot(...d), reach = 3.2 * (1 - 0.4 * tt) + m.R;
-      if (dl < reach && dl > 1e-4) {
-        for (let i = 0; i < 3; i++) m.vel[i] += d[i] / dl * (reach - dl) * 0.9 * dt;
-        if (flinch(m, t)) sparkBurst(m.pos, m.R * 1.5, Math.round(12 * sparks.glow));
-      }
-    }
     // steer the bell toward a slowly wandering point near home (and against a strong current)
     const ts = t * 1 + m.seed;
     // a session releases its school at one spot; from there each jelly drifts off on its own, toward a point that
@@ -1685,7 +1527,6 @@ function advance(t, dt) {
   flowOff[0] += flowV[0] * dt; flowOff[1] += flowV[2] * dt;
   snowOff[0] += (flowV[0] + surgeAt(0, 8) * 0.14) * dt; snowOff[1] += 0.012 * dt; snowOff[2] += flowV[2] * dt;
   updateJellies(dt, t, flowV);
-  updateWhale();
   sparks.glow = Math.min(1, (lastSky ? lastSky.night : 0) + 0.15 * current.turbidity * (lastSky ? lastSky.twilight : 0));
   updateSparks(dt);
   collideJellies(t);
@@ -1763,20 +1604,6 @@ function render(sk) {
     gl.useProgram(P_REEF_D.p); setCommon(P_REEF_D.u, L, sk);
     drawReefTiles(P_REEF_D.u, reef.proxyVao, reef.proxyCount);   // the low-poly proxy is enough for depth
     gl.colorMask(true, true, true, true);
-  }
-  // the whale, when it is passing (opaque, writes depth so the jellies in front blend over it)
-  if (whale.active && whale.pos && !skip('whale')) {
-    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
-    gl.useProgram(P_WHALE.p); setCommon(P_WHALE.u, L, sk);
-    const u = P_WHALE.u;
-    gl.uniform3fv(u.uWPos, whale.pos); gl.uniform3fv(u.uWX, whale.X); gl.uniform3fv(u.uWY, whale.Y); gl.uniform3fv(u.uWZ, whale.Z);
-    gl.uniform1f(u.uWScale, WHALE.length / WHALE.modelLen);
-    gl.uniform1f(u.uWPhase, sceneTime * 2 * Math.PI / WHALE.stroke + whale.phase0); gl.uniform1f(u.uWAmp, 0.55);
-    gl.uniform1f(u.uWFog, WHALE.fog);
-    const fk = (sceneTime - whale.t0) / whale.dur, fd = (WHALE[WHALE.mode] || {}).fade || 0;
-    gl.uniform1f(u.uWFade, fd > 0 ? smooth(Math.min(1, fk / fd)) * smooth(Math.min(1, (1 - fk) / fd)) : 1);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, whale.tex); gl.uniform1i(u.uTex, 0);
-    gl.bindVertexArray(whale.vao); gl.drawElements(gl.TRIANGLES, whale.count, gl.UNSIGNED_INT, 0); gl.bindVertexArray(vao);
   }
   // 3. jellies, far → near, premultiplied alpha, no depth writes
   gl.depthMask(false);
@@ -1911,62 +1738,12 @@ window.theme = window.jellyfish = {
   frame(dt = 1 / FPS) { const t = now(); lastT = t; render(advance(t, dt)); },
   simulate(sec, dt = 1 / FPS) { let t = now(); for (let k = 0; k < sec / dt; k++) advance(t += dt, dt); },   // run the scene forward without drawing
   setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; },
-  sparks, SPARK, whale, WHALE, whaleNow() { if (whale.ready) startWhale(); return whale.ready; },
+  sparks, SPARK,
   get sessions() { return effectiveSlots(); }, reef, REEF, REEF_TILES, floorAt, rebake() { rt.baked = false; }, jellies, SCHOOLS, SCHOOL, JELLY_STATES, glb,
   get current() { return { ...current }; }, get state() { return stateName; },
   get sceneTime() { return sceneTime; }, compileMs, get bumps() { return bumps; },
 };
 
-/* ------------------------------ whale tuning panel (?tune=1 or W; for a browser tab — the wallpaper itself takes no clicks) ------------------------------ */
-(function whaleTuner() {
-  const KEY = 'jellyfish.whale.v1';
-  const MODES = { bottom: '貼底', near: '近景', far: '遠景' };
-  const SPEC = {                                            // [label, min, max, step, hint]
-    dist:   ['距離 (m)', 2.5, 30, 0.1, '離鏡頭多遠（每趟在兩值之間隨機）'],
-    backAt: ['背的高度', 0.2, 0.9, 0.01, '貼底：背的最高點在畫面多高（0 底、1 頂）'],
-    y:      ['深度 (m)', 1, 9, 0.1, '近景／遠景：鯨魚中心的高度'],
-    speed:  ['速度 (m/s)', 0.2, 2.5, 0.05, '每趟在兩值之間隨機'],
-    bob:    ['上下起伏 (m)', 0, 1.2, 0.05, ''],
-    dz:     ['前後漂移 (m)', 0, 8, 0.1, '一趟中往前或往後斜多少'],
-    fade:   ['淡入淡出', 0, 0.4, 0.01, '前後各佔整趟的比例（貼底）'],
-  };
-  try { const saved = JSON.parse(localStorage.getItem(KEY) || 'null'); if (saved && saved.mode) { WHALE.mode = saved.mode; for (const m in MODES) if (saved[m]) Object.assign(WHALE[m], saved[m]); } } catch { /* storage blocked: defaults */ }
-  const save = () => { try { const o = { mode: WHALE.mode }; for (const m in MODES) o[m] = WHALE[m]; localStorage.setItem(KEY, JSON.stringify(o)); } catch { /* fine */ } };
-  const el = document.getElementById('tune');
-  const fmt = v => (Math.round(v * 100) / 100).toString();
-  const line = () => { const M = WHALE[WHALE.mode], parts = Object.keys(M).map(k => k + ': ' + (Array.isArray(M[k]) ? '[' + M[k].map(fmt).join(', ') + ']' : fmt(M[k]))); return WHALE.mode + ': { ' + parts.join(', ') + ' },'; };
-  function build() {
-    const M = WHALE[WHALE.mode];
-    let h = '<h3>鯨魚調整</h3><div class="row"><label>模式</label><select id="tmode">' + Object.entries(MODES).map(([k, v]) => '<option value="' + k + '"' + (k === WHALE.mode ? ' selected' : '') + '>' + v + '</option>').join('') + '</select><span></span></div>';
-    for (const k of Object.keys(M)) {
-      const sp = SPEC[k]; if (!sp) continue;
-      const vals = Array.isArray(M[k]) ? M[k] : [M[k]];
-      vals.forEach((v, i) => {
-        const lab = sp[0] + (vals.length > 1 ? (i ? ' 最大' : ' 最小') : '');
-        h += '<div class="row"><label>' + lab + '</label><input type="range" data-k="' + k + '" data-i="' + (vals.length > 1 ? i : -1) + '" min="' + sp[1] + '" max="' + sp[2] + '" step="' + sp[3] + '" value="' + v + '"><span class="val">' + fmt(v) + '</span></div>';
-      });
-      if (sp[4]) h += '<div class="hint">' + sp[4] + '</div>';
-    }
-    h += '<div class="row"><label>一直游</label><input type="checkbox" id="tloop"' + (WHALE.loop ? ' checked' : '') + '><span></span></div><div class="hint">游完一趟立刻接下一趟（調整用）</div>';
-    h += '<div class="btns"><button id="tgo">游一趟</button><button id="tcopy">複製設定</button><button id="treset">重設</button></div><div class="status" id="tstat">W 關閉面板</div>';
-    el.innerHTML = h;
-    el.querySelector('#tmode').onchange = e => { WHALE.mode = e.target.value; save(); build(); };
-    el.querySelectorAll('input[type=range]').forEach(inp => inp.oninput = () => {
-      const k = inp.dataset.k, i = +inp.dataset.i, v = +inp.value, M2 = WHALE[WHALE.mode];
-      if (i >= 0) { M2[k][i] = v; if (M2[k][0] > M2[k][1]) M2[k][1 - i] = v; } else M2[k] = v;
-      inp.nextElementSibling.textContent = fmt(v);
-      save();
-    });
-    el.querySelector('#tloop').onchange = e => { WHALE.loop = e.target.checked; if (WHALE.loop && !whale.active) startWhale(); status(WHALE.loop ? '一直游：開' : '一直游：關'); };
-    el.querySelector('#tgo').onclick = () => { whale.active = false; whale.quietUntil = 0; startWhale(); status('出發！約 ' + Math.round(whale.dur) + ' 秒'); };
-    el.querySelector('#tcopy').onclick = async () => { try { await navigator.clipboard.writeText(line()); status('已複製：' + line()); } catch { status(line()); } };
-    el.querySelector('#treset').onclick = () => { try { localStorage.removeItem(KEY); } catch { } location.reload(); };
-  }
-  const status = t => { const s = el.querySelector('#tstat'); if (s) s.textContent = t; };
-  build();
-  if (/[?&]tune=1/.test(location.search)) document.body.classList.add('tune');
-  window.theme.tuneLine = line;
-})();
 </script>
 </body>
 </html>
