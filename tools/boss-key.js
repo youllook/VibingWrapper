@@ -1,4 +1,4 @@
-// 一鍵隱藏 (2026-10-01, user: 上班偷用時快速切回 — a boss key). One user-defined hotkey hides every 星圖
+// 老闆鍵 (2026-10-01, user: 上班偷用時快速切回 — a boss key). One user-defined hotkey hides every 星圖
 // window that is showing (the live wallpaper → the plain Windows wallpaper shows again, mood panel …; the
 // HUD only shrinks to its small gear, and main.js removes the tray icon)
 // and, if 收桌面 had hidden the desktop icons, brings them back — so the screen looks like an ordinary

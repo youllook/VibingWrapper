@@ -23,7 +23,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   toggleIcons: () => ipcRenderer.invoke('pet:toggle-icons'),
   // true when Ctrl+Alt+D is ours (shown as a reminder next to 桌面圖示)
   iconsHotkey: () => ipcRenderer.invoke('pet:icons-hotkey'),
-  // 一鍵隱藏 (boss key): toggle, current { key, registered, hidden }, record a new key
+  // 老闆鍵 (boss key): toggle, current { key, registered, hidden }, record a new key
   bossToggle: () => ipcRenderer.send('pet:boss'),
   bossKey: () => ipcRenderer.invoke('pet:boss-key'),
   bossCapture: on => ipcRenderer.send('pet:boss-capture', !!on),
