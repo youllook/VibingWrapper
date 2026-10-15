@@ -36,7 +36,7 @@
    `{"state":"storm","sessions":["storm","waiting",null,null,null]}`
    - `state`：合成後的天空，`clear` / `overcast` / `storm` / `clearing` / `waiting`
    - `sessions`：5 個固定位置，每個是一個 Claude session 自己的狀態（`null` = 沒有）
-2. **暫停**：提供 `window.wpPause(on)`。桌面被最大化／全螢幕視窗蓋住、或一鍵隱藏時會呼叫；`document.hidden` 時也要停止渲染。
+2. **暫停**：提供 `window.wpPause(on)`。桌面被最大化／全螢幕視窗蓋住、或老闆鍵時會呼叫；`document.hidden` 時也要停止渲染。
 3. **模式**（齒輪選單「模式」：預設／日間／夜間）：預設跟著真實時間；網址帶 `?day=1` 時時鐘固定在白天（`clockHours = 10.5`），帶 `?night=1` 時固定在夜晚（`clockHours = 22`）。
 4. **效能**：30 fps 上限、半解析度渲染，GPU 每格最好在 12 ms 以內。
    例外（2026-10-13）：雪山雲海（`snowpeak`）的地形、帳篷、天空是全解析度＋FXAA，只有雲海算半解析度再依深度放大接回（半解析度放大後雲和稜線會有明顯鋸齒）；整體仍在預算內。

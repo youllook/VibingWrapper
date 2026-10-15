@@ -7,7 +7,6 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; user-select: none; }
   canvas { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; }
-  body.color { cursor: none; }
   body.region { cursor: crosshair; }
 </style>
 </head>
@@ -16,7 +15,7 @@
 <canvas id="ui"></canvas>
 <script>
 /* Screen tools overlay (2026-09-29). Shows a frozen screenshot of the display and lets the user
- * pick a colour (mode "color", Ctrl+Q) or drag a rectangle (mode "region", Ctrl+R).
+ * drag a rectangle (mode "region", Ctrl+Alt+S). The eyedropper (mode "color") was removed 2026-10-15.
  * All drawing is in PHYSICAL pixels (screenshot pixels); mouse CSS px × scale → physical. */
 const shotC = document.getElementById('shot'), uiC = document.getElementById('ui');
 const sctx = shotC.getContext('2d'), u = uiC.getContext('2d');
@@ -54,7 +53,6 @@ function draw() {
   u.clearRect(0, 0, W, H);
   if (!job) return;
   if (job.mode === 'region') drawRegion();
-  if (job.mode === 'color' && !toast) drawReticle(pos.x, pos.y);
   if (!toast) drawLoupe(pos.x, pos.y);
   if (toast) drawToast();
 }
@@ -88,19 +86,7 @@ function label(text, x, y) {
   u.fillStyle = '#e6eeff'; u.textBaseline = 'middle'; u.fillText(text, x + 6 * S, y + h / 2);
 }
 
-// Colour mode hides the cursor, so mark the picked pixel: four short arms with a hollow centre
-// (the pixel itself and its neighbours stay visible).
-function drawReticle(cx, cy) {
-  const g = 4 * S, a = 11 * S, x = cx + .5, y = cy + .5;
-  for (const [c, w] of [['rgba(0,0,0,.65)', 3], ['rgba(255,255,255,.95)', 1]]) {
-    u.strokeStyle = c; u.lineWidth = w * S; u.beginPath();
-    u.moveTo(x - a, y); u.lineTo(x - g, y); u.moveTo(x + g, y); u.lineTo(x + a, y);
-    u.moveTo(x, y - a); u.lineTo(x, y - g); u.moveTo(x, y + g); u.lineTo(x, y + a);
-    u.stroke();
-  }
-}
-
-// 12× magnifier of an 11×11 pixel patch + colour readout; kept well clear of the picked point
+// 12× magnifier of an 11×11 pixel patch + colour / position readout; kept well clear of the picked point
 // (user: it blocked the view) and flipped to the other side near screen edges.
 const N = 11, Z = 12;
 function drawLoupe(cx, cy) {
@@ -127,7 +113,7 @@ function drawLoupe(cx, cy) {
   u.fillStyle = '#e6eeff'; u.textBaseline = 'alphabetic';
   u.font = `600 ${13 * S}px Consolas, monospace`; u.fillText(hx, x + 42 * S, y + L + 20 * S);
   u.font = `${11 * S}px Consolas, monospace`; u.fillStyle = '#9fb2d8';
-  u.fillText(job.mode === 'region' ? `${cx}, ${cy}` : `${c[0]}, ${c[1]}, ${c[2]}`, x + 42 * S, y + L + 36 * S);
+  u.fillText(`${cx}, ${cy}`, x + 42 * S, y + L + 36 * S);
   u.restore();
 }
 
@@ -144,11 +130,6 @@ function done(msg) {
   if (!msg) return window.capAPI.done();
   toast = msg; draw();
   setTimeout(() => { job = null; u.clearRect(0, 0, W, H); sctx.clearRect(0, 0, W, H); window.capAPI.done(); }, 450);
-}
-function pickColor() {
-  const hx = hexOf(pixel(pos.x, pos.y));
-  window.capAPI.color(hx);
-  done(`已複製 ${hx}`);
 }
 function rectOf(a, b) {
   const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
@@ -167,7 +148,6 @@ addEventListener('mousedown', e => {
   if (e.button === 2) return done();
   if (e.button !== 0) return;
   pos = toPhys(e);
-  if (job.mode === 'color') return pickColor();
   drag = pos; sel = rectOf(drag, pos); kick();
 });
 addEventListener('mouseup', e => {
@@ -188,7 +168,6 @@ addEventListener('keydown', e => {
     if (drag) sel = rectOf(drag, pos);
     return kick();
   }
-  if (e.key === 'Enter' && job.mode === 'color') pickColor();
 });
 </script>
 </body>

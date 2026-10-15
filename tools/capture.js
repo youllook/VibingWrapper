@@ -1,14 +1,14 @@
 // Screen tools (2026-09-29): replaces the two PicPick features the user actually used.
-//   Ctrl+Q  screen eyedropper → hex colour to the clipboard
-//   Ctrl+R  crosshair region capture → PNG to the clipboard + a copy saved in SAVE_DIR
+//   Ctrl+Alt+S  crosshair region capture → PNG to the clipboard + a copy saved in SAVE_DIR
 // Separate from the pet on purpose: it only shares the Electron process (already running at login).
 // Flow: grab the display under the cursor → show a frozen full-screen overlay (pre-created, so it
-// opens fast) → the page reports a colour / rectangle → clipboard.
+// opens fast) → the page reports a rectangle → clipboard.
 const { app, BrowserWindow, globalShortcut, desktopCapturer, screen, clipboard, ClipboardItem, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
-const HOTKEYS = { 'Control+Q': 'color', 'Control+R': 'region' };
+// 2026-10-15: was Ctrl+R — a global shortcut stole it from every app (browser reload). The Ctrl+Q eyedropper was removed.
+const HOTKEYS = { 'Control+Alt+S': 'region' };
 const SAVE_DIR = path.join(app.getPath('pictures'), 'Saved Pictures');   // user's choice (2026-09-29)
 
 // 截圖_20260929_154512.png (+ _2, _3 … when several land in the same second)
@@ -71,7 +71,6 @@ function finish() {
 
 ipcMain.on('cap:ready', () => { if (busy && win) { shownAt = Date.now(); win.show(); win.moveTop(); win.focus(); } });
 // Electron 44 clipboard is async (W3C style): writeText / write([ClipboardItem]) return promises.
-ipcMain.on('cap:color', (_e, hex) => { clipboard.writeText(hex).catch(e => console.error('[capture]', e)); });
 ipcMain.on('cap:region', (_e, r) => {
   if (!shot || !r || r.width <= 0 || r.height <= 0) return;
   const png = shot.crop(r).toPNG();

@@ -14,13 +14,16 @@ contextBridge.exposeInMainWorld('petAPI', {
   setWallpaperStyle: s => ipcRenderer.invoke('pet:set-wallpaper-style', s),
   getTimeMode: () => ipcRenderer.invoke('pet:time-mode'),        // 模式: 'auto' (real clock) / 'day' / 'night'
   setTimeMode: mode => ipcRenderer.invoke('pet:set-time-mode', mode),
+  // 一鍵安裝 Claude hook: 'on' / 'partial' / 'off' / 'error', and install → { ok, msg }
+  hooksStatus: () => ipcRenderer.invoke('pet:hooks-status'),
+  installHooks: () => ipcRenderer.invoke('pet:install-hooks'),
   getAiState: () => ipcRenderer.invoke('pet:ai-state'),
   onAiState: fn => ipcRenderer.on('pet:ai-state', (_e, s) => fn(s)),
   // hide / show all desktop icons (also Ctrl+Alt+D and the tray menu)
   toggleIcons: () => ipcRenderer.invoke('pet:toggle-icons'),
   // true when Ctrl+Alt+D is ours (shown as a reminder next to 桌面圖示)
   iconsHotkey: () => ipcRenderer.invoke('pet:icons-hotkey'),
-  // 一鍵隱藏 (boss key): toggle, current { key, registered, hidden }, record a new key
+  // 老闆鍵 (boss key): toggle, current { key, registered, hidden }, record a new key
   bossToggle: () => ipcRenderer.send('pet:boss'),
   bossKey: () => ipcRenderer.invoke('pet:boss-key'),
   bossCapture: on => ipcRenderer.send('pet:boss-capture', !!on),

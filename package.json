@@ -1,16 +1,48 @@
 {
   "name": "vibing-wrapper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "VibingWrapper：跟著 Claude Code 工作節奏變天的動態桌布（天空、海、船隊）＋桌面小工具",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "icon": "node scripts/make-icon.js",
-    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1"
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1",
+    "dist": "electron-builder --win zip"
   },
   "devDependencies": {
-    "electron": "^44.4.5"
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "build": {
+    "appId": "com.youllook.vibingwrapper",
+    "productName": "VibingWrapper",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "prototype/**",
+      "tools/**",
+      "assets/**",
+      "themes/**",
+      "!themes/state.json*",
+      "LICENSE"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "artifactName": "${productName}-${version}-win-x64.${ext}"
+  }
 }

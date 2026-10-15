@@ -11,7 +11,7 @@ const path = require('path');
 
 const PORT = 47321;
 const THEMES_DIR = path.join(__dirname, '..', 'themes');
-const STATE_FILE = path.join(THEMES_DIR, 'state.json');
+let STATE_FILE = path.join(THEMES_DIR, 'state.json');   // start({ stateDir }) moves it out of the app folder (read-only once packaged)
 const TYPES = { '.html': 'text/html; charset=utf-8', '.json': 'application/json', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png',
   '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.glsl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
   '.wasm': 'application/wasm', '.pck': 'application/octet-stream' };   // Godot web exports
@@ -33,6 +33,9 @@ const CLEAR_AFTER_MS = 20000;  // clearing → clear once things stay quiet
 // plan approval). The wallpaper dims and one star pulses until the user answers.
 const WAIT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const WAIT_NOTIFY = new Set(['permission_prompt', 'elicitation_dialog']);
+// Background probes, not work (2026-10-15): idle Claude desktop sessions poll the Chrome extension every
+// ~20 s. Counting them kept those sessions storming forever and filled all 5 slots; onEvent drops them unlogged.
+const PROBE_TOOLS = new Set(['mcp__claude-in-chrome__list_connected_browsers']);
 function weatherFor(j) {
   const name = j.hook_event_name;
   if (name === 'PreToolUse' && WAIT_TOOLS.has(j.tool_name)) return 'waiting';
@@ -113,6 +116,7 @@ function publish() {
   return changed;
 }
 function onEvent(j) {
+  if (PROBE_TOOLS.has(j.tool_name)) return;
   const name = j.hook_event_name;
   const id = typeof j.session_id === 'string' && j.session_id ? j.session_id : 'default';
   const base = {
@@ -178,6 +182,7 @@ function serveThemes(req, res) {
 
 function start(opts = {}) {
   if (opts.logDir) logFile = require('path').join(opts.logDir, 'weather-log.jsonl');
+  if (opts.stateDir) STATE_FILE = path.join(opts.stateDir, 'state.json');
   if (opts.onState) listeners.push(opts.onState);
   // pick up the last state; if it is older than 2 min (app was closed / Claude died mid-turn) start clear
   try {

@@ -9,7 +9,9 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 它停下來等你回答或批准的時候，天上會亮起一顆慢慢閃的星星。
 你不用切視窗，眼角餘光就知道 AI 在做什麼。
 
-![夜晚的海：五個 Claude Code session 是五艘船，天上那顆星和其中一艘的燈正在閃——它在等你](docs/screenshots/ocean-night.jpg)
+![天氣跟著 Claude 變：陰（思考）→ 雷雨（跑工具）→ 放晴（做完）→ 星星閃（等你）](docs/screenshots/states.gif)
+
+*陰 → 雷雨 → 放晴 → 星星閃，對應 Claude 思考、跑工具、做完、等你。*
 
 ## 狀態對照
 
@@ -23,6 +25,8 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 
 **同時開好幾個 session（最多 5 個）**：每個 session 各記一份狀態，天空顯示最需要注意的那個（等你 > 雷雨 > 陰 > 轉晴 > 晴）。
 有海的桌布上，每個 session 是一艘船：忙的船開動、拖出航跡，等你的船燈會閃，一眼就知道是哪一個在叫你。
+
+![夜晚的海：五個 Claude Code session 是五艘船，天上那顆星和其中一艘的燈正在閃——它在等你](docs/screenshots/ocean-night.jpg)
 
 ## 桌布
 
@@ -74,14 +78,28 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 
 ## 小工具
 
-| 功能 | 快捷鍵 |
-|---|---|
-| 收桌面（隱藏／顯示所有桌面圖示） | Ctrl+Alt+D |
-| 一鍵隱藏（老闆鍵：桌布和 HUD 全收，只留一顆小齒輪） | Ctrl+Alt+B（齒輪選單可改） |
-| 螢幕吸色（複製 #RRGGBB） | Ctrl+Q |
-| 範圍截圖（剪貼簿＋存到「圖片\Saved Pictures」） | Ctrl+R |
+| 功能 | 快捷鍵 | 說明 |
+|---|---|---|
+| 收桌面 | Ctrl+Alt+D | 隱藏／顯示桌面上所有圖示（資料夾、捷徑、檔案都算，是同一個功能）。再按一次還原 |
+| 老闆鍵 | Ctrl+Alt+B（**齒輪選單可改**） | 桌布、系統匣圖示全收，HUD 只剩一顆淡淡的小齒輪；收桌面藏起來的圖示也會先放回來，看起來就是普通的工作桌面。**再按同一組快捷鍵就還原**，不必點齒輪（點齒輪 →「取消隱藏」也可以） |
+| 範圍截圖 | Ctrl+Alt+S | 拖出一個框，PNG 進剪貼簿，同時存一份到「圖片\Saved Pictures」（`截圖_日期_時間.png`）。Esc 或右鍵取消 |
+
+這些都是**全域快捷鍵**：VibingWrapper 開著的時候，在任何程式裡按都會被它接走。所以只用 Ctrl+Alt 開頭的組合，不搶 Ctrl+R（重新整理）、Ctrl+Q 這類常用鍵。
+如果某組已經被別的程式占用，系統匣選單會顯示「被占用」，那個功能仍可以從系統匣或齒輪選單點。
+目前只有老闆鍵可以在齒輪選單裡改（齒輪 →「變更快捷鍵」→ 直接按新組合）。
 
 ## 安裝
+
+### 免安裝版
+
+1. 到 [Releases](https://github.com/youllook/VibingWrapper/releases/latest) 下載 `VibingWrapper-x.y.z-win-x64.zip`，解壓到任何資料夾。
+2. 執行 `VibingWrapper.exe`。程式沒有簽章，Windows 跳出「Windows 已保護您的電腦」的話，按「其他資訊」→「仍要執行」。
+3. 點右上角齒輪 →「Claude 連動」→ 點一下，自動把 hook 加進 `~/.claude/settings.json`（原檔會先備份成 `settings.json.vibing-backup`，已有的設定都會保留）。
+4. 重開 Claude Code，開始工作，天空就會跟著變。
+
+不需要 Node.js，七種桌布（含 Godot 做的平交道）都包在裡面。
+
+### 從原始碼執行
 
 需要：Windows 10／11、[Node.js](https://nodejs.org/) 18 以上、[Claude Code](https://claude.com/claude-code)。
 
@@ -94,9 +112,11 @@ npm start
 
 `npm run shortcut` 會在桌面建立捷徑。系統匣選單可以設定開機自動啟動。
 
+**自己打包**：`npm run dist` 用 electron-builder 打包成 `dist/VibingWrapper-x.y.z-win-x64.zip`（就是 Releases 上那個檔案）。平交道的 Godot 匯出檔不在 git 裡，要先照 [themes/crossing/README.md](themes/crossing/README.md) 匯出，不然打包出來會少這一種。
+
 ## 接上 Claude Code
 
-VibingWrapper 在本機 `127.0.0.1:47321` 收 Claude Code 的 hook 事件。把下面這段合併進 `~/.claude/settings.json` 的 `hooks`（已經有 hooks 的話，加進對應的陣列，不要整段覆蓋）：
+齒輪選單的「Claude 連動」可以一鍵安裝（見上面「免安裝版」）。想自己改的話：VibingWrapper 在本機 `127.0.0.1:47321` 收 Claude Code 的 hook 事件。把下面這段合併進 `~/.claude/settings.json` 的 `hooks`（已經有 hooks 的話，加進對應的陣列，不要整段覆蓋）：
 
 ```json
 {
@@ -123,12 +143,13 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 |---|---|
 | `main.js` | Electron 主程序：HUD 視窗、系統匣、設定 |
 | `prototype/hud.html` | 右上角的 AI 狀態圖示＋齒輪選單 |
-| `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `themes/state.json`；也負責提供 `themes/` 頁面與主題清單 |
+| `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `%APPDATA%\vibing-wrapper\state.json`；也負責提供 `themes/` 頁面與主題清單 |
+| `tools/claude-hooks.js` | 齒輪「Claude 連動」：把 hook 補進 `~/.claude/settings.json` |
 | `tools/wallpaper.js`、`attach-wallpaper.ps1` | 把桌布視窗掛到桌面圖示底下（WorkerW） |
 | `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`、`snowpeak`、`paddy`、`meadow-real`、`crossing`（`network` 停用） |
 | `godot/crossing/` | 平交道的 Godot 4 原始碼（場景全用程式生成，`shell.html` 是網頁外殼） |
 | `themes/demo.html` | 調參數用的預覽頁：選主題、切狀態、拉時間軸看日夜 |
-| `tools/desktop-icons.*`、`boss-key.js`、`capture.*` | 收桌面、老闆鍵、吸色／截圖 |
+| `tools/desktop-icons.*`、`boss-key.js`、`capture.*` | 收桌面、老闆鍵、截圖 |
 
 ## 致謝
 

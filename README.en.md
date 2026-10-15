@@ -8,7 +8,9 @@ When Claude is thinking, the sky clouds over. When it starts running tools, a th
 And when it stops to ask you a question or wait for your approval, a single star lights up and slowly pulses.
 You never have to switch windows: the corner of your eye tells you what your AI is up to.
 
-![The sea at night: five Claude Code sessions are five boats. The star overhead and one boat's lamps are pulsing — that session is waiting for you](docs/screenshots/ocean-night.jpg)
+![The sky follows Claude: overcast (thinking) → storm (running tools) → clearing (done) → a pulsing star (waiting for you)](docs/screenshots/states.gif)
+
+*Overcast → storm → clearing → star: Claude thinking, running tools, done, waiting for you.*
 
 ## States
 
@@ -22,6 +24,8 @@ You never have to switch windows: the corner of your eye tells you what your AI 
 
 **Several sessions at once (up to 5):** each session keeps its own state, and the sky shows the most urgent one (waiting > storm > overcast > clearing > clear).
 On the sea wallpapers every session is a boat: busy boats get underway with a wake behind them, and the boat that is waiting for you blinks its lamps — so you can tell at a glance which session needs you.
+
+![The sea at night: five Claude Code sessions are five boats. The star overhead and one boat's lamps are pulsing — that session is waiting for you](docs/screenshots/ocean-night.jpg)
 
 ## Wallpapers
 
@@ -73,16 +77,30 @@ it shows up in the gear menu's wallpaper list, no changes to the app needed. The
 
 ## Little tools
 
-| Feature | Shortcut |
-|---|---|
-| Hide / show all desktop icons | Ctrl+Alt+D |
-| Boss key — wallpaper and HUD vanish, only a tiny gear stays | Ctrl+Alt+B (change it in the gear menu) |
-| Screen eyedropper (copies `#RRGGBB`) | Ctrl+Q |
-| Region screenshot (clipboard + `Pictures\Saved Pictures`) | Ctrl+R |
+| Feature | Shortcut | What it does |
+|---|---|---|
+| Hide desktop icons (收桌面) | Ctrl+Alt+D | Hides / shows every icon on the desktop: folders, shortcuts and files alike (one feature). Press again to bring them back |
+| Boss key (老闆鍵) | Ctrl+Alt+B (**changeable in the gear menu**) | Wallpaper and tray icon vanish, the HUD shrinks to a faint gear, and icons hidden by Ctrl+Alt+D come back, so it looks like an ordinary work desktop. **Press the same shortcut again to restore** — no need to click the gear (gear → 取消隱藏 also works) |
+| Region screenshot (範圍截圖) | Ctrl+Alt+S | Drag a box: PNG to the clipboard plus a copy in `Pictures\Saved Pictures` (`截圖_date_time.png`). Esc or right-click cancels |
+
+These are **global shortcuts**: while VibingWrapper runs it takes them from every app, so they all start with Ctrl+Alt and leave everyday keys like Ctrl+R (reload) and Ctrl+Q alone.
+If another program already holds one, the tray menu marks it 被占用 (taken) and the feature is still a click away in the tray or gear menu.
+Only the boss key can be changed in the gear menu (gear → 變更快捷鍵, then press the new combination).
 
 The UI is in Traditional Chinese.
 
 ## Install
+
+### Quick try (no install)
+
+1. Download `VibingWrapper-x.y.z-win-x64.zip` from [Releases](https://github.com/youllook/VibingWrapper/releases/latest) and unzip it anywhere.
+2. Run `VibingWrapper.exe`. The build is unsigned: if Windows SmartScreen says "Windows protected your PC", click "More info" → "Run anyway".
+3. Click the gear (top right) → "Claude 連動" to add the hooks to `~/.claude/settings.json` (your file is backed up once as `settings.json.vibing-backup`; existing settings are kept).
+4. Restart Claude Code and start working: the sky follows along.
+
+No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled.
+
+### Run from source
 
 Requires Windows 10 / 11, [Node.js](https://nodejs.org/) 18+, and [Claude Code](https://claude.com/claude-code).
 
@@ -95,9 +113,11 @@ npm start
 
 `npm run shortcut` creates a desktop shortcut. "Start with Windows" (開機自動啟動) is in the tray menu.
 
+**Build it yourself**: `npm run dist` packages `dist/VibingWrapper-x.y.z-win-x64.zip` with electron-builder (the same file as on Releases). The level crossing's Godot export is not in git; export it first as described in [themes/crossing/README.md](themes/crossing/README.md), or the build ships without it.
+
 ## Connect Claude Code
 
-VibingWrapper listens for Claude Code hook events on `127.0.0.1:47321`. Merge this into the `hooks` of `~/.claude/settings.json` (if you already have hooks, add these entries to the matching arrays rather than replacing them):
+The gear menu's "Claude 連動" item installs these for you (see Quick try). To do it by hand: VibingWrapper listens for Claude Code hook events on `127.0.0.1:47321`. Merge this into the `hooks` of `~/.claude/settings.json` (if you already have hooks, add these entries to the matching arrays rather than replacing them):
 
 ```json
 {
@@ -124,12 +144,13 @@ Received events are logged by name and the first 8 characters of the session ID 
 |---|---|
 | `main.js` | Electron main process: HUD window, tray, settings |
 | `prototype/hud.html` | The top-right AI state icon + gear menu |
-| `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `themes/state.json`; also serves the `themes/` pages and the theme list |
+| `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `%APPDATA%\vibing-wrapper\state.json`; also serves the `themes/` pages and the theme list |
+| `tools/claude-hooks.js` | Gear menu "Claude 連動": adds the hooks to `~/.claude/settings.json` |
 | `tools/wallpaper.js`, `attach-wallpaper.ps1` | Parents the wallpaper window behind the desktop icons (WorkerW) |
 | `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `meadow-real`, `crossing` (`network` disabled) |
 | `godot/crossing/` | Godot 4 source for the level crossing (the scene is built in code; `shell.html` is the web shell) |
 | `themes/demo.html` | Tuning page: pick a theme, switch states, scrub the clock through day and night |
-| `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, eyedropper / screenshot |
+| `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, region screenshot |
 
 ## Credits
 
