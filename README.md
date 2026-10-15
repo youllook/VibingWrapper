@@ -82,7 +82,6 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 |---|---|---|
 | 收桌面 | Ctrl+Alt+D | 隱藏／顯示桌面上所有圖示（資料夾、捷徑、檔案都算，是同一個功能）。再按一次還原 |
 | 老闆鍵 | Ctrl+Alt+B（**齒輪選單可改**） | 桌布、系統匣圖示全收，HUD 只剩一顆淡淡的小齒輪；收桌面藏起來的圖示也會先放回來，看起來就是普通的工作桌面。**再按同一組快捷鍵就還原**，不必點齒輪（點齒輪 →「取消隱藏」也可以） |
-| 螢幕吸色 | Ctrl+Alt+C | 畫面凍結，點一下把 `#RRGGBB` 複製到剪貼簿。Esc 或右鍵取消 |
 | 範圍截圖 | Ctrl+Alt+S | 拖出一個框，PNG 進剪貼簿，同時存一份到「圖片\Saved Pictures」（`截圖_日期_時間.png`）。Esc 或右鍵取消 |
 
 這些都是**全域快捷鍵**：VibingWrapper 開著的時候，在任何程式裡按都會被它接走。所以只用 Ctrl+Alt 開頭的組合，不搶 Ctrl+R（重新整理）、Ctrl+Q 這類常用鍵。
@@ -150,7 +149,7 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 | `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`、`snowpeak`、`paddy`、`meadow-real`、`crossing`（`network` 停用） |
 | `godot/crossing/` | 平交道的 Godot 4 原始碼（場景全用程式生成，`shell.html` 是網頁外殼） |
 | `themes/demo.html` | 調參數用的預覽頁：選主題、切狀態、拉時間軸看日夜 |
-| `tools/desktop-icons.*`、`boss-key.js`、`capture.*` | 收桌面、老闆鍵、吸色／截圖 |
+| `tools/desktop-icons.*`、`boss-key.js`、`capture.*` | 收桌面、老闆鍵、截圖 |
 
 ## 致謝
 

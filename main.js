@@ -3,7 +3,7 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, globalShortcut } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const capture = require('./tools/capture');           // Ctrl+Alt+C eyedropper / Ctrl+Alt+S region capture (PicPick replacement)
+const capture = require('./tools/capture');           // Ctrl+Alt+S region capture (PicPick replacement)
 const claudeBridge = require('./tools/claude-bridge'); // Claude Code hooks → themes/state.json (+ serves themes/)
 const wallpaper = require('./tools/wallpaper');       // weather wallpaper behind the desktop icons (replaces Lively)
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
@@ -146,7 +146,6 @@ function buildTrayMenu() {
   if (!tray || tray.isDestroyed()) return;              // no tray while 老闆鍵 is on
   const openAtLogin = app.getLoginItemSettings(loginItemArgs()).openAtLogin;
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '螢幕吸色' + (capture.status['Control+Alt+C'] ? '\tCtrl+Alt+C' : '（Ctrl+Alt+C 被占用）'), click: () => capture.start('color') },
     { label: '範圍截圖' + (capture.status['Control+Alt+S'] ? '\tCtrl+Alt+S' : '（Ctrl+Alt+S 被占用）'), click: () => capture.start('region') },
     { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), click: () => desktopIcons.toggle() },
     { label: (bossKey.status().hidden ? '取消隱藏' : '老闆鍵') + (bossKey.status().registered ? '\t' : '（') + bossKey.pretty(bossKey.status().key) + (bossKey.status().registered ? '' : ' 被占用）'), click: () => bossKey.toggle() },
