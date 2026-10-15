@@ -16,9 +16,12 @@ if (!app.requestSingleInstanceLock()) app.quit();
 app.commandLine.appendSwitch('force_high_performance_gpu');
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+// first-run wallpaper: the lite build (scripts/dist-lite.js) sets vibingwrapper.defaultTheme in package.json
+const DEFAULT_STYLE = (require('./package.json').vibingwrapper || {}).defaultTheme || 'weather';
 function loadSettings() {
-  try { return { alwaysOnTop: false, weatherWallpaper: true, wallpaperStyle: 'weather', ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) }; }
-  catch { return { alwaysOnTop: false, weatherWallpaper: true, wallpaperStyle: 'weather' }; }
+  const defaults = { alwaysOnTop: false, weatherWallpaper: true, wallpaperStyle: DEFAULT_STYLE };
+  try { return { ...defaults, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) }; }
+  catch { return defaults; }
 }
 function saveSettings() {
   try { fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2)); } catch (e) { console.error(e); }
