@@ -115,7 +115,8 @@ const REEF_TILES = [
 // when Claude finishes something (user, 2026-10-15): a session (or the whole sky) turning to clearing sends the whale
 // off right away; finishes while it swims, and for 30–60 s after it has gone, are ignored (a burst of finishes gives
 // one pass); half-hidden in the haze (extinction × `fog`).
-const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, headX: -8.11, cooldown: [30, 60], stroke: 5.0, fog: 0.6,
+const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, headX: -8.11, cooldown: [0, 0], stroke: 5.0, fog: 0.6,   // cooldown: rest after a pass, s (2026-10-15: 0 for now — user tuning; was [30, 60])
+                loop: false,                            // tuning: start the next pass as soon as one ends
                 below: 3.44, above: 2.93,              // the scaled model reaches this far below (fin tips) / above its centre, m
                 // "near" (user, 2026-10-15: "right in front of the screen, like a giant monster going by"): bigger than the
                 // frame, its belly and pectoral fins sweeping overhead; "far": a shape crossing the haze
@@ -1236,7 +1237,7 @@ function updateWhale() {
   whale.prev = now5;
   if (!whale.active) return;
   const k = (sceneTime - whale.t0) / whale.dur;
-  if (k >= 1) { whale.active = false; whale.quietUntil = sceneTime + rr(WHALE.cooldown); return; }   // then a rest
+  if (k >= 1) { whale.active = false; whale.quietUntil = sceneTime + rr(WHALE.cooldown); if (WHALE.loop) startWhale(); return; }   // then a rest (or, tuning, straight on)
   const x = whale.x0 + (whale.x1 - whale.x0) * k;
   const y = whale.y0 + whale.bobA * Math.sin(k * 3.1 + whale.bob) + 0.2 * Math.sin(sceneTime * 2 * Math.PI / WHALE.stroke * 0.5);
   const z = whale.z + whale.dz * (k - 0.5);
@@ -1946,6 +1947,7 @@ window.theme = window.jellyfish = {
       });
       if (sp[4]) h += '<div class="hint">' + sp[4] + '</div>';
     }
+    h += '<div class="row"><label>一直游</label><input type="checkbox" id="tloop"' + (WHALE.loop ? ' checked' : '') + '><span></span></div><div class="hint">游完一趟立刻接下一趟（調整用）</div>';
     h += '<div class="btns"><button id="tgo">游一趟</button><button id="tcopy">複製設定</button><button id="treset">重設</button></div><div class="status" id="tstat">W 關閉面板</div>';
     el.innerHTML = h;
     el.querySelector('#tmode').onchange = e => { WHALE.mode = e.target.value; save(); build(); };
@@ -1955,6 +1957,7 @@ window.theme = window.jellyfish = {
       inp.nextElementSibling.textContent = fmt(v);
       save();
     });
+    el.querySelector('#tloop').onchange = e => { WHALE.loop = e.target.checked; if (WHALE.loop && !whale.active) startWhale(); status(WHALE.loop ? '一直游：開' : '一直游：關'); };
     el.querySelector('#tgo').onclick = () => { whale.active = false; whale.quietUntil = 0; startWhale(); status('出發！約 ' + Math.round(whale.dur) + ' 秒'); };
     el.querySelector('#tcopy').onclick = async () => { try { await navigator.clipboard.writeText(line()); status('已複製：' + line()); } catch { status(line()); } };
     el.querySelector('#treset').onclick = () => { try { localStorage.removeItem(KEY); } catch { } location.reload(); };
