@@ -386,7 +386,7 @@ void main() {
     float ndl = saturate(dot(N, -uLd));
     float ca = caustic(p.xz * 0.85 + uFlow * 0.05, uTime * (0.7 + 0.8 * uChop));
     vec3 direct = down * ndl * (0.22 + 1.5 * ca * uCaust);
-    vec3 amb = (uUpC * 1.1 + uDeep * 0.3) * (0.45 + 0.55 * N.y) * uBright;
+    vec3 amb = (uUpC * 1.1 + uDeep * 0.3) * (0.45 + 0.55 * N.y) * uBright * (1.0 + 2.5 * uNight * step(1.5, abs(A.w)));   // the reef keeps its shape at night
     col = alb * (direct + amb) * ao;
     col = fogW(col, t, rd);
   } else if (rd.y > 0.0) {
@@ -454,8 +454,46 @@ void main() {
   vec3 light = down * (0.20 + 0.80 * wrap) * (0.8 + 0.8 * ca * uCaust * saturate(N.y)) + (uUpC * 1.2 + uDeep * 0.4) * uBright;
   vec3 col = alb * light;
   float d = length(uCamPos - vW);
-  vec3 T = exp(-uSigma * d * uWFog);                        // half the water's extinction: a shape in the haze, not lost in it
+  col += water(-V) * pow(1.0 - abs(dot(N, V)), 3.0) * (0.5 + 2.0 * uNight);   // a soft edge against the water (reads at night)
+  vec3 T = exp(-uSigma * d * uWFog * (1.0 - 0.35 * uNight));  // a shape in the haze, not lost in it
   o = vec4(col * T + water(-V) * (1.0 - T), 1.0);
+}`;
+
+/* ---------- sea fireflies: blue-green sparks where the water is disturbed (CPU pool → points) ---------- */
+const SPARK = { max: 3000, life: 1.8 };
+const VS_SPARK = COMMON + `
+layout(location = 0) in vec4 aP;            // xyz, birth time
+layout(location = 1) in vec4 aV;            // velocity xyz, size (m)
+layout(location = 2) in float aHue;
+uniform float uGlow;                        // night (and a little in murk)
+out float vA; out vec3 vCol;
+void main() {
+  float age = uTime - aP.w;
+  vec3 P = aP.xyz + aV.xyz * (1.0 - exp(-age * 1.5)) / 1.5;          // a kick that slows in the water
+  P += 0.03 * vec3(sin(uTime * 1.7 + aHue * 40.0), sin(uTime * 1.3 + aHue * 23.0), cos(uTime * 1.5 + aHue * 31.0)) * age;
+  float life = ${SPARK.life.toFixed(2)} * (0.6 + 0.8 * fract(aHue * 7.31));
+  float env = smoothstep(0.0, 0.06, age) * exp(-age / (life * 0.45)) * step(age, life * 2.5);
+  env *= 0.75 + 0.25 * sin(uTime * 23.0 + aHue * 60.0);                 // a flicker
+  vec4 cp = proj(P);
+  gl_Position = cp;
+  float w = max(cp.w, 0.05);
+  float px = aV.w * uRes.y / (2.0 * uTanHalf.y * w);
+  gl_PointSize = clamp(px * 8.0, 2.0, 24.0);
+  vec3 T = exp(-uSigma * w * 0.6);
+  vA = env * uGlow * dot(T, vec3(0.1, 0.6, 0.3)) * min(1.0, px * 8.0 / 2.0);
+  vCol = mix(vec3(0.10, 0.95, 0.85), vec3(0.20, 0.55, 1.00), fract(aHue * 3.7));
+  if (cp.w < 0.1 || age < 0.0) vA = 0.0;
+}`;
+const FS_SPARK = `#version 300 es
+precision highp float;
+in float vA; in vec3 vCol;
+out vec4 o;
+void main() {
+  vec2 c = gl_PointCoord * 2.0 - 1.0;
+  float r2 = dot(c, c);
+  if (r2 > 1.0 || vA < 0.001) discard;
+  float a = (exp(-r2 * 10.0) * 1.0 + exp(-r2 * 2.2) * 0.35) * vA;
+  o = vec4(vCol * a * 0.15, 0.0);                           // additive (premultiplied, alpha 0)
 }`;
 
 /* ---------- the reef: rasterised into the floor G-buffer once ---------- */
@@ -887,12 +925,13 @@ function program(vs, fs, name) {
   compileMs[name] = +(performance.now() - t0).toFixed(1);
   return { p, u };
 }
-let P_WHALE, P_REEF, P_REEF_D, P_MESH, P_BAKE, P_BG, P_BELL, P_ARM, P_TENT, P_PART, P_RAYS, P_FINAL, bufTri, vao;
+let P_SPARK, P_WHALE, P_REEF, P_REEF_D, P_MESH, P_BAKE, P_BG, P_BELL, P_ARM, P_TENT, P_PART, P_RAYS, P_FINAL, bufTri, vao;
 if (gl) {
   P_BG = program(VS_TRI, FS_BG, 'bg');
   P_BAKE = program(VS_TRI, FS_BG.replace('#version 300 es\n', '#version 300 es\n#define BAKE 1\n'), 'bake');
   P_REEF = program(VS_REEF, FS_REEF, 'reef');
   P_WHALE = program(VS_WHALE, FS_WHALE, 'whale');
+  P_SPARK = program(VS_SPARK, FS_SPARK, 'spark');
   P_REEF_D = program(VS_REEF, `#version 300 es
 precision mediump float;
 out vec4 o;
@@ -1084,6 +1123,58 @@ async function loadWhale() {
   whale.ready = true;
 }
 if (gl) loadWhale().catch(e => console.warn('whale not loaded:', e.message));
+/* ------------------------------ sea fireflies: the pool ------------------------------ */
+const sparks = { data: new Float32Array(SPARK.max * 9), head: 0, glow: 0, vao: null, buf: null };
+for (let i = 0; i < SPARK.max; i++) sparks.data[i * 9 + 3] = -1e4;   // all dead at start
+function emitSpark(p, v, size = 0.012) {                   // night only: by day the pool stays idle
+  const d = sparks.data, o = sparks.head * 9;
+  d[o] = p[0]; d[o + 1] = p[1]; d[o + 2] = p[2]; d[o + 3] = sceneTime;
+  d[o + 4] = v[0]; d[o + 5] = v[1]; d[o + 6] = v[2]; d[o + 7] = size * (0.6 + 0.8 * rnd()); d[o + 8] = rnd();
+  sparks.head = (sparks.head + 1) % SPARK.max;
+}
+const rv = k => [(rnd() - 0.5) * k, (rnd() - 0.5) * k, (rnd() - 0.5) * k];
+function sparkBurst(c, radius, n, kick = 0.06) {           // a cloud around c
+  for (let i = 0; i < n; i++) { const o = rv(radius * 2); emitSpark([c[0] + o[0], c[1] + o[1], c[2] + o[2]], o.map(v => v / Math.max(radius, 1e-3) * kick)); }
+}
+function emitN(rate, dt) { const x = rate * dt; return Math.floor(x) + (rnd() < x - Math.floor(x) ? 1 : 0); }
+function updateSparks(dt) {
+  const g = sparks.glow; if (g < 0.03) return;
+  // surges stir the plankton: a scattering of sparks through the visible water, more on a heavy wave
+  const sg = surgeAt(0, 8);
+  for (let i = 0, n = emitN(Math.max(0, sg - 0.2) * 260 * g, dt); i < n; i++) {
+    const p = fromScreen(0.05 + 0.92 * rnd(), 0.15 + 0.8 * rnd(), 3 + 15 * rnd());
+    if (p[1] < floorAt(p[0], p[2]) + 0.1) p[1] = floorAt(p[0], p[2]) + 0.1 + rnd();
+    emitSpark(p, [0.15 * sg + (rnd() - 0.5) * 0.06, (rnd() - 0.3) * 0.05, (rnd() - 0.5) * 0.06]);
+  }
+  // jellies leave a faint trail as they move
+  for (const m of jellies) {
+    if (m.alpha <= 0.3 || m.slot < 0) continue;
+    const sp = Math.hypot(...m.vel);
+    for (let i = 0, n = emitN(sp * 40 * g, dt); i < n; i++) {
+      const a = rnd() * 6.283;
+      emitSpark([m.pos[0] + Math.cos(a) * m.R, m.pos[1] - m.R * (0.2 + 1.5 * rnd()), m.pos[2] + Math.sin(a) * m.R], rv(0.03), 0.009);
+    }
+  }
+  // the whale drags a wake of light, most of it off the tail
+  if (whale.active && whale.pos) {
+    const sc = WHALE.length / WHALE.modelLen;
+    for (let i = 0, n = emitN(110 * g, dt); i < n; i++) {
+      const u = Math.pow(rnd(), 0.6), xm = WHALE.headX + u * WHALE.modelLen;
+      const off = [(rnd() - 0.5) * 2.4, (rnd() - 0.5) * 2.4];
+      const p = [0, 1, 2].map(k => whale.pos[k] + (whale.X[k] * xm + whale.Y[k] * off[0] + whale.Z[k] * off[1]) * sc);
+      emitSpark(p, rv(0.25), 0.03);
+    }
+  }
+}
+function sparkPulse(m) {                                   // a jelly's contraction shakes light off its margin
+  const g = sparks.glow; if (g < 0.03 || m.slot < 0 || m.alpha < 0.3) return;
+  const n = Math.round(10 * m.amp * g * Math.min(2, m.R / 0.2));
+  for (let i = 0; i < n; i++) {
+    const a = rnd() * 6.283, down = rnd() * rnd() * 1.6;
+    const r = [Math.cos(a), 0, Math.sin(a)];
+    emitSpark([m.pos[0] + r[0] * m.R * 1.05, m.pos[1] - m.R * (0.05 + down), m.pos[2] + r[2] * m.R * 1.05], [r[0] * 0.06, -0.02, r[2] * 0.06], 0.010);
+  }
+}
 function startWhale() {                                    // a pass: in from one side well off screen, out the other
   const dir = rnd() < 0.5 ? 1 : -1, z = rr(WHALE.dist), y0 = rr(WHALE.y);
   const half = z * TAN_169[0] * 1.15 + WHALE.length;       // beyond the frame edge, body included
@@ -1297,7 +1388,7 @@ function collideJellies(t) {
       for (let i = 0; i < 3; i++) { m.vel[i] += n[i] * BUMP.push * wm; o.vel[i] -= n[i] * BUMP.push * wo; }   // and part
       const pen = (touch - l) * 0.5;
       for (let i = 0; i < 3; i++) { m.pos[i] += n[i] * pen * wm; o.pos[i] -= n[i] * pen * wo; }
-      if (flinch(m, t)) knock(m, n);
+      if (flinch(m, t)) { knock(m, n); if (m.slot >= 0) sparkBurst(m.pos.map((v, i) => (v + o.pos[i]) / 2), (m.R + o.R) * 0.6, Math.round(30 * sparks.glow)); }
       if (flinch(o, t)) knock(o, n.map(v => -v));
       bumps++;
     }
@@ -1359,6 +1450,7 @@ function updateJellies(dt, t, flowV) {
       }
       // a pulse that interrupts one in progress picks up from the current contraction (no snap back to open)
       m.pulseT = cNow > 0.01 ? 0.30 * Math.pow(Math.min(1, cNow / m.amp), 0.6) * m.pulseLen : 0;
+      sparkPulse(m);
       if (m.nextBeat < m.beat) m.nextBeat = m.beat;                 // after a long pause, do not fire a burst
     }
     m.pulseT += dt;
@@ -1484,7 +1576,7 @@ function lighting(sk) {
   const sunI = lerp(0.35, 1.0, smooth(Math.min(1, Math.max(0, alt / 45)))) * sk.sunUp;
   const lowSun = Math.exp(-Math.max(0, sk.alt) / 10) * sk.sunUp;
   let Lsurf = scale3(mix3([1.0, 0.97, 0.92], [1.0, 0.80, 0.60], lowSun), 4.0 * sunI * (1 - cloudShade(sceneTime)));
-  Lsurf = Lsurf.map((v, i) => v + [0.45, 0.55, 0.80][i] * 0.06 * sk.night + [0.9, 0.6, 0.5][i] * 0.25 * sk.twilight);   // moonlight, dusk
+  Lsurf = Lsurf.map((v, i) => v + [0.45, 0.55, 0.80][i] * 0.09 * sk.night + [0.9, 0.6, 0.5][i] * 0.25 * sk.twilight);   // moonlight, dusk
   const I = Math.max(0.02, (Lsurf[0] + Lsurf[1] + Lsurf[2]) / 9.6);
   const deep = scale3([0.0010, 0.008, 0.026], I);
   const upC = scale3(mix3([0.008, 0.062, 0.14], [0.005, 0.040, 0.12], sk.night), I);
@@ -1531,6 +1623,8 @@ function advance(t, dt) {
   snowOff[0] += (flowV[0] + surgeAt(0, 8) * 0.14) * dt; snowOff[1] += 0.012 * dt; snowOff[2] += flowV[2] * dt;
   updateJellies(dt, t, flowV);
   updateWhale();
+  sparks.glow = Math.min(1, (lastSky ? lastSky.night : 0) + 0.15 * current.turbidity * (lastSky ? lastSky.twilight : 0));
+  updateSparks(dt);
   collideJellies(t);
   lastSky = sky();
   return lastSky;
@@ -1661,6 +1755,21 @@ function render(sk) {
       gl.disable(gl.CULL_FACE);
     }
   }
+  // sea fireflies (additive; hidden by the reef, not by the jellies)
+  if (sparks.glow > 0.03 && !skip('spark')) {
+    if (!sparks.vao) {
+      sparks.vao = gl.createVertexArray(); gl.bindVertexArray(sparks.vao);
+      sparks.buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, sparks.buf); gl.bufferData(gl.ARRAY_BUFFER, sparks.data.byteLength, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 36, 0);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 36, 16);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 36, 32);
+    }
+    gl.bindVertexArray(sparks.vao); gl.bindBuffer(gl.ARRAY_BUFFER, sparks.buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, sparks.data);
+    gl.useProgram(P_SPARK.p); setCommon(P_SPARK.u, L, sk); gl.uniform1f(P_SPARK.u.uGlow, sparks.glow);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.drawArrays(gl.POINTS, 0, SPARK.max);
+    gl.bindVertexArray(vao);
+  }
   // 4. marine snow, bubbles, specks
   if (!skip('part')) {
     gl.useProgram(P_PART.p); setCommon(P_PART.u, L, sk);
@@ -1737,7 +1846,7 @@ window.theme = window.jellyfish = {
   frame(dt = 1 / FPS) { const t = now(); lastT = t; render(advance(t, dt)); },
   simulate(sec, dt = 1 / FPS) { let t = now(); for (let k = 0; k < sec / dt; k++) advance(t += dt, dt); },   // run the scene forward without drawing
   setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; },
-  whale, WHALE, whaleNow() { if (whale.ready) startWhale(); return whale.ready; },
+  sparks, SPARK, whale, WHALE, whaleNow() { if (whale.ready) startWhale(); return whale.ready; },
   get sessions() { return effectiveSlots(); }, reef, REEF, REEF_TILES, floorAt, rebake() { rt.baked = false; }, jellies, SCHOOLS, SCHOOL, JELLY_STATES, glb,
   get current() { return { ...current }; }, get state() { return stateName; },
   get sceneTime() { return sceneTime; }, compileMs, get bumps() { return bumps; },
