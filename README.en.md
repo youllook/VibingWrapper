@@ -8,7 +8,9 @@ When Claude is thinking, the sky clouds over. When it starts running tools, a th
 And when it stops to ask you a question or wait for your approval, a single star lights up and slowly pulses.
 You never have to switch windows: the corner of your eye tells you what your AI is up to.
 
-![The sea at night: five Claude Code sessions are five boats. The star overhead and one boat's lamps are pulsing — that session is waiting for you](docs/screenshots/ocean-night.jpg)
+![The sky follows Claude: overcast (thinking) → storm (running tools) → clearing (done) → a pulsing star (waiting for you)](docs/screenshots/states.gif)
+
+*Overcast → storm → clearing → star: Claude thinking, running tools, done, waiting for you.*
 
 ## States
 
@@ -22,6 +24,8 @@ You never have to switch windows: the corner of your eye tells you what your AI 
 
 **Several sessions at once (up to 5):** each session keeps its own state, and the sky shows the most urgent one (waiting > storm > overcast > clearing > clear).
 On the sea wallpapers every session is a boat: busy boats get underway with a wake behind them, and the boat that is waiting for you blinks its lamps — so you can tell at a glance which session needs you.
+
+![The sea at night: five Claude Code sessions are five boats. The star overhead and one boat's lamps are pulsing — that session is waiting for you](docs/screenshots/ocean-night.jpg)
 
 ## Wallpapers
 
@@ -73,16 +77,22 @@ it shows up in the gear menu's wallpaper list, no changes to the app needed. The
 
 ## Little tools
 
-| Feature | Shortcut |
-|---|---|
-| Hide / show all desktop icons | Ctrl+Alt+D |
-| Boss key — wallpaper and HUD vanish, only a tiny gear stays | Ctrl+Alt+B (change it in the gear menu) |
-| Screen eyedropper (copies `#RRGGBB`) | Ctrl+Q |
-| Region screenshot (clipboard + `Pictures\Saved Pictures`) | Ctrl+R |
+| Feature | Shortcut | What it does |
+|---|---|---|
+| Hide desktop icons (收桌面) | Ctrl+Alt+D | Hides / shows every icon on the desktop: folders, shortcuts and files alike (one feature). Press again to bring them back |
+| Boss key (老闆鍵) | Ctrl+Alt+B (**changeable in the gear menu**) | Wallpaper and tray icon vanish, the HUD shrinks to a faint gear, and icons hidden by Ctrl+Alt+D come back, so it looks like an ordinary work desktop. **Press the same shortcut again to restore** — no need to click the gear (gear → 取消隱藏 also works) |
+| Screen eyedropper (螢幕吸色) | Ctrl+Alt+C | Freezes the screen; click to copy `#RRGGBB` to the clipboard. Esc or right-click cancels |
+| Region screenshot (範圍截圖) | Ctrl+Alt+S | Drag a box: PNG to the clipboard plus a copy in `Pictures\Saved Pictures` (`截圖_date_time.png`). Esc or right-click cancels |
+
+These are **global shortcuts**: while VibingWrapper runs it takes them from every app, so they all start with Ctrl+Alt and leave everyday keys like Ctrl+R (reload) and Ctrl+Q alone.
+If another program already holds one, the tray menu marks it 被占用 (taken) and the feature is still a click away in the tray or gear menu.
+Only the boss key can be changed in the gear menu (gear → 變更快捷鍵, then press the new combination).
 
 The UI is in Traditional Chinese.
 
-## Quick try (no install)
+## Install
+
+### Quick try (no install)
 
 1. Download `VibingWrapper-x.y.z-win-x64.zip` from [Releases](https://github.com/youllook/VibingWrapper/releases/latest) and unzip it anywhere.
 2. Run `VibingWrapper.exe`. The build is unsigned: if Windows SmartScreen says "Windows protected your PC", click "More info" → "Run anyway".
@@ -91,7 +101,7 @@ The UI is in Traditional Chinese.
 
 No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled.
 
-## Run from source
+### Run from source
 
 Requires Windows 10 / 11, [Node.js](https://nodejs.org/) 18+, and [Claude Code](https://claude.com/claude-code).
 
@@ -102,7 +112,9 @@ npm install
 npm start
 ```
 
-`npm run shortcut` creates a desktop shortcut; `npm run dist` builds `dist/VibingWrapper-x.y.z-win-x64.zip` (export the level crossing from Godot first, see `themes/crossing/README.md`). "Start with Windows" (開機自動啟動) is in the tray menu.
+`npm run shortcut` creates a desktop shortcut. "Start with Windows" (開機自動啟動) is in the tray menu.
+
+**Build it yourself**: `npm run dist` packages `dist/VibingWrapper-x.y.z-win-x64.zip` with electron-builder (the same file as on Releases). The level crossing's Godot export is not in git; export it first as described in [themes/crossing/README.md](themes/crossing/README.md), or the build ships without it.
 
 ## Connect Claude Code
 

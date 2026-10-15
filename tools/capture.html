@@ -16,7 +16,7 @@
 <canvas id="ui"></canvas>
 <script>
 /* Screen tools overlay (2026-09-29). Shows a frozen screenshot of the display and lets the user
- * pick a colour (mode "color", Ctrl+Q) or drag a rectangle (mode "region", Ctrl+R).
+ * pick a colour (mode "color", Ctrl+Alt+C) or drag a rectangle (mode "region", Ctrl+Alt+S).
  * All drawing is in PHYSICAL pixels (screenshot pixels); mouse CSS px × scale → physical. */
 const shotC = document.getElementById('shot'), uiC = document.getElementById('ui');
 const sctx = shotC.getContext('2d'), u = uiC.getContext('2d');

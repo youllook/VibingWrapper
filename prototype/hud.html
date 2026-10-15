@@ -64,7 +64,7 @@
   #menu .item:hover { background: rgba(120,170,220,.2); }
   #menu .item .val { color: #4a6a88; font-size: 12px; }
   #menu .sep { height: 1px; margin: 4px 6px; background: rgba(23,50,77,.12); }
-  /* 一鍵隱藏: only a faint gear is left (the way back) */
+  /* 老闆鍵: only a faint gear is left (the way back) */
   body.stealth #ai { display: none; }
   body.stealth #gear { opacity: .35; }
 </style>
@@ -132,8 +132,8 @@ const SETTINGS = IS_APP ? [
   { label: '　模式', value: () => (TIME_MODES.find(m => m[0] === timeMode) || TIME_MODES[0])[1],
     run: () => { const i = TIME_MODES.findIndex(m => m[0] === timeMode); window.petAPI.setTimeMode(TIME_MODES[(i + 1) % TIME_MODES.length][0]).then(m => { timeMode = m; renderMenu(); }); } },
   { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },   // right side = the hotkey, as a reminder
-  // 一鍵隱藏 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
-  { label: '一鍵隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
+  // 老闆鍵 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
+  { label: '老闆鍵', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
   { label: '　變更快捷鍵', value: () => bossMsg, run: () => startBossCapture() },
   // Claude 連動: whether the hooks are in ~/.claude/settings.json; click adds the missing ones
   { label: 'Claude 連動', value: () => hooksMsg || HOOKS_LABEL[hooks] || '', run: () => window.petAPI.installHooks().then(r => { hooksMsg = r.msg; refreshHooks(); }) },
@@ -160,7 +160,7 @@ function setMenu(open) {
   settingsEl.classList.toggle('open', open); if (open) renderMenu();
 }
 
-/* 一鍵隱藏: 變更快捷鍵 records the next key combination pressed (the old key is paused meanwhile) */
+/* 老闆鍵: 變更快捷鍵 records the next key combination pressed (the old key is paused meanwhile) */
 let boss = { key: 'Control+Alt+B', registered: true }, bossMsg = '', capturing = false;
 const prettyKey = acc => acc.replace('Control', 'Ctrl').replace('Super', 'Win');
 const bossLabel = () => prettyKey(boss.key) + (boss.registered ? '' : ' 被占用');

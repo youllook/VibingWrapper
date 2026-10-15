@@ -1,6 +1,6 @@
 // Screen tools (2026-09-29): replaces the two PicPick features the user actually used.
-//   Ctrl+Q  screen eyedropper → hex colour to the clipboard
-//   Ctrl+R  crosshair region capture → PNG to the clipboard + a copy saved in SAVE_DIR
+//   Ctrl+Alt+C  screen eyedropper → hex colour to the clipboard
+//   Ctrl+Alt+S  crosshair region capture → PNG to the clipboard + a copy saved in SAVE_DIR
 // Separate from the pet on purpose: it only shares the Electron process (already running at login).
 // Flow: grab the display under the cursor → show a frozen full-screen overlay (pre-created, so it
 // opens fast) → the page reports a colour / rectangle → clipboard.
@@ -8,7 +8,8 @@ const { app, BrowserWindow, globalShortcut, desktopCapturer, screen, clipboard, 
 const fs = require('fs');
 const path = require('path');
 
-const HOTKEYS = { 'Control+Q': 'color', 'Control+R': 'region' };
+// 2026-10-15: were Ctrl+Q / Ctrl+R — global shortcuts stole them from every app (Ctrl+R = browser reload)
+const HOTKEYS = { 'Control+Alt+C': 'color', 'Control+Alt+S': 'region' };
 const SAVE_DIR = path.join(app.getPath('pictures'), 'Saved Pictures');   // user's choice (2026-09-29)
 
 // 截圖_20260929_154512.png (+ _2, _3 … when several land in the same second)
