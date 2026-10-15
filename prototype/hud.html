@@ -121,6 +121,9 @@ let WP_STYLES = [{ id: 'weather', name: '天氣' }];
 const wpName = id => (WP_STYLES.find(t => t.id === id) || { name: id }).name;
 const loadStyles = () => IS_APP && window.petAPI.getWallpaperStyles().then(l => { if (l && l.length) { WP_STYLES = l; if (settingsEl.classList.contains('open')) renderMenu(); } });
 let wpStyle = 'weather', iconsKey = 'Ctrl+Alt+D', timeMode = 'auto';
+let hooks = 'on', hooksMsg = '';
+const HOOKS_LABEL = { on: '已安裝', partial: '點此補齊', off: '點此安裝', error: 'settings.json 有誤' };
+const refreshHooks = () => IS_APP && window.petAPI.hooksStatus().then(s => { hooks = s; if (settingsEl.classList.contains('open')) renderMenu(); });
 const TIME_MODES = [['auto', '預設'], ['day', '日間'], ['night', '夜間']];
 const SETTINGS = IS_APP ? [
   { label: '桌布', value: () => wpName(wpStyle),
@@ -132,6 +135,8 @@ const SETTINGS = IS_APP ? [
   // 一鍵隱藏 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
   { label: '一鍵隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
   { label: '　變更快捷鍵', value: () => bossMsg, run: () => startBossCapture() },
+  // Claude 連動: whether the hooks are in ~/.claude/settings.json; click adds the missing ones
+  { label: 'Claude 連動', value: () => hooksMsg || HOOKS_LABEL[hooks] || '', run: () => window.petAPI.installHooks().then(r => { hooksMsg = r.msg; refreshHooks(); }) },
   { sep: true },
   { label: '重新啟動', run: () => window.petAPI.restart() },
 ] : [{ label: '重新整理', run: () => location.reload() }];
@@ -151,7 +156,7 @@ function renderMenu() {
   }));
 }
 function setMenu(open) {
-  if (open) { bossMsg = ''; loadStyles(); } else if (capturing) endBossCapture('');
+  if (open) { bossMsg = ''; hooksMsg = ''; loadStyles(); refreshHooks(); } else if (capturing) endBossCapture('');
   settingsEl.classList.toggle('open', open); if (open) renderMenu();
 }
 

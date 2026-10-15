@@ -82,7 +82,16 @@ it shows up in the gear menu's wallpaper list, no changes to the app needed. The
 
 The UI is in Traditional Chinese.
 
-## Install
+## Quick try (no install)
+
+1. Download `VibingWrapper-x.y.z-win-x64.zip` from [Releases](https://github.com/youllook/VibingWrapper/releases/latest) and unzip it anywhere.
+2. Run `VibingWrapper.exe`. The build is unsigned: if Windows SmartScreen says "Windows protected your PC", click "More info" → "Run anyway".
+3. Click the gear (top right) → "Claude 連動" to add the hooks to `~/.claude/settings.json` (your file is backed up once as `settings.json.vibing-backup`; existing settings are kept).
+4. Restart Claude Code and start working: the sky follows along.
+
+No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled.
+
+## Run from source
 
 Requires Windows 10 / 11, [Node.js](https://nodejs.org/) 18+, and [Claude Code](https://claude.com/claude-code).
 
@@ -93,11 +102,11 @@ npm install
 npm start
 ```
 
-`npm run shortcut` creates a desktop shortcut. "Start with Windows" (開機自動啟動) is in the tray menu.
+`npm run shortcut` creates a desktop shortcut; `npm run dist` builds `dist/VibingWrapper-x.y.z-win-x64.zip` (export the level crossing from Godot first, see `themes/crossing/README.md`). "Start with Windows" (開機自動啟動) is in the tray menu.
 
 ## Connect Claude Code
 
-VibingWrapper listens for Claude Code hook events on `127.0.0.1:47321`. Merge this into the `hooks` of `~/.claude/settings.json` (if you already have hooks, add these entries to the matching arrays rather than replacing them):
+The gear menu's "Claude 連動" item installs these for you (see Quick try). To do it by hand: VibingWrapper listens for Claude Code hook events on `127.0.0.1:47321`. Merge this into the `hooks` of `~/.claude/settings.json` (if you already have hooks, add these entries to the matching arrays rather than replacing them):
 
 ```json
 {
@@ -124,7 +133,8 @@ Received events are logged by name and the first 8 characters of the session ID 
 |---|---|
 | `main.js` | Electron main process: HUD window, tray, settings |
 | `prototype/hud.html` | The top-right AI state icon + gear menu |
-| `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `themes/state.json`; also serves the `themes/` pages and the theme list |
+| `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `%APPDATA%\vibing-wrapper\state.json`; also serves the `themes/` pages and the theme list |
+| `tools/claude-hooks.js` | Gear menu "Claude 連動": adds the hooks to `~/.claude/settings.json` |
 | `tools/wallpaper.js`, `attach-wallpaper.ps1` | Parents the wallpaper window behind the desktop icons (WorkerW) |
 | `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `meadow-real`, `crossing` (`network` disabled) |
 | `godot/crossing/` | Godot 4 source for the level crossing (the scene is built in code; `shell.html` is the web shell) |

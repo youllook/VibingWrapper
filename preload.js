@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('petAPI', {
   setWallpaperStyle: s => ipcRenderer.invoke('pet:set-wallpaper-style', s),
   getTimeMode: () => ipcRenderer.invoke('pet:time-mode'),        // 模式: 'auto' (real clock) / 'day' / 'night'
   setTimeMode: mode => ipcRenderer.invoke('pet:set-time-mode', mode),
+  // 一鍵安裝 Claude hook: 'on' / 'partial' / 'off' / 'error', and install → { ok, msg }
+  hooksStatus: () => ipcRenderer.invoke('pet:hooks-status'),
+  installHooks: () => ipcRenderer.invoke('pet:install-hooks'),
   getAiState: () => ipcRenderer.invoke('pet:ai-state'),
   onAiState: fn => ipcRenderer.on('pet:ai-state', (_e, s) => fn(s)),
   // hide / show all desktop icons (also Ctrl+Alt+D and the tray menu)
