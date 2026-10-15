@@ -99,8 +99,13 @@ const REEF_TILES = [
 // when Claude finishes something (user, 2026-10-15): a session (or the whole sky) turning to clearing sends the whale
 // off right away; finishes while it swims, and for 30–60 s after it has gone, are ignored (a burst of finishes gives
 // one pass); half-hidden in the haze (extinction × `fog`).
-const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, headX: -8.11, dist: [17, 23], y: [3.0, 7.0],
-                speed: [1.2, 1.7], cooldown: [30, 60], stroke: 5.0, fog: 0.6 };
+const WHALE = { url: 'assets/whale_humpback.glb', length: 14.0, modelLen: 16.1, headX: -8.11, cooldown: [30, 60], stroke: 5.0, fog: 0.6,
+                below: 3.44, above: 2.93,              // the scaled model reaches this far below (fin tips) / above its centre, m
+                // "near" (user, 2026-10-15: "right in front of the screen, like a giant monster going by"): bigger than the
+                // frame, its belly and pectoral fins sweeping overhead; "far": a shape crossing the haze
+                mode: 'near',
+                near: { dist: [5.5, 8.0], y: [4.0, 4.8], speed: [0.9, 1.25], bob: 0.3, dz: 1.0 },
+                far:  { dist: [17, 23],   y: [4.0, 5.5], speed: [1.2, 1.7],  bob: 0.6, dz: 6.0 } };
 // the sand height under a tile (a CPU copy of the large features of dunes())
 const sandAt = (x, z) => -0.05 + 0.9 * smooth(Math.min(1, Math.max(0, (z - 12) / 33))) + 0.5 * smooth(Math.min(1, Math.max(0, (-5 - x) / 11))) * smooth(Math.min(1, Math.max(0, (z - 4) / 12)));
 const VENTS = [[1.3, 0.0, 7.2], [-2.6, 0.0, 11.5], [5.1, 0.0, 13.0], [3.4, 0.0, 9.0], [-0.6, 0.0, 16.0]];   // bubble streams (y filled from the floor)
@@ -1182,10 +1187,17 @@ function sparkPulse(m) {                                   // a jelly's contract
   }
 }
 function startWhale() {                                    // a pass: in from one side well off screen, out the other
-  const dir = rnd() < 0.5 ? 1 : -1, z = rr(WHALE.dist), y0 = rr(WHALE.y);
+  const M = WHALE[WHALE.mode] || WHALE.near;
+  const dir = rnd() < 0.5 ? 1 : -1, z = rr(M.dist);
   const half = z * TAN_169[0] * 1.15 + WHALE.length;       // beyond the frame edge, body included
-  Object.assign(whale, { active: true, dir, z, y0, x0: -dir * half, x1: dir * half, t0: sceneTime, dur: 2 * half / rr(WHALE.speed),
-                         bob: rnd() * 6.28, dz: (rnd() - 0.5) * 6, phase0: rnd() * 6.28 });
+  // no clipping: the fin tips stay clear of the reef along the whole path (body half-width ~3 m), the back under the surface
+  let reefTop = 0;
+  for (let x = -half; x <= half; x += 0.5) for (const oz of [-3, -1.5, 0, 1.5, 3]) reefTop = Math.max(reefTop, floorAt(x, z + oz));
+  // (near: the back may rise past the surface — at 5–8 m that height is above the top of the frame, and the reef is tall)
+  const lo = reefTop + WHALE.below + M.bob + 0.2 + 0.55, hi = (WHALE.mode === 'near' ? SURF + 2.0 : SURF) - WHALE.above - M.bob - 0.3 - 0.55;
+  const y0 = Math.min(hi, Math.max(lo, rr(M.y)));
+  Object.assign(whale, { active: true, dir, z, y0, bobA: M.bob, x0: -dir * half, x1: dir * half, t0: sceneTime, dur: 2 * half / rr(M.speed),
+                         bob: rnd() * 6.28, dz: (rnd() - 0.5) * M.dz, phase0: rnd() * 6.28 });
 }
 function updateWhale() {
   if (!whale.ready) return;
@@ -1197,9 +1209,9 @@ function updateWhale() {
   const k = (sceneTime - whale.t0) / whale.dur;
   if (k >= 1) { whale.active = false; whale.quietUntil = sceneTime + rr(WHALE.cooldown); return; }   // then a rest
   const x = whale.x0 + (whale.x1 - whale.x0) * k;
-  const y = whale.y0 + 0.8 * Math.sin(k * 3.1 + whale.bob) + 0.2 * Math.sin(sceneTime * 2 * Math.PI / WHALE.stroke * 0.5);
+  const y = whale.y0 + whale.bobA * Math.sin(k * 3.1 + whale.bob) + 0.2 * Math.sin(sceneTime * 2 * Math.PI / WHALE.stroke * 0.5);
   const z = whale.z + whale.dz * (k - 0.5);
-  const dy = 0.8 * 3.1 / whale.dur * Math.cos(k * 3.1 + whale.bob);   // heading follows the path (gentle pitch)
+  const dy = whale.bobA * 3.1 / whale.dur * Math.cos(k * 3.1 + whale.bob);   // heading follows the path (gentle pitch)
   const F = norm3([whale.dir * (whale.x1 - whale.x0) / whale.dur * whale.dir, dy, whale.dz / whale.dur]);
   const U0 = [0, 1, 0], S = norm3(cross3(F, U0)), U = cross3(S, F);
   // the model's −x is forward, +y up, so x → −F, y → U, z → x × y
@@ -1495,6 +1507,18 @@ function updateJellies(dt, t, flowV) {
     const cd = [m.pos[0] - CAM.pos[0], m.pos[1] - CAM.pos[1], m.pos[2] - CAM.pos[2]], cl = Math.hypot(...cd);
     if (cl < 2.2) for (let i = 0; i < 3; i++) m.vel[i] += cd[i] / cl * (2.2 - cl) * 0.5 * dt;   // never bump into the lens
     m.lastEddy = ed;
+    // the whale is coming through: jellies near its body are shoved aside and flinch
+    if (whale.active && whale.pos && m.slot >= 0) {
+      const sc = WHALE.length / WHALE.modelLen;
+      const a = whale.pos.map((v, i) => v + whale.X[i] * WHALE.headX * sc), b = whale.pos.map((v, i) => v + whale.X[i] * (WHALE.headX + WHALE.modelLen) * sc);
+      const ab = b.map((v, i) => v - a[i]), am = m.pos.map((v, i) => v - a[i]);
+      const tt = Math.max(0, Math.min(1, (am[0] * ab[0] + am[1] * ab[1] + am[2] * ab[2]) / (ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2])));
+      const d = m.pos.map((v, i) => v - (a[i] + ab[i] * tt)), dl = Math.hypot(...d), reach = 3.2 * (1 - 0.4 * tt) + m.R;
+      if (dl < reach && dl > 1e-4) {
+        for (let i = 0; i < 3; i++) m.vel[i] += d[i] / dl * (reach - dl) * 0.9 * dt;
+        if (flinch(m, t)) sparkBurst(m.pos, m.R * 1.5, Math.round(12 * sparks.glow));
+      }
+    }
     // steer the bell toward a slowly wandering point near home (and against a strong current)
     const ts = t * 1 + m.seed;
     // a session releases its school at one spot; from there each jelly drifts off on its own, toward a point that
