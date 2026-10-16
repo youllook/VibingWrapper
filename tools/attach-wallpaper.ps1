@@ -1,8 +1,14 @@
-# Puts a window BEHIND the desktop icons (the classic "WorkerW" trick used by live-wallpaper apps).
-# 1. Ask Progman (message 0x052C) to spawn a WorkerW between the icons and the static wallpaper.
-# 2. Find the WorkerW that sits right after the one hosting SHELLDLL_DefView (the icons).
-# 3. SetParent our window into it and size it to the given rectangle (WorkerW client coordinates).
-# Usage: attach-wallpaper.ps1 -Hwnd <decimal> -X 0 -Y 0 -W 1920 -H 1080     Prints the WorkerW handle (0 = failed).
+# Puts a window BEHIND the desktop icons (the "WorkerW" trick used by live-wallpaper apps).
+# 1. Ask Progman (message 0x052C, wParam 0xD / lParam 1, the values Lively sends) to split the desktop.
+# 2. Two layouts come out of that:
+#    - classic (Windows 10, Windows 11 up to 23H2): two top-level WorkerWs, the first holding SHELLDLL_DefView
+#      (the icons), the next one empty behind it → our window goes inside that empty WorkerW.
+#    - raised (Windows 11 24H2 and later, 2026-10-16): Progman keeps the icons as a direct child and the WorkerW
+#      it makes is ALSO a child of Progman, below the icons, drawing the static wallpaper. The old search then
+#      grabbed some unrelated hidden WorkerW and the wallpaper never showed. Our window becomes a layered
+#      (alpha 255) child of Progman, placed directly below SHELLDLL_DefView, i.e. above Explorer's WorkerW.
+# 3. Size it to the given rectangle (parent client coordinates).
+# Usage: attach-wallpaper.ps1 -Hwnd <decimal> -X 0 -Y 0 -W 1920 -H 1080     Prints the parent handle (0 = failed).
 param([Int64]$Hwnd, [int]$X, [int]$Y, [int]$W, [int]$H)
 
 Add-Type @"
@@ -15,36 +21,72 @@ public static class DeskAttach {
   [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
   [DllImport("user32.dll")] static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+  [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr h);
   [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
   [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h, uint key, byte alpha, uint flags);
 
-  public static IntPtr WorkerW() {
-    IntPtr progman = FindWindow("Progman", null), r;
-    SendMessageTimeout(progman, 0x052C, IntPtr.Zero, IntPtr.Zero, 0, 1000, out r);
+  static IntPtr Progman() { return FindWindow("Progman", null); }
+
+  // raised layout: the icons AND a WorkerW are both direct children of Progman
+  static bool Raised(IntPtr progman) {
+    return FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero
+        && FindWindowEx(progman, IntPtr.Zero, "WorkerW", null) != IntPtr.Zero;
+  }
+
+  // classic layout: the top-level WorkerW right after the WorkerW that holds the icons
+  static IntPtr ClassicWorker() {
     IntPtr worker = IntPtr.Zero;
     EnumWindows((h, l) => {
-      if (FindWindowEx(h, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero)
-        worker = FindWindowEx(IntPtr.Zero, h, "WorkerW", null);
+      if (FindWindowEx(h, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero) {
+        IntPtr next = FindWindowEx(IntPtr.Zero, h, "WorkerW", null);
+        if (next != IntPtr.Zero) { worker = next; return false; }
+      }
       return true;
     }, IntPtr.Zero);
     return worker;
   }
 
+  static void Split(IntPtr progman, IntPtr w, IntPtr l) {
+    IntPtr r;
+    SendMessageTimeout(progman, 0x052C, w, l, 0, 1000, out r);
+  }
+
   public static long Attach(long hwnd, int x, int y, int w, int h) {
-    IntPtr worker = WorkerW();
-    if (worker == IntPtr.Zero) return 0;
-    IntPtr win = new IntPtr(hwnd);
-    SetParent(win, worker);
+    IntPtr progman = Progman();
+    if (progman == IntPtr.Zero) return 0;
+    // send once; Explorer reference-counts the split, so only fall back to the legacy (0, 0) form when nothing came of it
+    if (!Raised(progman) && ClassicWorker() == IntPtr.Zero) Split(progman, new IntPtr(0xD), new IntPtr(1));
+    if (!Raised(progman) && ClassicWorker() == IntPtr.Zero) Split(progman, IntPtr.Zero, IntPtr.Zero);
+
+    IntPtr win = new IntPtr(hwnd), parent, after;
+    if (Raised(progman)) {
+      parent = progman;
+      after = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);   // insert right below the icons
+    } else {
+      parent = ClassicWorker();
+      after = IntPtr.Zero;
+      if (parent == IntPtr.Zero) return 0;
+    }
+
     // Make it a plain child window (2026-09-30): as a top-level style window Windows once re-laid it out
     // like a maximized window (1936×1048 with 8 px invisible borders) → a black strip on the left.
     // Drop POPUP / CAPTION / THICKFRAME / SYSMENU / MIN-MAXBOX / MAXIMIZE, add CHILD.
     int style = GetWindowLong(win, -16);
     style = (int)((uint)style & ~(0x80000000u | 0x00C00000u | 0x00040000u | 0x00080000u | 0x00030000u | 0x01000000u)) | 0x40000000;
     SetWindowLong(win, -16, style);
-    // SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW
-    SetWindowPos(win, IntPtr.Zero, x, y, w, h, 0x0004 | 0x0010 | 0x0020 | 0x0040);
-    return worker.ToInt64();
+    if (parent == progman) {
+      // Progman has no redirection surface on the raised desktop: children only show if they are layered
+      SetWindowLong(win, -20, GetWindowLong(win, -20) | 0x00080000);         // WS_EX_LAYERED
+      SetLayeredWindowAttributes(win, 0, 255, 0x2);                           // LWA_ALPHA, fully opaque
+    }
+    SetParent(win, parent);
+    if (GetParent(win) != parent) return 0;
+    // classic: SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW; raised: same but with a z-order
+    uint flags = 0x0010 | 0x0020 | 0x0040 | (after == IntPtr.Zero ? 0x0004u : 0u);
+    SetWindowPos(win, after, x, y, w, h, flags);
+    return parent.ToInt64();
   }
 }
 "@
