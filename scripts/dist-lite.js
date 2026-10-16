@@ -1,9 +1,9 @@
 // 精簡版 zip（2026-10-15）：只帶 天氣／天氣＋海／海月 三個主題，預設桌布是海月。
 // 給不用 Claude Code 的朋友試玩；完整版照舊用 npm run dist。
-// 用法：npm run dist:lite → dist/VibingWrapper-<version>-lite-win-x64.zip
+// 用法：npm run dist:lite → dist/VibingWrapper-<version>-lite-win-x64.zip（裡面一層 VibingWrapper-<version>-lite/）
 const fs = require('fs');
 const path = require('path');
-const builder = require('electron-builder');
+const { pack } = require('./pack');
 const pkg = require('../package.json');
 
 const THEMES = ['weather', 'sea', 'jellyfish'];
@@ -21,9 +21,7 @@ const config = {
   ],
   // read by main.js as the first-run wallpaper (package.json → vibingwrapper.defaultTheme)
   extraMetadata: { vibingwrapper: { defaultTheme: DEFAULT_THEME } },
-  artifactName: '${productName}-${version}-lite-win-x64.${ext}',
 };
 
-builder.build({ targets: builder.Platform.WINDOWS.createTarget('zip', builder.Arch.x64), config })
-  .then(out => console.log('done:', out.filter(f => f.endsWith('.zip')).join('\n')))
+pack({ config, folder: `${pkg.build.productName}-${pkg.version}-lite` })
   .catch(e => { console.error(e); process.exit(1); });

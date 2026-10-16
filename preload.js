@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   // tray menu → same single-letter commands as the keyboard (r, v, m, h, escape)
   // quit and start the whole app again (menu: 重新啟動)
   restart: () => ipcRenderer.send('pet:restart'),
+  // 解除安裝: main asks for confirmation (native dialog), then removes the hooks and deletes our files after exit
+  uninstall: () => ipcRenderer.send('pet:uninstall'),
   // AI state machine (Claude hooks → weather state): current value + live changes
   // wallpaper style = a theme folder id; the list comes from themes/*/theme.json
   getWallpaperStyle: () => ipcRenderer.invoke('pet:wallpaper-style'),

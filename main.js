@@ -9,8 +9,12 @@ const wallpaper = require('./tools/wallpaper');       // weather wallpaper behin
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
 const bossKey = require('./tools/boss-key');           // 老闆鍵: user-defined hotkey hides every 星圖 window (boss key)
 const claudeHooks = require('./tools/claude-hooks');   // 一鍵安裝 Claude hook → ~/.claude/settings.json
+const uninstall = require('./tools/uninstall');         // 解除安裝: hooks out, settings + program files deleted after exit
 
-if (!app.requestSingleInstanceLock()) app.quit();
+// a second copy only hands its arguments to the first (second-instance below) and leaves; it must not run
+// whenReady itself, or --uninstall would ask twice (seen 2026-10-16)
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.quit();
 // 2026-10-01: render on the high-performance GPU (RTX 2060 SUPER). Chromium picked the Intel UHD 630 that
 // drives the screen, and the ocean wallpaper alone kept it ~47% busy.
 app.commandLine.appendSwitch('force_high_performance_gpu');
@@ -115,6 +119,8 @@ ipcMain.handle('pet:set-boss-key', (_e, acc) => {
 ipcMain.handle('pet:hooks-status', () => claudeHooks.status());
 ipcMain.handle('pet:install-hooks', () => { const r = claudeHooks.install(); buildTrayMenu(); return r; });
 ipcMain.on('pet:restart', () => { app.relaunch(); app.exit(0); });
+const runUninstall = () => uninstall.run({ claudeHooks, desktopIcons, loginItemArgs });
+ipcMain.on('pet:uninstall', runUninstall);
 
 // 32×32 tray icon drawn in code (an ice-blue diamond), so no image file is needed.
 function makeTrayIcon() {
@@ -171,11 +177,16 @@ function buildTrayMenu() {
     { label: '重新載入', click: () => win.reload() },
     { type: 'separator' },
     { label: '重新啟動', click: () => { app.relaunch(); app.exit(0); } },
+    { label: '解除安裝…', click: runUninstall },
     { label: '結束', click: () => app.quit() },
   ]));
 }
 
 app.whenReady().then(() => {
+  if (!primary) return;
+  // Windows 設定 →「已安裝的應用程式」→ 解除安裝 starts VibingWrapper.exe --uninstall: only the uninstall dialog
+  if (process.argv.includes('--uninstall')) { runUninstall().then(done => { if (!done) app.quit(); }); return; }
+  uninstall.register();
   settings = loadSettings();
   createWindow();
   makeTray();
@@ -201,6 +212,6 @@ app.whenReady().then(() => {
   screen.on('display-removed', reposition);
 });
 
-app.on('second-instance', () => { if (alive()) win.showInactive(); });
+app.on('second-instance', (_e, argv) => { if (argv.includes('--uninstall')) runUninstall(); else if (alive()) win.showInactive(); });
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => { globalShortcut.unregisterAll(); desktopIcons.stop(); });
