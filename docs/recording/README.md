@@ -4,7 +4,8 @@
 
 | 檔案 | 用途 |
 |---|---|
-| `shots.json` | 分鏡設定：要錄哪些鏡頭、每段什麼天氣、幾秒 |
+| `shots.json` | 分鏡設定：要錄哪些鏡頭、每段什麼天氣、幾秒（直式素材） |
+| `shots-youtube.json` | 橫式 1440p 的 YouTube Demo：8 個鏡頭，最後串成一支 |
 | `record.js` | 照 `shots.json` 把每個鏡頭直接錄成 MP4 |
 | `virtual-clock.js` | 錄製時注入頁面的虛擬時鐘（不用動它） |
 | `states.js` | 舊的 README GIF 錄製腳本（輸出 PNG 畫格，見文末） |
@@ -19,7 +20,19 @@ node_modules/electron/dist/electron.exe docs/recording/record.js "$(pwd -W)" out
 
 - 不指定名字：錄 `shots.json` 裡的每一個鏡頭；在最後加鏡頭名稱就只錄那幾個，例如 `... out sea-storm-to-star jellyfish-night`。
 - 換一份分鏡檔：`--shots 我的分鏡.json`。
-- 輸出 `out/<鏡頭名>.mp4`，H.264、CRF 16。預設直式 1080×1920、30fps，一段 13 秒大約 40 秒錄完。
+- 輸出 `out/<鏡頭名>.mp4`。預設直式 1080×1920、30fps，一段 13 秒大約 40 秒錄完。
+- 編碼照 YouTube 建議的上傳規格：H.264 High、4:2:0、CRF 16、GOP 為半個影格率的 closed GOP、2 個 B 影格、moov 放前面（faststart），外加一條無聲的 AAC 48kHz 立體聲音軌。
+
+### YouTube Demo（橫式，串成一支）
+
+```bash
+node_modules/electron/dist/electron.exe docs/recording/record.js "$(pwd -W)" out --shots docs/recording/shots-youtube.json
+```
+
+- 8 個鏡頭各自輸出，最後依 `montage` 的順序，用 1 秒淡入淡出串成 `out/youtube-demo.mp4`（約 2 分鐘），整份大約 5 分鐘錄完。
+- 用 2560×1440 而不是 1080p：YouTube 對 1440p 以上的影片會改用畫質比較好的 VP9／AV1 編碼，雨絲、海面反光才不會糊成一片。
+- 只錄部分鏡頭（在最後加鏡頭名）時不會串接。
+- 沒有配樂：上傳前用剪輯軟體或 YouTube 工作室的音訊庫加上去。
 
 ### 原理（為什麼畫面穩）
 
@@ -57,6 +70,8 @@ node_modules/electron/dist/electron.exe docs/recording/record.js "$(pwd -W)" out
 | `fps` | 影格率 |
 | `preroll` | 開錄前先讓第一段狀態跑幾秒（不錄），畫面才是穩定的 |
 | `note` | 備註，程式不讀 |
+
+分鏡檔最外層可以加 `montage`：`{ "name": "youtube-demo", "shots": [鏡頭名, ...], "fade": 1 }`，錄完後依序用 `fade` 秒的淡入淡出串成 `<name>.mp4`。
 
 `script` 每一段：
 

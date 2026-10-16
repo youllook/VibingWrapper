@@ -1,0 +1,76 @@
+{
+  "note": "landscape demo for YouTube: 1440p so YouTube serves it with its better codecs (VP9/AV1), joined into one video",
+  "defaults": { "size": [2560, 1440], "fps": 30, "preroll": 6 },
+  "shots": {
+    "yt-1-sea-calm": {
+      "note": "opening: a quiet afternoon sea, three sessions idle",
+      "theme": "sea", "clock": 15.6,
+      "script": [
+        { "state": "clear", "sec": 7, "sessions": ["clear", "clear", "clear"] }
+      ]
+    },
+    "yt-2-sea-work": {
+      "note": "one full round: thinking → running tools → done → waiting for you",
+      "theme": "sea", "clock": 15.6,
+      "script": [
+        { "state": "clear",    "sec": 2,   "sessions": ["clear", "clear", "clear"] },
+        { "state": "overcast", "sec": 5,   "sessions": ["overcast", "clear", "clear"] },
+        { "state": "storm",    "sec": 8,   "sessions": ["storm", "storm", "clear"] },
+        { "state": "clearing", "sec": 5,   "sessions": ["clear", "clear", "clear"] },
+        { "state": "waiting",  "sec": 7,   "sessions": ["clear", "waiting", "clear"] }
+      ]
+    },
+    "yt-3-sea-fleet-night": {
+      "note": "five sessions at once on the night sea",
+      "theme": "sea", "clock": 22,
+      "script": [
+        { "state": "storm",   "sec": 8, "sessions": ["storm", "overcast", "storm", "waiting", "clear"] },
+        { "state": "waiting", "sec": 7, "sessions": ["clear", "waiting", "clear", "waiting", "clear"] }
+      ]
+    },
+    "yt-4-jellyfish-day": {
+      "theme": "jellyfish", "clock": 11, "preroll": 8,
+      "script": [
+        { "state": "overcast", "sec": 5, "sessions": ["overcast", "overcast"] },
+        { "state": "clearing", "sec": 5, "sessions": ["clear", "clear"] },
+        { "state": "waiting",  "sec": 5, "sessions": ["clear", "waiting"] }
+      ]
+    },
+    "yt-5-jellyfish-night": {
+      "note": "sea fireflies: the storm stirs up light",
+      "theme": "jellyfish", "clock": 22, "preroll": 8,
+      "script": [
+        { "state": "storm",    "sec": 6, "sessions": ["storm", "storm", "storm"] },
+        { "state": "clearing", "sec": 7, "sessions": ["clear", "clear", "clear"] }
+      ]
+    },
+    "yt-6-snowpeak-dawn": {
+      "theme": "snowpeak", "clock": 6.2, "preroll": 8,
+      "script": [
+        { "state": "storm",    "sec": 5, "sessions": ["storm", "storm"] },
+        { "state": "clearing", "sec": 5, "sessions": ["clear", "clear"] },
+        { "state": "waiting",  "sec": 5, "sessions": ["clear", "waiting"] }
+      ]
+    },
+    "yt-7-paddy": {
+      "theme": "paddy", "clock": 16.5,
+      "script": [
+        { "state": "storm",    "sec": 5, "sessions": ["storm", "storm"] },
+        { "state": "clearing", "sec": 5, "sessions": ["clear", "clear"] },
+        { "state": "waiting",  "sec": 4, "sessions": ["clear", "waiting"] }
+      ]
+    },
+    "yt-8-sea-sunset": {
+      "note": "closing: afternoon into night",
+      "theme": "sea", "clock": 16.5,
+      "script": [
+        { "state": "clear", "sec": 12, "sessions": ["clear", "clear", "clear"], "clockTo": 20.5 }
+      ]
+    }
+  },
+  "montage": {
+    "name": "youtube-demo",
+    "shots": ["yt-1-sea-calm", "yt-2-sea-work", "yt-3-sea-fleet-night", "yt-4-jellyfish-day", "yt-5-jellyfish-night", "yt-6-snowpeak-dawn", "yt-7-paddy", "yt-8-sea-sunset"],
+    "fade": 1
+  }
+}

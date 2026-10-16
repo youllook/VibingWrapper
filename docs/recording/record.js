@@ -1,4 +1,5 @@
-// Renders the shots in shots.json straight to MP4 (raw footage for demos / Shorts / Reels).
+// Renders the shots in shots.json straight to MP4 (raw footage for demos / Shorts / Reels), and optionally joins
+// them into one video with crossfades ("montage" in the shot file).
 // The page runs on a virtual clock (virtual-clock.js), so the output is an exact frame rate whatever the GPU does.
 // usage: electron docs/recording/record.js <repo> <outDir> [--shots file.json] [shot names...]   (no names = every shot)
 // needs ffmpeg on PATH. Shot fields: docs/recording/README.md
@@ -9,10 +10,15 @@ const args = process.argv.slice(process.argv.findIndex(a => a.endsWith('record.j
 const flag = args.indexOf('--shots');
 const shotsFile = flag >= 0 ? args.splice(flag, 2)[1] : path.join(__dirname, 'shots.json');
 const [repo, out, ...only] = args;
-const { defaults = {}, shots } = JSON.parse(fs.readFileSync(shotsFile, 'utf8'));
+const { defaults = {}, shots, montage } = JSON.parse(fs.readFileSync(shotsFile, 'utf8'));
 const THEMES = path.join(repo, 'themes');
 const PORT = 47398;
 const T = 'window.theme || window.weather || window.ocean';   // the theme's test interface (themes/README.md)
+// encoding as YouTube recommends for uploads: H.264 High, 4:2:0, closed GOP of half the frame rate, 2 B-frames,
+// moov atom up front, plus a silent stereo AAC track (players and editors expect one)
+const encode = fps => ['-c:v', 'libx264', '-profile:v', 'high', '-preset', 'slow', '-crf', '16', '-pix_fmt', 'yuv420p',
+  '-g', String(Math.round(fps / 2)), '-bf', '2', '-flags', '+cgop', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart'];
+const run = a => new Promise((ok, no) => spawn('ffmpeg', ['-loglevel', 'error', '-y', ...a], { stdio: 'inherit' }).on('close', c => c ? no(new Error('ffmpeg ' + c)) : ok()));
 
 http.createServer((req, res) => {
   const rel = decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '');
@@ -53,7 +59,7 @@ async function record(name, shot) {
   for (let i = 0, ok = 0; i < 600 && ok < 5; i++) ok = lit(await shot1()) ? ok + 1 : 0;
 
   const ff = spawn('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${W}x${H}`, '-r', String(FPS), '-i', '-',
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', path.join(out, `${name}.mp4`)], { stdio: ['pipe', 'inherit', 'inherit'] });
+    '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-shortest', ...encode(FPS), path.join(out, `${name}.mp4`)], { stdio: ['pipe', 'inherit', 'inherit'] });
   let n = 0, clock = shot.clock;
   for (const s of shot.script) {
     await apply(s);
@@ -71,6 +77,21 @@ async function record(name, shot) {
   console.log(`${name}: ${n} frames, ${W}x${H}, ${(n / FPS).toFixed(1)} s`);
 }
 
+// montage: { "name": "demo", "shots": [...], "fade": 1 } → <name>.mp4, the shots in order with crossfades
+async function join({ name, shots: list, fade = 1 }) {
+  const lens = list.map(n => { const s = { ...defaults, ...shots[n] }; return s.script.reduce((t, x) => t + x.sec, 0); });
+  let v = '[0:v]', t = 0, f = '';
+  for (let i = 1; i < list.length; i++) {
+    t += lens[i - 1] - fade;
+    f += `${v}[${i}:v]xfade=transition=fade:duration=${fade}:offset=${t.toFixed(3)}[v${i}];`;
+    v = `[v${i}]`;
+  }
+  const fps = defaults.fps || 30;
+  await run([...list.flatMap(n => ['-i', path.join(out, `${n}.mp4`)]), '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+    '-filter_complex', f + `${v}fps=${fps}[v]`, '-map', '[v]', '-map', `${list.length}:a`, '-shortest', ...encode(fps), path.join(out, `${name}.mp4`)]);
+  console.log(`${name}: ${list.length} shots, ${(lens.reduce((a, b) => a + b, 0) - fade * (list.length - 1)).toFixed(1)} s`);
+}
+
 app.on('window-all-closed', () => {});   // one window per shot: closing it must not quit
 app.whenReady().then(async () => {
   fs.mkdirSync(out, { recursive: true });
@@ -78,5 +99,6 @@ app.whenReady().then(async () => {
     if (only.length && !only.includes(name)) continue;
     try { await record(name, { ...defaults, ...shot }); } catch (e) { console.error(name, e); }
   }
+  if (montage && !only.length) await join(montage).catch(e => console.error('montage', e));
   app.exit(0);
 });
