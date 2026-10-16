@@ -1,6 +1,6 @@
 // 一鍵安裝 Claude hook (2026-10-15): merges the bridge's hooks into ~/.claude/settings.json, so a downloaded
 // build works without hand-editing JSON. Only adds what is missing (one entry per event), keeps everything
-// else, and backs the old file up once (settings.json.vibing-backup). Never removes anything.
+// else, and backs the old file up once (settings.json.vibing-backup). uninstall() takes ours back out.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -44,4 +44,23 @@ function install() {
   return { ok: true, msg: '已安裝，重開 Claude Code' };
 }
 
-module.exports = { status, install, FILE };
+// 解除安裝 (2026-10-16): takes out only the hook groups that call our URL; other hooks and settings stay.
+// An event left with no groups is dropped, and so is an empty "hooks" object.
+function uninstall() {
+  if (!fs.existsSync(FILE)) return { ok: true, msg: '沒有安裝' };
+  let s; try { s = read(); } catch { return { ok: false, msg: 'settings.json 格式有誤' }; }
+  if (!s.hooks || typeof s.hooks !== 'object') return { ok: true, msg: '沒有安裝' };
+  let removed = 0;
+  for (const e of Object.keys(s.hooks)) {
+    if (!Array.isArray(s.hooks[e])) continue;
+    const keep = s.hooks[e].filter(g => !ours([g]));
+    removed += s.hooks[e].length - keep.length;
+    if (keep.length) s.hooks[e] = keep; else delete s.hooks[e];
+  }
+  if (!Object.keys(s.hooks).length) delete s.hooks;
+  if (!removed) return { ok: true, msg: '沒有安裝' };
+  try { fs.writeFileSync(FILE, JSON.stringify(s, null, 2) + '\n'); } catch { return { ok: false, msg: '寫入失敗' }; }
+  return { ok: true, msg: '已移除' };
+}
+
+module.exports = { status, install, uninstall, FILE };

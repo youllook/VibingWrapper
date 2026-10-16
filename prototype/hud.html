@@ -139,6 +139,7 @@ const SETTINGS = IS_APP ? [
   { label: 'Claude 連動', value: () => hooksMsg || HOOKS_LABEL[hooks] || '', run: () => window.petAPI.installHooks().then(r => { hooksMsg = r.msg; refreshHooks(); }) },
   { sep: true },
   { label: '重新啟動', run: () => window.petAPI.restart() },
+  { label: '解除安裝', run: () => { setMenu(false); window.petAPI.uninstall(); } },   // main shows the confirmation
 ] : [{ label: '重新整理', run: () => location.reload() }];
 
 const settingsEl = document.getElementById('settings'), menuEl = document.getElementById('menu');

@@ -9,6 +9,7 @@ const wallpaper = require('./tools/wallpaper');       // weather wallpaper behin
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
 const bossKey = require('./tools/boss-key');           // 老闆鍵: user-defined hotkey hides every 星圖 window (boss key)
 const claudeHooks = require('./tools/claude-hooks');   // 一鍵安裝 Claude hook → ~/.claude/settings.json
+const uninstall = require('./tools/uninstall');         // 解除安裝: hooks out, settings + program files deleted after exit
 
 if (!app.requestSingleInstanceLock()) app.quit();
 // 2026-10-01: render on the high-performance GPU (RTX 2060 SUPER). Chromium picked the Intel UHD 630 that
@@ -115,6 +116,8 @@ ipcMain.handle('pet:set-boss-key', (_e, acc) => {
 ipcMain.handle('pet:hooks-status', () => claudeHooks.status());
 ipcMain.handle('pet:install-hooks', () => { const r = claudeHooks.install(); buildTrayMenu(); return r; });
 ipcMain.on('pet:restart', () => { app.relaunch(); app.exit(0); });
+const runUninstall = () => uninstall.run({ claudeHooks, desktopIcons, loginItemArgs });
+ipcMain.on('pet:uninstall', runUninstall);
 
 // 32×32 tray icon drawn in code (an ice-blue diamond), so no image file is needed.
 function makeTrayIcon() {
@@ -171,6 +174,7 @@ function buildTrayMenu() {
     { label: '重新載入', click: () => win.reload() },
     { type: 'separator' },
     { label: '重新啟動', click: () => { app.relaunch(); app.exit(0); } },
+    { label: '解除安裝…', click: runUninstall },
     { label: '結束', click: () => app.quit() },
   ]));
 }
