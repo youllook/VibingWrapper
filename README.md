@@ -92,12 +92,14 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 
 ### 免安裝版
 
-1. 到 [Releases](https://github.com/youllook/VibingWrapper/releases/latest) 下載 `VibingWrapper-x.y.z-win-x64.zip`，解壓到任何資料夾。
+1. 到 [Releases](https://github.com/youllook/VibingWrapper/releases/latest) 下載 `VibingWrapper-x.y.z-win-x64.zip`，解壓到任何地方（會解出一個 `VibingWrapper-x.y.z` 資料夾）。
 2. 執行 `VibingWrapper.exe`。程式沒有簽章，Windows 跳出「Windows 已保護您的電腦」的話，按「其他資訊」→「仍要執行」。
 3. 點右上角齒輪 →「Claude 連動」→ 點一下，自動把 hook 加進 `~/.claude/settings.json`（原檔會先備份成 `settings.json.vibing-backup`，已有的設定都會保留）。
 4. 重開 Claude Code，開始工作，天空就會跟著變。
 
-不需要 Node.js，七種桌布（含 Godot 做的平交道）都包在裡面。
+不需要 Node.js，七種桌布（含 Godot 做的平交道）都包在裡面。只想試看看桌布、不用 Claude Code 的話，可以下載 `-lite` 精簡版（天氣、天氣＋海、海月三種）。
+
+**解除安裝**：齒輪 →「解除安裝」，或 Windows 設定 →「已安裝的應用程式」→ VibingWrapper → 解除安裝（第一次執行後就會出現在那裡）。會移除 Claude Code 裡我們的 hook（其他設定不動）、關掉開機自動啟動，程式關閉後刪掉 `%APPDATA%ibing-wrapper` 和程式檔案。
 
 ### 從原始碼執行
 
@@ -112,7 +114,7 @@ npm start
 
 `npm run shortcut` 會在桌面建立捷徑。系統匣選單可以設定開機自動啟動。
 
-**自己打包**：`npm run dist` 用 electron-builder 打包成 `dist/VibingWrapper-x.y.z-win-x64.zip`（就是 Releases 上那個檔案）。平交道的 Godot 匯出檔不在 git 裡，要先照 [themes/crossing/README.md](themes/crossing/README.md) 匯出，不然打包出來會少這一種。
+**自己打包**：`npm run dist` 用 electron-builder 打包成 `dist/VibingWrapper-x.y.z-win-x64.zip`（就是 Releases 上那個檔案，裡面一層 `VibingWrapper-x.y.z/` 資料夾；`npm run dist:lite` 是精簡版）。平交道的 Godot 匯出檔不在 git 裡，要先照 [themes/crossing/README.md](themes/crossing/README.md) 匯出，不然打包出來會少這一種。
 
 ## 接上 Claude Code
 

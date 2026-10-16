@@ -93,12 +93,14 @@ The UI is in Traditional Chinese.
 
 ### Quick try (no install)
 
-1. Download `VibingWrapper-x.y.z-win-x64.zip` from [Releases](https://github.com/youllook/VibingWrapper/releases/latest) and unzip it anywhere.
+1. Download `VibingWrapper-x.y.z-win-x64.zip` from [Releases](https://github.com/youllook/VibingWrapper/releases/latest) and unzip it anywhere (it unpacks into a `VibingWrapper-x.y.z` folder).
 2. Run `VibingWrapper.exe`. The build is unsigned: if Windows SmartScreen says "Windows protected your PC", click "More info" → "Run anyway".
 3. Click the gear (top right) → "Claude 連動" to add the hooks to `~/.claude/settings.json` (your file is backed up once as `settings.json.vibing-backup`; existing settings are kept).
 4. Restart Claude Code and start working: the sky follows along.
 
-No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled.
+No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled. To just try the wallpapers without Claude Code, take the `-lite` zip (weather, weather + sea, 海月).
+
+**Uninstall**: gear → "解除安裝", or Windows Settings → Installed apps → VibingWrapper → Uninstall (it is listed there after the first run). It removes our hooks from Claude Code (other settings stay), turns off start-with-Windows, and after the app closes deletes `%APPDATA%ibing-wrapper` and the program files.
 
 ### Run from source
 
@@ -113,7 +115,7 @@ npm start
 
 `npm run shortcut` creates a desktop shortcut. "Start with Windows" (開機自動啟動) is in the tray menu.
 
-**Build it yourself**: `npm run dist` packages `dist/VibingWrapper-x.y.z-win-x64.zip` with electron-builder (the same file as on Releases). The level crossing's Godot export is not in git; export it first as described in [themes/crossing/README.md](themes/crossing/README.md), or the build ships without it.
+**Build it yourself**: `npm run dist` packages `dist/VibingWrapper-x.y.z-win-x64.zip` with electron-builder (the same file as on Releases, everything inside a `VibingWrapper-x.y.z/` folder; `npm run dist:lite` builds the lite zip). The level crossing's Godot export is not in git; export it first as described in [themes/crossing/README.md](themes/crossing/README.md), or the build ships without it.
 
 ## Connect Claude Code
 
