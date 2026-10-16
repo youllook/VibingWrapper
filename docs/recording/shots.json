@@ -1,0 +1,53 @@
+{
+  "defaults": { "size": [1080, 1920], "fps": 30, "preroll": 6 },
+  "shots": {
+    "sea-storm-to-star": {
+      "note": "the hook: open mid-storm, the sky clears, one boat blinks — Claude is waiting for you",
+      "theme": "sea", "clock": 15.6,
+      "script": [
+        { "state": "storm",    "sec": 4.5, "sessions": ["storm", "storm", "storm"] },
+        { "state": "clearing", "sec": 3.5, "sessions": ["clear", "clear", "clear"] },
+        { "state": "waiting",  "sec": 5,   "sessions": ["clear", "waiting", "clear"] }
+      ]
+    },
+    "sea-fleet-night": {
+      "note": "five sessions at once on the night sea: busy boats under way, then two of them waiting",
+      "theme": "sea", "clock": 22,
+      "script": [
+        { "state": "storm",   "sec": 6, "sessions": ["storm", "overcast", "storm", "waiting", "clear"] },
+        { "state": "waiting", "sec": 6, "sessions": ["clear", "waiting", "clear", "waiting", "clear"] }
+      ]
+    },
+    "sea-sunset-timelapse": {
+      "note": "one calm afternoon into night in 12 s (clockTo moves the clock across the step)",
+      "theme": "sea", "clock": 16.5,
+      "script": [
+        { "state": "clear", "sec": 12, "sessions": ["clear", "clear", "clear"], "clockTo": 20.5 }
+      ]
+    },
+    "jellyfish-day": {
+      "theme": "jellyfish", "clock": 11, "preroll": 8,
+      "script": [
+        { "state": "overcast", "sec": 4, "sessions": ["overcast", "overcast"] },
+        { "state": "clearing", "sec": 4, "sessions": ["clear", "clear"] },
+        { "state": "waiting",  "sec": 5, "sessions": ["clear", "waiting"] }
+      ]
+    },
+    "jellyfish-night": {
+      "note": "sea fireflies: the storm stirs up light",
+      "theme": "jellyfish", "clock": 22, "preroll": 8,
+      "script": [
+        { "state": "storm",    "sec": 5, "sessions": ["storm", "storm", "storm"] },
+        { "state": "clearing", "sec": 6, "sessions": ["clear", "clear", "clear"] }
+      ]
+    },
+    "snowpeak-dawn": {
+      "theme": "snowpeak", "clock": 6.2, "preroll": 8,
+      "script": [
+        { "state": "storm",    "sec": 4, "sessions": ["storm", "storm"] },
+        { "state": "clearing", "sec": 4, "sessions": ["clear", "clear"] },
+        { "state": "waiting",  "sec": 4, "sessions": ["clear", "waiting"] }
+      ]
+    }
+  }
+}
