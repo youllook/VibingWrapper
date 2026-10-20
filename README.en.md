@@ -149,7 +149,7 @@ Received events are logged by name and the first 8 characters of the session ID 
 | `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `%APPDATA%\vibing-wrapper\state.json`; also serves the `themes/` pages and the theme list |
 | `tools/claude-hooks.js` | Gear menu "Claude 連動": adds the hooks to `~/.claude/settings.json` |
 | `tools/wallpaper.js`, `attach-wallpaper.ps1` | Parents the wallpaper window behind the desktop icons (WorkerW) |
-| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `crossing` (`network` disabled) |
+| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `crossing` |
 | `godot/crossing/` | Godot 4 source for the level crossing (the scene is built in code; `shell.html` is the web shell) |
 | `themes/demo.html` | Tuning page: pick a theme, switch states, scrub the clock through day and night |
 | `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, region screenshot |
