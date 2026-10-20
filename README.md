@@ -53,7 +53,7 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 </tr>
 <tr>
 <td><img src="docs/screenshots/paddy-day.jpg" alt="稻田"><br>稻田・大太陽</td>
-<td><img src="docs/screenshots/meadow-real-dusk.jpg" alt="寫實草原：黃昏"><br>寫實草原・黃昏</td>
+<td></td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/weather-storm.jpg" alt="天氣：雷雨與閃電"><br>天氣・執行中（雷雨）</td>
@@ -148,7 +148,7 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 | `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `%APPDATA%\vibing-wrapper\state.json`；也負責提供 `themes/` 頁面與主題清單 |
 | `tools/claude-hooks.js` | 齒輪「Claude 連動」：把 hook 補進 `~/.claude/settings.json` |
 | `tools/wallpaper.js`、`attach-wallpaper.ps1` | 把桌布視窗掛到桌面圖示底下（WorkerW） |
-| `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`、`snowpeak`、`paddy`、`meadow-real`、`crossing`（`network` 停用） |
+| `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`、`snowpeak`、`paddy`、`crossing`（`network` 停用） |
 | `godot/crossing/` | 平交道的 Godot 4 原始碼（場景全用程式生成，`shell.html` 是網頁外殼） |
 | `themes/demo.html` | 調參數用的預覽頁：選主題、切狀態、拉時間軸看日夜 |
 | `tools/desktop-icons.*`、`boss-key.js`、`capture.*` | 收桌面、老闆鍵、截圖 |
@@ -156,7 +156,7 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 ## 致謝
 
 - 雲的畫法參考 [power418/skygl](https://github.com/power418/skygl)（MIT），壓縮成單一 2D pass。
-- 稻田和寫實草原的草葉做法移植自 SimonDev 的 [Quick_Grass](https://github.com/simondevyoutube/Quick_Grass)（MIT），源自 Ghost of Tsushima 的 GDC 2021 演講。
+- 稻田的草葉做法移植自 SimonDev 的 [Quick_Grass](https://github.com/simondevyoutube/Quick_Grass)（MIT），源自 Ghost of Tsushima 的 GDC 2021 演講。
 - 平交道用 [Godot 4](https://godotengine.org/) 製作。
 - 立體海、船隊和雪山雲海的起頭由 Claude（Fable）設計實作；AI 狀態圖示、logo 和平交道的貼圖由 Codex 繪製。
 - 整個專案用 Claude Code 寫成。

@@ -52,7 +52,7 @@ Gear menu → 桌布 (wallpaper) cycles through them. Each one acts out the same
 </tr>
 <tr>
 <td><img src="docs/screenshots/paddy-day.jpg" alt="Paddy"><br>Paddy · full sun</td>
-<td><img src="docs/screenshots/meadow-real-dusk.jpg" alt="Meadow: dusk"><br>Meadow · dusk</td>
+<td></td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/weather-storm.jpg" alt="Weather: thunderstorm with lightning"><br>Weather · working (thunderstorm)</td>
@@ -149,7 +149,7 @@ Received events are logged by name and the first 8 characters of the session ID 
 | `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `%APPDATA%\vibing-wrapper\state.json`; also serves the `themes/` pages and the theme list |
 | `tools/claude-hooks.js` | Gear menu "Claude 連動": adds the hooks to `~/.claude/settings.json` |
 | `tools/wallpaper.js`, `attach-wallpaper.ps1` | Parents the wallpaper window behind the desktop icons (WorkerW) |
-| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `meadow-real`, `crossing` (`network` disabled) |
+| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `crossing` (`network` disabled) |
 | `godot/crossing/` | Godot 4 source for the level crossing (the scene is built in code; `shell.html` is the web shell) |
 | `themes/demo.html` | Tuning page: pick a theme, switch states, scrub the clock through day and night |
 | `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, region screenshot |
@@ -157,7 +157,7 @@ Received events are logged by name and the first 8 characters of the session ID 
 ## Credits
 
 - Cloud rendering after [power418/skygl](https://github.com/power418/skygl) (MIT), squeezed into a single 2D pass.
-- The grass in the paddy and meadow is ported from SimonDev's [Quick_Grass](https://github.com/simondevyoutube/Quick_Grass) (MIT), itself based on Ghost of Tsushima's GDC 2021 talk.
+- The grass in the paddy is ported from SimonDev's [Quick_Grass](https://github.com/simondevyoutube/Quick_Grass) (MIT), itself based on Ghost of Tsushima's GDC 2021 talk.
 - The level crossing is built with [Godot 4](https://godotengine.org/).
 - The 3D ocean, the fleet and the first pass of the snow peaks were designed and built by Claude (Fable); the AI state icons, the logo and the level-crossing textures were painted by Codex.
 - The whole project was written with Claude Code.
