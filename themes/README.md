@@ -41,7 +41,7 @@
 4. **效能**：30 fps 上限、半解析度渲染，GPU 每格最好在 12 ms 以內。
    例外（2026-10-13）：雪山雲海（`snowpeak`）的地形、帳篷、天空是全解析度＋FXAA，只有雲海算半解析度再依深度放大接回（半解析度放大後雲和稜線會有明顯鋸齒）；整體仍在預算內。
 5. **測試介面（選配）**：把 `requestState`、`applyState`、`STATES`、`PARAMS`、`CONFIG`（含 `clockHours`、`polling`）掛在 `window` 上
-   （現有主題用 `window.weather` / `window.ocean` / `window.network`，新主題可以用 `window.theme`），
+   （現有主題用 `window.weather` / `window.ocean`，新主題可以用 `window.theme`），
    [demo.html](demo.html) 就能切狀態、調參數、拉時間軸。
 
 ## 新增一個主題

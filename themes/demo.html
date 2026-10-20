@@ -81,8 +81,8 @@ const LABEL = { cloudDensity: '雲量', cloudDarkness: '雲色深淺', rainAmoun
   seaChop: '海面粗糙', beacon: '等你星', waveHeight: '浪高', choppiness: '浪尖銳度', windSpeed: '風速', foam: '白浪', cloudCover: '雲量', sunGlitter: '陽光碎光' };
 const STATE_NAMES = { clear: '晴', overcast: '陰', storm: '雷雨', clearing: '轉晴', waiting: '等你',
   idle: '閒置', working: '思考', busy: '執行', output: '收尾', error: '錯誤' };
-// 4 styles (2026-09-30): weather / weather + sea / ocean (Fable) / 星網 (Fable). Each page exposes its own
-// test API (window.weather / ocean / network); sections a page lacks (clock, rain mood, lightning) are hidden.
+// styles: weather / weather + sea / ocean (Fable) and the later ones. Each page exposes its own
+// test API (window.weather / ocean / theme); sections a page lacks (clock, rain mood, lightning) are hidden.
 let W = null;   // the wallpaper page's test API
 let gen = 0;    // bumps on every page switch so the old tick loop stops
 // themes come from the bridge (themes/*/theme.json, enabled ones, in order); ?style=<theme id> preselects one
@@ -123,7 +123,7 @@ function renderTargets() {
 
 function init() {
   const cw = view.contentWindow;
-  W = cw.weather || cw.ocean || cw.network || cw.theme;
+  W = cw.weather || cw.ocean || cw.theme;
   if (!W) return setTimeout(init, 100);
   const my = ++gen;
   for (const id of ['states', 'live', 'editState', 'targets', 'override']) $(id).innerHTML = '';

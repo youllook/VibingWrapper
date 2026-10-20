@@ -148,7 +148,7 @@ VibingWrapper 沒開的時候，curl 1 秒逾時就安靜放棄，不會拖慢 C
 | `tools/claude-bridge.js` | 收 hook 事件 → 每個 session 的狀態 → 合成天氣 → `%APPDATA%\vibing-wrapper\state.json`；也負責提供 `themes/` 頁面與主題清單 |
 | `tools/claude-hooks.js` | 齒輪「Claude 連動」：把 hook 補進 `~/.claude/settings.json` |
 | `tools/wallpaper.js`、`attach-wallpaper.ps1` | 把桌布視窗掛到桌面圖示底下（WorkerW） |
-| `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`、`snowpeak`、`paddy`、`crossing`（`network` 停用） |
+| `themes/<id>/` | 每種桌布一個資料夾：`theme.json`、`index.html`（單一 WebGL shader）、`README.md`；現有 `weather`、`sea`、`ocean`、`snowpeak`、`paddy`、`crossing` |
 | `godot/crossing/` | 平交道的 Godot 4 原始碼（場景全用程式生成，`shell.html` 是網頁外殼） |
 | `themes/demo.html` | 調參數用的預覽頁：選主題、切狀態、拉時間軸看日夜 |
 | `tools/desktop-icons.*`、`boss-key.js`、`capture.*` | 收桌面、老闆鍵、截圖 |
