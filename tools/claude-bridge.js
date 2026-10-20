@@ -16,36 +16,47 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.json': 'application/json'
   '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.glsl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
   '.wasm': 'application/wasm', '.pck': 'application/octet-stream' };   // Godot web exports
 
-// Claude Code event → weather. Working = storm, thinking = overcast, done = clearing → clear.
-const EVENT_WEATHER = {
-  SessionStart: 'clear',
-  UserPromptSubmit: 'overcast',
-  PreToolUse: 'storm',
-  PostToolUse: 'storm',
-  Notification: null,          // → weatherFor(): waiting, or ignored
-  Stop: 'clearing',
-  SubagentStop: null,          // a subagent finishing does not mean the main turn is done
-  SessionEnd: 'clear',
-};
+/* ---- event sources (2026-10-20, designed with Fable) ----
+   Each agent's hooks POST their raw JSON to /hook/<source> (/claude stays as the old Claude route). An adapter
+   turns that body into one normalized event, so onEvent never reads a provider's own fields:
+     { session, kind, tool?, agent?, event, ntype? }      (adapter returns null = drop unlogged)
+   kind: start | prompt | tool | wait | stop | end | interrupt | ignore (logged, no weather change)
+   A new agent (Gemini CLI …) = one more adapter; unknown sources get a 404. */
+const KIND_WEATHER = { start: 'clear', prompt: 'overcast', tool: 'storm', wait: 'waiting', stop: 'clearing', interrupt: 'clearing' };
 const CLEAR_AFTER_MS = 20000;  // clearing → clear once things stay quiet
+const str = (v, n) => typeof v === 'string' && v ? v.slice(0, n) : undefined;
+const common = j => ({ session: str(j.session_id, 200) || 'default', tool: str(j.tool_name, 60), agent: str(j.agent_id, 80), event: str(j.hook_event_name, 40) });
 
+// Claude Code event → weather. Working = storm, thinking = overcast, done = clearing → clear.
 // 等你 (2026-09-30): Claude is blocked on the user — a permission prompt, or a question (AskUserQuestion /
 // plan approval). The wallpaper dims and one star pulses until the user answers.
 const WAIT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const WAIT_NOTIFY = new Set(['permission_prompt', 'elicitation_dialog']);
 // Background probes, not work (2026-10-15): idle Claude desktop sessions poll the Chrome extension every
-// ~20 s. Counting them kept those sessions storming forever and filled all 5 slots; onEvent drops them unlogged.
+// ~20 s. Counting them kept those sessions storming forever and filled all 5 slots; they are dropped unlogged.
 const PROBE_TOOLS = new Set(['mcp__claude-in-chrome__list_connected_browsers']);
-function weatherFor(j) {
-  const name = j.hook_event_name;
-  if (name === 'PreToolUse' && WAIT_TOOLS.has(j.tool_name)) return 'waiting';
-  if (name === 'Notification') {
+const CLAUDE_KIND = { SessionStart: 'start', UserPromptSubmit: 'prompt', PreToolUse: 'tool', PostToolUse: 'tool', Stop: 'stop', SessionEnd: 'end' };
+function claudeAdapter(j) {
+  if (PROBE_TOOLS.has(j.tool_name)) return null;
+  const e = { ...common(j), ntype: str(j.notification_type, 40) }, name = j.hook_event_name;
+  if (name === 'PreToolUse' && WAIT_TOOLS.has(j.tool_name)) e.kind = 'wait';
+  else if (name === 'Notification') {
     // idle_prompt = the "still there?" nudge a minute after a finished turn: not a question → ignore
-    if (typeof j.notification_type === 'string') return WAIT_NOTIFY.has(j.notification_type) ? 'waiting' : null;
-    return /waiting for your input/i.test(String(j.message || '')) ? null : 'waiting';   // older Claude Code: no type
-  }
-  return EVENT_WEATHER[name] || null;
+    if (e.ntype) e.kind = WAIT_NOTIFY.has(e.ntype) ? 'wait' : 'ignore';
+    else e.kind = /waiting for your input/i.test(String(j.message || '')) ? 'ignore' : 'wait';   // older Claude Code: no type
+  } else e.kind = CLAUDE_KIND[name] || 'ignore';   // e.g. SubagentStop: a subagent finishing does not end the turn
+  return e;
 }
+
+// OpenAI Codex CLI (hooks.json, 0.163): same field names as Claude, plus turn_id. No Notification event;
+// PermissionRequest is the "waiting for the user's approval" moment. PostToolUse is wired so an approved
+// call turns the star back into storm right away. Compact / SubagentStart change nothing.
+const CODEX_KIND = { SessionStart: 'start', UserPromptSubmit: 'prompt', PreToolUse: 'tool', PostToolUse: 'tool',
+  PermissionRequest: 'wait', Stop: 'stop', SessionEnd: 'end', Interrupt: 'interrupt' };
+const codexAdapter = j => ({ ...common(j), kind: CODEX_KIND[j.hook_event_name] || 'ignore' });
+
+const ADAPTERS = { claude: claudeAdapter, codex: codexAdapter };
+const SOURCE_TAG = { claude: 'cc', codex: 'cx' };   // short prefix for the log
 
 /* ---- event log (2026-09-30), for observing how the weather behaves over a real session ----
    JSON lines: {t, event, tool, session, weather (this session), sky (combined), changed (sky changed)}. Only names and ids — never prompt text,
@@ -74,7 +85,7 @@ function log(entry) {
 const MAX_SESSIONS = 5;
 const PRIORITY = ['clear', 'clearing', 'overcast', 'storm', 'waiting'];
 const QUIET_MS = 30 * 60000, QUIET_WAIT_MS = 2 * 3600000;
-const sessions = new Map();                              // id → { state, last, slot, clearT }
+const sessions = new Map();                              // 'source:session_id' → { state, last, slot, clearT, source }
 
 function skyState() {
   let best = 'clear';
@@ -82,7 +93,8 @@ function skyState() {
   return best;
 }
 function slotStates() { const a = Array(MAX_SESSIONS).fill(null); for (const x of sessions.values()) a[x.slot] = x.state; return a; }
-function addSession(id) {
+function slotSources() { const a = Array(MAX_SESSIONS).fill(null); for (const x of sessions.values()) a[x.slot] = x.source; return a; }
+function addSession(id, source) {
   if (sessions.size >= MAX_SESSIONS) {                   // full: drop the one quiet the longest (a waiting one last)
     let out = null;
     for (const [k, x] of sessions) {
@@ -93,7 +105,7 @@ function addSession(id) {
   }
   const used = new Set([...sessions.values()].map(x => x.slot));
   let slot = 0; while (used.has(slot)) slot++;
-  const x = { state: 'clear', last: Date.now(), slot, clearT: null };
+  const x = { state: 'clear', last: Date.now(), slot, clearT: null, source };
   sessions.set(id, x);
   return x;
 }
@@ -103,7 +115,9 @@ let lastWritten = null, lastSlots = '';
 const listeners = [];                                    // (state) => void, e.g. the pet's AI category
 // write the combined sky (+ per-slot states) when anything changed; returns true if the SKY changed
 function publish() {
-  const state = skyState(), sl = slotStates(), key = JSON.stringify(sl);
+  // "sources" (2026-10-20) runs parallel to "sessions": which agent each slot belongs to, for themes that
+  // want to draw them apart. "sessions" keeps its shape so existing themes are untouched.
+  const state = skyState(), sl = slotStates(), src = slotSources(), key = JSON.stringify([sl, src]);
   const changed = state !== lastWritten;
   if (!changed && key === lastSlots) return false;
   lastWritten = state; lastSlots = key;
@@ -111,33 +125,26 @@ function publish() {
   // synchronous on purpose: two sessions can publish within the same millisecond, and two async
   // writes to the same .tmp interleave into broken JSON. The file is ~80 bytes.
   const tmp = STATE_FILE + '.tmp';
-  try { fs.writeFileSync(tmp, JSON.stringify({ state, sessions: sl }) + '\n'); fs.renameSync(tmp, STATE_FILE); }
+  try { fs.writeFileSync(tmp, JSON.stringify({ state, sessions: sl, sources: src }) + '\n'); fs.renameSync(tmp, STATE_FILE); }
   catch (e) { console.error('[claude-bridge]', e.message); }
   return changed;
 }
-function onEvent(j) {
-  if (PROBE_TOOLS.has(j.tool_name)) return;
-  const name = j.hook_event_name;
-  const id = typeof j.session_id === 'string' && j.session_id ? j.session_id : 'default';
-  const base = {
-    event: name,
-    tool: typeof j.tool_name === 'string' ? j.tool_name.slice(0, 60) : undefined,
-    ntype: typeof j.notification_type === 'string' ? j.notification_type.slice(0, 40) : undefined,
-    session: id.slice(0, 8),
-  };
-  if (name === 'SessionEnd') { dropSession(id); log({ ...base, weather: null, sky: skyState(), changed: publish() }); return; }
+function onEvent(source, e) {
+  const id = source + ':' + e.session;
+  const base = { event: e.event, src: SOURCE_TAG[source], tool: e.tool, ntype: e.ntype, session: e.session.slice(0, 8) };
+  if (e.kind === 'end') { dropSession(id); log({ ...base, weather: null, sky: skyState(), changed: publish() }); return; }
   let x = sessions.get(id);
-  let w = weatherFor(j);
+  let w = KIND_WEATHER[e.kind] || null;
   // while a session waits, its background subagents' tool calls must not wipe the star
-  if (x && x.state === 'waiting' && j.agent_id) w = null;
+  if (x && x.state === 'waiting' && e.agent) w = null;
   if (!w) { log({ ...base, weather: null, changed: false }); return; }   // e.g. SubagentStop: seen, ignored
-  x = x || addSession(id);
+  x = x || addSession(id, source);
   x.last = Date.now();
   clearTimeout(x.clearT);
   x.state = w;
   if (w === 'clearing') x.clearT = setTimeout(() => {
     x.state = 'clear';
-    log({ event: 'timer', session: id.slice(0, 8), weather: 'clear', sky: skyState(), changed: publish() });
+    log({ event: 'timer', src: SOURCE_TAG[source], session: e.session.slice(0, 8), weather: 'clear', sky: skyState(), changed: publish() });
   }, CLEAR_AFTER_MS);
   log({ ...base, weather: w, sky: skyState(), changed: publish() });
 }
@@ -188,17 +195,28 @@ function start(opts = {}) {
   try {
     const st = fs.statSync(STATE_FILE);
     const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).state;
-    if (Date.now() - st.mtimeMs < 120000 && typeof s === 'string') lastWritten = s; else publish();
+    const age = Date.now() - st.mtimeMs;
+    if (age < 120000 && typeof s === 'string') {
+      lastWritten = s;
+      // the session map itself is not restored: if no event re-creates it by the 2-min mark, fall back to
+      // clear — otherwise a restart mid-turn kept the old sky forever (seen on the Mac test, 2026-10-20)
+      setTimeout(() => { if (!sessions.size) publish(); }, 120000 - age).unref();
+    } else publish();
   } catch { publish(); }
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url.startsWith('/themes/')) return serveThemes(req, res);
-    if (req.method !== 'POST' || req.url !== '/claude') { res.writeHead(404).end(); return; }
+    // POST /hook/<source> (/claude = the original Claude route, kept for hooks installed before 2026-10-20)
+    const m = req.method === 'POST' && (req.url === '/claude' ? ['', 'claude'] : /^\/hook\/([a-z]+)$/.exec(req.url));
+    const adapter = m && Object.hasOwn(ADAPTERS, m[1]) && ADAPTERS[m[1]];
+    if (!adapter) { res.writeHead(404).end(); return; }
     let body = '';
     req.on('data', c => { body += c; if (body.length > 64 * 1024) req.destroy(); });
     req.on('end', () => {
       res.writeHead(204).end();
       let j; try { j = JSON.parse(body); } catch { return; }
-      if (j && typeof j.hook_event_name === 'string') onEvent(j);
+      if (!j || typeof j.hook_event_name !== 'string') return;
+      const e = adapter(j);
+      if (e) onEvent(m[1], e);
     });
   });
   server.on('error', e => console.error('[claude-bridge]', e.message));   // e.g. port taken
@@ -208,4 +226,5 @@ function start(opts = {}) {
 
 const current = () => lastWritten || 'clear';
 const sessionStates = () => slotStates();
-module.exports = { start, current, sessionStates, MAX_SESSIONS, PORT, themes, themeUrl };
+const sessionSources = () => slotSources();
+module.exports = { start, current, sessionStates, sessionSources, MAX_SESSIONS, PORT, themes, themeUrl };
