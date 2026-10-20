@@ -1,6 +1,6 @@
 // 解除安裝 (2026-10-16): gear menu / tray / Windows 設定 →「已安裝的應用程式」. The build is a portable zip, so
 // "uninstall" means:
-//   1. take our hooks out of ~/.claude/settings.json (claude-hooks.uninstall, everything else stays)
+//   1. take our hooks out of ~/.claude/settings.json and ~/.codex/hooks.json (agent-hooks uninstall, everything else stays)
 //   2. turn off 開機自動啟動, bring the desktop icons back if 收桌面 hid them, drop our 已安裝的應用程式 entry
 //   3. after we exit, a PowerShell waits for this process to end, then deletes %APPDATA%\vibing-wrapper and the
 //      program files. It is started through WMI (Win32_Process.Create), so it is not our child: a plain detached
@@ -96,14 +96,14 @@ function unregister() {
   try { execFileSync('reg', ['delete', REG_KEY, '/f'], { windowsHide: true, stdio: 'ignore' }); } catch {}
 }
 
-// deps: { claudeHooks, desktopIcons, loginItemArgs } from main.js. Resolves false when the user cancels or it stops.
-async function run({ claudeHooks, desktopIcons, loginItemArgs }) {
+// deps: { claudeHooks, codexHooks, desktopIcons, loginItemArgs } from main.js. Resolves false when the user cancels or it stops.
+async function run({ claudeHooks, codexHooks, desktopIcons, loginItemArgs }) {
   const dir = programDir(), dataDir = app.getPath('userData');
   log(`uninstall asked (${app.getVersion()}, ${dir || 'from source'})`);
   const { response } = await dialog.showMessageBox({
     type: 'warning', title: '解除安裝 VibingWrapper', message: '要解除安裝 VibingWrapper 嗎？',
     detail: ['會做這些事：',
-      '・從 Claude Code 設定移除 VibingWrapper 的 hook（其他設定不動）',
+      '・從 Claude Code／Codex 設定移除 VibingWrapper 的 hook（其他設定不動）',
       '・關閉開機自動啟動',
       `・刪除設定與紀錄（${dataDir}）`,
       dir ? `・刪除程式檔案（${dir}）` : '・開發模式：不刪程式檔案',
@@ -113,12 +113,14 @@ async function run({ claudeHooks, desktopIcons, loginItemArgs }) {
   log(`dialog response ${response}`);
   if (response !== 0) return false;
 
-  const hooks = claudeHooks.uninstall();
-  log(`hooks: ${hooks.msg}`);
-  if (!hooks.ok) {
-    await dialog.showMessageBox({ type: 'error', title: '解除安裝 VibingWrapper', message: '沒辦法移除 Claude hook，已停止解除安裝。',
-      detail: `${hooks.msg}：${claudeHooks.FILE}\n修好這個檔案後再試一次，或手動刪掉裡面含 127.0.0.1:47321 的 hook。`, buttons: ['好'], noLink: true });
-    return false;
+  for (const [name, h] of [['Claude', claudeHooks], ['Codex', codexHooks]]) {
+    const hooks = h.uninstall();
+    log(`${name} hooks: ${hooks.msg}`);
+    if (!hooks.ok) {
+      await dialog.showMessageBox({ type: 'error', title: '解除安裝 VibingWrapper', message: `沒辦法移除 ${name} hook，已停止解除安裝。`,
+        detail: `${hooks.msg}：${h.FILE}\n修好這個檔案後再試一次，或手動刪掉裡面含 127.0.0.1:47321 的 hook。`, buttons: ['好'], noLink: true });
+      return false;
+    }
   }
   app.setLoginItemSettings({ openAtLogin: false, ...loginItemArgs() });
   log('login item off');
