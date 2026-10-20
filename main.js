@@ -9,6 +9,9 @@ const wallpaper = require('./tools/wallpaper');       // weather wallpaper behin
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
 const bossKey = require('./tools/boss-key');           // 老闆鍵: user-defined hotkey hides every 星圖 window (boss key)
 const claudeHooks = require('./tools/claude-hooks');   // 一鍵安裝 Claude hook → ~/.claude/settings.json
+const codexHooks = require('./tools/codex-hooks');     // 一鍵安裝 Codex hook → ~/.codex/hooks.json
+const AGENT_HOOKS = { claude: claudeHooks, codex: codexHooks };
+const agentHooks = a => AGENT_HOOKS[a] || claudeHooks;
 const uninstall = require('./tools/uninstall');         // 解除安裝: hooks out, settings + program files deleted after exit
 
 // a second copy only hands its arguments to the first (second-instance below) and leaves; it must not run
@@ -116,10 +119,10 @@ ipcMain.handle('pet:set-boss-key', (_e, acc) => {
   if (r.ok) { settings.bossKey = r.key; saveSettings(); }
   return r;
 });
-ipcMain.handle('pet:hooks-status', () => claudeHooks.status());
-ipcMain.handle('pet:install-hooks', () => { const r = claudeHooks.install(); buildTrayMenu(); return r; });
+ipcMain.handle('pet:hooks-status', (_e, agent) => agentHooks(agent).status());
+ipcMain.handle('pet:install-hooks', (_e, agent) => { const r = agentHooks(agent).install(); buildTrayMenu(); return r; });
 ipcMain.on('pet:restart', () => { app.relaunch(); app.exit(0); });
-const runUninstall = () => uninstall.run({ claudeHooks, desktopIcons, loginItemArgs });
+const runUninstall = () => uninstall.run({ claudeHooks, codexHooks, desktopIcons, loginItemArgs });
 ipcMain.on('pet:uninstall', runUninstall);
 
 // 32×32 tray icon drawn in code (an ice-blue diamond), so no image file is needed.
@@ -172,6 +175,7 @@ function buildTrayMenu() {
       click: item => { app.setLoginItemSettings({ openAtLogin: item.checked, ...loginItemArgs() }); buildTrayMenu(); },
     },
     { label: claudeHooks.status() === 'on' ? 'Claude hook 已安裝' : '安裝 Claude hook', enabled: claudeHooks.status() !== 'on', click: () => { claudeHooks.install(); buildTrayMenu(); } },
+    ...(codexHooks.status() === 'none' ? [] : [{ label: codexHooks.status() === 'on' ? 'Codex hook 已安裝' : '安裝 Codex hook', enabled: codexHooks.status() !== 'on', click: () => { codexHooks.install(); buildTrayMenu(); } }]),
     { type: 'separator' },
     { label: '開發者工具', click: () => win.webContents.openDevTools({ mode: 'detach' }) },
     { label: '重新載入', click: () => win.reload() },
