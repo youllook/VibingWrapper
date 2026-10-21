@@ -64,7 +64,7 @@ async function list(installedThemes, fresh) {
     if (p) status = p.version === t.version ? 'installed' : 'update';
     else if (h && h.builtin && h.bundled !== false) status = 'builtin';
     return { id: t.id, name: String(t.name || t.id), description: String(t.description || ''), size: Number(t.size) || 0, status,
-      order: Number(t.order) || 99, job: busy.get(t.id) || null };
+      order: (Number.isFinite(+t.order) ? +t.order : 99), job: busy.get(t.id) || null };
   }).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 

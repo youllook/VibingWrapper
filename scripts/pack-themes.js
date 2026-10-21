@@ -22,8 +22,8 @@ for (const id of ids) {
   const file = `theme-${id}.zip`, zip = path.join(OUT, file);
   execFileSync(TAR, ['--options', 'zip:hdrcharset=UTF-8', '-a', '-c', '-f', zip, ...EXCLUDE.flatMap(e => ['--exclude', e]), '-C', THEMES, id]);
   const buf = fs.readFileSync(zip), sha256 = crypto.createHash('sha256').update(buf).digest('hex');
-  list.push({ id, name: t.name || id, description: t.description || '', order: Number(t.order) || 99, file, size: buf.length, sha256, version: sha256.slice(0, 12) });
-  console.log(`${file}  ${(buf.length / 1048576).toFixed(1)} MB`);
+  list.push({ id, name: t.name || id, description: t.description || '', order: (Number.isFinite(+t.order) ? +t.order : 99), file, size: buf.length, sha256, version: sha256.slice(0, 12) });
+  console.log(`${file}  ${buf.length < 1048576 ? Math.ceil(buf.length / 1024) + ' KB' : (buf.length / 1048576).toFixed(1) + ' MB'}`);
 }
 fs.writeFileSync(path.join(OUT, 'themes.json'), JSON.stringify({ format: 1, generated: new Date().toISOString(), themes: list }, null, 1));
 console.log(`\n${list.length} packs → ${OUT}\n上傳（第一次）：gh release create themes dist/themes/* --title "主題包" --notes "齒輪 → 下載主題"`);
