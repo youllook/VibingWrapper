@@ -57,7 +57,8 @@ function createWindow() {
     transparent: true,
     backgroundColor: '#00000000',
     frame: false,
-    resizable: false,
+    // no `resizable: false`: on Electron 44 / Windows it turns this transparent window into an opaque white
+    // box (2026-10-21). Frameless with no resize border, so nothing can drag its size anyway.
     movable: false,
     minimizable: false,
     maximizable: false,
