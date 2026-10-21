@@ -1,0 +1,258 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>層疊剪影霧林・Blender</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;width:100%;height:100%}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+/* 層疊剪影霧林・Blender 原型（2026-10-21）
+   Fixed-camera cheat (studio/notes/08_固定鏡頭作弊.md): the scene is baked once in Blender
+   (studio/blender/fog_forest_scene.py --split, packed by studio/blender/pack_plates.py) into plate.png
+   (the scene without its swaying foreground), depth.png (sqrt(distance/220 m)), near.png (the ferns and
+   debris, value + alpha) and masks.png (R: water surface, G: sway field). At run time only what moves or
+   follows the AI state is drawn: the foreground swaying over the background, extra fog and drifting mist
+   banks placed by real depth (they pass behind near trunks, in front of far ones), light rays and dust
+   motes from the exit, ripples inside the water, the session lamps, lightning, grain. Rain is shown by what it
+   hits, not by streaks: drop rings on the water, ferns jolted by drops, drips falling from the branches. */
+'use strict';
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl2', { antialias: false, alpha: false });
+const Q = new URLSearchParams(location.search);
+
+const STATES = {   // fogAdd: extra fog by depth · dark: overall · glow: exit halo · rain: drop rings + jolted ferns · drip: from branches · wind · mist · rays · motes
+  clear:    { fogAdd: 0.00, dark: 0.00, glow: 0.25, rain: 0, drip: 0.0, wind: 0.15, mist: 0.55, rays: 0.35, motes: 0.6 },
+  overcast: { fogAdd: 0.55, dark: 0.10, glow: 0.05, rain: 0, drip: 0.0, wind: 0.20, mist: 0.90, rays: 0.05, motes: 0.2 },
+  storm:    { fogAdd: 0.30, dark: 0.22, glow: 0.00, rain: 1, drip: 1.0, wind: 0.45, mist: 0.60, rays: 0.00, motes: 0.0 },
+  clearing: { fogAdd: -0.25, dark: -0.05, glow: 0.80, rain: 0, drip: 0.5, wind: 0.10, mist: 0.30, rays: 1.00, motes: 1.0 },
+  waiting:  { fogAdd: 0.10, dark: 0.10, glow: 0.15, rain: 0, drip: 0.0, wind: 0.10, mist: 0.65, rays: 0.15, motes: 0.4 },
+};
+const SESSION = {
+  clear:    { b: 0.85, flick: 0.05, bob: 0.4, pulse: 0 },
+  overcast: { b: 0.55, flick: 0.25, bob: 0.3, pulse: 0 },
+  storm:    { b: 1.15, flick: 0.10, bob: 2.6, pulse: 0 },
+  clearing: { b: 0.45, flick: 0.02, bob: 0.2, pulse: 0 },
+  waiting:  { b: 0.95, flick: 0.00, bob: 0.3, pulse: 1 },
+};
+const CONFIG = { polling: true, clockHours: Q.has('day') ? 10.5 : Q.has('night') ? 22 : null, fps: 30 };
+const PARAMS = { ...STATES.clear, flash: 0, night: 0 };
+let target = { ...STATES.clear }, sessions = [null, null, null, null, null];
+const LIGHTS = [  // each wire hangs from a branch or moss visible in plate.png
+  { x: 0.529, y: 0.318, anchor: 0.190 }, { x: 0.745, y: 0.440, anchor: 0.150 }, { x: 0.860, y: 0.330, anchor: 0.120 },
+  { x: 0.470, y: 0.380, anchor: 0.040 }, { x: 0.645, y: 0.370, anchor: 0.122 }];
+const lightLv = LIGHTS.map(() => ({ on: 0, b: 0, s: null }));
+
+function sh(t, src) { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+function prog(vs, fs) { const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) { const a = gl.getActiveUniform(p, i); u[a.name] = gl.getUniformLocation(p, a.name); } return { p, u }; }
+const VS_FULL = `#version 300 es
+out vec2 vUv; void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); vUv = vec2(p.x, 1.0 - p.y); gl_Position = vec4(p * 2.0 - 1.0, 0, 1); }`;
+const NOISE = `float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 3; i++){ s += a*noise(p); p = p*2.03 + 17.1; a *= 0.5; } return s; }`;
+
+const P = {
+  scene: prog(VS_FULL, `#version 300 es
+precision highp float; in vec2 vUv; out vec4 o;
+uniform sampler2D uPlate, uDepth, uMasks, uNear; uniform vec2 uAspect, uRes;
+uniform float uTime, uMistX, uFlow, uFogAdd, uDark, uGlow, uRain, uDrip, uFlash, uNight, uWind, uMist, uRays, uMotes;
+${NOISE}
+const vec2 EXIT = vec2(0.735, 0.50);
+const float HORIZON = 0.62, CAM_Z = 1.6, T2 = 0.728;          // as fog_forest_scene.py: T2 = 2·tan(fov/2)
+float distAt(vec2 uv){ float d = texture(uDepth, uv).r; return d * d * 220.0; }
+void main(){
+  vec2 uv = vUv;                                    // images upload top row first: texture t = screen y
+  float ring = 0.0;
+  if (texture(uMasks, uv).r > 0.5) {                // ripples only inside the water, and only sample water
+    float d0 = 1.0 - smoothstep(0.62, 1.0, uv.y);
+    vec2 off = vec2(fbm(vec2(uv.x * 9.0, uv.y * 60.0 - uFlow)) - 0.5, 0.0) * (0.002 + (1.0 - d0) * 0.006) * (1.0 + uRain * 1.5);
+    if (texture(uMasks, uv + off).r > 0.5) uv += off;
+    if (uRain > 0.01 && vUv.y > HORIZON + 0.003) {   // drop rings, laid out on the water plane (perspective for free)
+      float d = CAM_Z / ((vUv.y - HORIZON) * T2);
+      vec2 wp = vec2((vUv.x - 0.5) * d * T2 * uAspect.x, d);
+      for (int k = 0; k < 2; k++) {
+        vec2 g = wp / 0.9 + float(k) * 0.5, id = floor(g) + float(k) * 37.0;
+        float h = hash(id), age = fract(uTime * (0.55 + 0.5 * h) + h * 7.0);
+        vec2 dv = (fract(g) - (vec2(hash(id + 3.0), hash(id + 5.0)) * 0.5 + 0.25)) * 0.9;   // metres from the drop
+        float big = 0.15 + 0.35 * hash(id + 11.0);                                         // drops differ in size
+        float x = (length(dv) - age * big) / (0.014 + 0.02 * age);                         // the ring widens as it fades
+        ring += exp(-x * x) * (1.0 - age) * (1.0 - age) * step(hash(id + 9.0), uRain * 0.85) * smoothstep(40.0, 10.0, d);
+      }
+      vec2 o2 = vec2(0.0, ring * 0.006);
+      if (texture(uMasks, uv + o2).r > 0.5) uv += o2;   // the ring bends the reflection
+    }
+  }
+  float v = texture(uPlate, uv).r;
+  float dist = distAt(vUv);
+  vec2 e = (vUv - EXIT) * vec2(1.0, 0.75); float halo = exp(-dot(e, e) * 18.0);
+  float fogV = 0.62 + 0.18 * exp(-dot((vUv - EXIT) * vec2(1.0, 0.7), (vUv - EXIT) * vec2(1.0, 0.7)) * 12.0);
+  float f = 1.0 - exp(-dist * 0.012 * abs(uFogAdd));
+  v = uFogAdd >= 0.0 ? mix(v, fogV * (1.0 - uDark), f) : mix(v, v * v * 1.4, f * 0.6);   // thicker / clearer by real depth
+  float breathe = 0.85 + 0.3 * noise(vec2(uTime * 0.08, 3.0));
+  v += halo * 0.35 * uGlow * breathe * smoothstep(20.0, 90.0, dist);                 // exit halo, behind the near trees only
+  v += ring * 0.11;                                                                   // ring crests catch a little sky
+
+  // mist banks: slabs standing at a real distance, hugging the ground, drifting with the wind;
+  // the depth test puts them behind anything nearer and in front of everything farther
+  for (int k = 0; k < 3; k++) {
+    float D = k == 0 ? 75.0 : k == 1 ? 34.0 : 15.0;
+    float yg = HORIZON + CAM_Z / (D * T2);                             // where the slab meets the ground
+    float hgt = (yg - vUv.y) * D * T2;                                 // metres above the ground at the slab
+    float wx = (vUv.x - 0.5) * D * T2 * uAspect.x;                     // metres across
+    float n = fbm(vec2(wx * (0.09 + 0.05 * float(k)) - uMistX * (0.6 + 0.3 * float(k)), hgt * 0.35 + float(k) * 7.0));
+    float c = smoothstep(0.42, 0.78, n) * exp(-max(hgt, 0.0) / (2.2 + float(k))) * smoothstep(D * 0.8, D * 1.2, dist);
+    v = mix(v, (fogV + 0.06) * (1.0 - uDark), c * uMist * (k == 2 ? 0.55 : 0.75));
+  }
+
+  // light rays fanning from the exit, slowly turning; only in the fog beyond the nearest trunks
+  vec2 r = (vUv - EXIT + vec2(0.0, 0.08)) * vec2(uAspect.x, 1.0);
+  float ang = atan(r.x, -r.y), rl = length(r);
+  float ray = smoothstep(0.35, 0.85, fbm(vec2(ang * 4.0 + uTime * 0.012, uTime * 0.03 + rl * 1.5)));
+  v += ray * exp(-rl * 2.6) * smoothstep(0.05, 0.30, rl) * smoothstep(0.0, 0.25, -r.y + 0.1)   // soft, mostly falling shafts
+       * smoothstep(12.0, 40.0, dist) * 0.16 * uRays * (1.0 - uDark);
+
+  // dust motes drifting up in the light, each at its own depth (hidden by anything nearer)
+  if (uMotes > 0.01) {
+    for (int k = 0; k < 2; k++) {
+      float sc = k == 0 ? 34.0 : 58.0;
+      vec2 q = vec2(vUv.x * uAspect.x, vUv.y) * sc + vec2(sin(uTime * 0.21 + float(k) * 2.0) * 0.6, uTime * (0.10 + 0.05 * float(k)));
+      vec2 id = floor(q), fq = fract(q) - 0.5;
+      float h = hash(id + float(k) * 31.0);
+      vec2 c = vec2(hash(id + 7.0), hash(id + 13.0)) - 0.5;
+      c += 0.25 * vec2(sin(uTime * (0.4 + h) + h * 40.0), cos(uTime * (0.3 + h) + h * 20.0));
+      float md = mix(10.0, 70.0, hash(id + 3.0)) * (k == 0 ? 0.7 : 1.4);
+      float tw = 0.5 + 0.5 * sin(uTime * (0.8 + h * 1.7) + h * 60.0);
+      float m = smoothstep(0.09, 0.0, length(fq - c * 0.7)) * step(0.82, h) * tw * step(md, dist);
+      v += m * (0.08 + 0.55 * halo) * uMotes * (1.0 - uDark);
+    }
+  }
+  // drips: from the underside of branches (a near pixel with far fog just below it), falling with gravity
+  // at that branch's own distance until they reach the ground there; hidden by anything nearer
+  if (uDrip > 0.01) {
+    const float COLS = 240.0;
+    float cx = floor(vUv.x * COLS);
+    for (int k = 0; k < 2; k++) {
+      vec2 id = vec2(cx, float(k) * 91.0);
+      if (hash(id + 1.0) > uDrip) continue;
+      vec2 o0 = vec2((cx + 0.2 + 0.6 * hash(id + 2.0)) / COLS, mix(0.02, 0.30, hash(id + 3.0)));
+      float D = 0.0;
+      for (int j = 0; j < 24; j++) {                 // walk down to the first underside edge
+        float a0 = distAt(o0), a1 = distAt(o0 + vec2(0.0, 0.005));
+        if (a0 > 5.0 && a0 < 50.0 && a1 > a0 * 1.3) { D = a0; o0.y += 0.003; break; }
+        o0.y += 0.012;
+      }
+      if (D == 0.0) continue;
+      float per = 1.0 + 3.0 * hash(id + 4.0), t = mod(uTime + hash(id + 5.0) * 9.0, per);
+      float yd = o0.y + 4.9 * t * t / (D * T2);      // ½gt² in metres → screen
+      if (yd > HORIZON + CAM_Z / (D * T2)) continue; // reached the ground or water
+      float len = max(2.0 / uRes.y, 9.8 * t * 0.02 / (D * T2));            // motion streak of one frame
+      float a = smoothstep(1.3, 0.2, abs(vUv.x - o0.x) * uRes.x) * step(yd - len, vUv.y) * step(vUv.y, yd)
+              * step(D * 0.9, dist) * (t < 0.25 ? t / 0.25 : 1.0);          // swells on the branch first
+      v = mix(v, 0.82, a * 0.7);                     // light grey drop: catches the fog light without glinting
+    }
+  }
+  v *= 1.0 - uDark;
+
+  // the swaying foreground: inverse-warp by a smooth field so tips can move off their own pixels
+  float sw = texture(uMasks, vUv).g;
+  float gust = 0.6 + 0.4 * noise(vec2(uTime * 0.12 + vUv.x * 1.5, 1.0));
+  float amp = 0.0035 * (0.3 + uWind * 1.8) * gust;
+  vec2 nofs = vec2(sin(uTime * 0.9 + vUv.x * 9.0) + 0.3 * sin(uTime * 2.0 + vUv.x * 27.0 + vUv.y * 9.0), 0.2 * sin(uTime * 1.5 + vUv.x * 14.0)) * sw * amp;
+  if (uRain > 0.01) {                                // drops hit the fronds: a quick dip, then a damped bounce
+    vec2 jq = vUv * vec2(26.0, 15.0), jid = floor(jq), jo = vec2(0.0);
+    for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) {
+      vec2 id = jid + vec2(a, b), c = id + vec2(hash(id + 1.0), hash(id + 2.0)) - jq;
+      float h = hash(id + 4.0), per = 0.6 + 1.8 * h, t = mod(uTime + h * 9.0, per);
+      jo += vec2(0.3 * (h - 0.5), 1.0) * exp(-t * 5.0) * sin(t * 26.0) * exp(-dot(c, c) * 1.6) * step(0.4, hash(id + 6.0));
+    }
+    nofs += jo * sw * 0.006 * uRain;
+  }
+  vec4 nr = texture(uNear, vUv - nofs);
+  float nv = nr.r * (1.0 - uDark) + max(uFogAdd, 0.0) * 0.05 * fogV;
+  v = mix(v, nv, nr.a);
+
+  v = mix(v, v * 0.55, uNight);
+  v = mix(v, max(v, 0.85 * smoothstep(15.0, 120.0, dist) * (1.0 - nr.a)), uFlash);      // lightning lights the far fog
+  float vig = smoothstep(1.15, 0.35, length((vUv - vec2(0.55, 0.5)) * vec2(1.1, 1.3))); v *= mix(0.70, 1.0, vig);
+  uvec2 g2 = uvec2(gl_FragCoord.xy) * uvec2(1664525u, 1013904223u) + uvec2(uint(uTime * 30.0) * 747796405u);
+  g2 ^= g2.yx >> 16u; g2 *= 2246822519u; g2 ^= g2.yx >> 13u;
+  v += (float((g2.x ^ g2.y) & 0xffffu) / 65535.0 - 0.5) * 0.04;                           // film grain
+  o = vec4(vec3(v), 1);
+}`),
+  line: prog(`#version 300 es
+in vec2 aPos; uniform vec4 uRect; void main(){ vec2 s = uRect.xy + aPos * uRect.zw; gl_Position = vec4(s.x * 2.0 - 1.0, 1.0 - s.y * 2.0, 0, 1); }`,
+  `#version 300 es
+precision highp float; uniform float uV; out vec4 o; void main(){ o = vec4(vec3(uV), 0.8); }`),
+  light: prog(`#version 300 es
+in vec2 aPos; uniform vec4 uRect; out vec2 vT; void main(){ vT = aPos * 2.0 - 1.0; vec2 s = uRect.xy + (aPos - 0.5) * uRect.zw;
+  gl_Position = vec4(s.x * 2.0 - 1.0, 1.0 - s.y * 2.0, 0, 1); }`, `#version 300 es
+precision highp float; in vec2 vT; uniform float uB; out vec4 o;
+void main(){ vec2 p = vT; p.y += 0.04; p.x *= 1.0 + max(p.y, 0.0) * 1.2;
+  float d = length(p * vec2(1.0, 0.78)); float core = smoothstep(0.075, 0.02, d); float halo = exp(-d * d * 16.0) * 0.65 + exp(-d * 4.5) * 0.20;
+  o = vec4(vec3(1.0), clamp((core + halo) * uB, 0.0, 1.0)); }`),
+};
+const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+const vao = gl.createVertexArray(); gl.bindVertexArray(vao); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+function loadTex(src, unit) { return new Promise(res => { const im = new Image(); im.onload = () => {
+  const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  res(t); }; im.onerror = () => res(null); im.src = src; }); }
+
+let W = 0, H = 0, T = 0, mistX = 0, flow = 0;   // drift phases accumulate, so a wind change never makes them jump
+function resize() { const dpr = Math.min(window.devicePixelRatio || 1, 2), w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  if (w !== W || h !== H) { W = w; H = h; cv.width = w; cv.height = h; } }
+function frame() {
+  gl.viewport(0, 0, W, H); gl.disable(gl.BLEND);
+  const u = P.scene.u; gl.useProgram(P.scene.p);
+  gl.uniform1i(u.uPlate, 0); gl.uniform1i(u.uDepth, 1); gl.uniform1i(u.uMasks, 2); gl.uniform1i(u.uNear, 3); gl.uniform2f(u.uAspect, W / H, 1);
+  gl.uniform1f(u.uTime, T); gl.uniform1f(u.uMistX, mistX); gl.uniform1f(u.uFlow, flow); gl.uniform1f(u.uFogAdd, PARAMS.fogAdd); gl.uniform1f(u.uDark, PARAMS.dark); gl.uniform1f(u.uGlow, PARAMS.glow);
+  gl.uniform1f(u.uRain, PARAMS.rain); gl.uniform1f(u.uDrip, PARAMS.drip); gl.uniform2f(u.uRes, W, H); gl.uniform1f(u.uFlash, PARAMS.flash); gl.uniform1f(u.uNight, PARAMS.night * 0.6); gl.uniform1f(u.uWind, PARAMS.wind);
+  gl.uniform1f(u.uMist, PARAMS.mist); gl.uniform1f(u.uRays, PARAMS.rays); gl.uniform1f(u.uMotes, PARAMS.motes);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  for (let i = 0; i < LIGHTS.length; i++) {
+    const Lp = LIGHTS[i], lv = lightLv[i]; if (lv.on < 0.01) continue;
+    const st = SESSION[lv.s] || SESSION.clear;
+    const bob = Math.sin(T * st.bob + i * 1.7) * 0.004 * (1 + st.bob);
+    const fl = 1 - st.flick * (0.5 + 0.5 * Math.sin(T * 13 + i * 5) * Math.sin(T * 7.3 + i));
+    const pulse = st.pulse ? 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(T * 2.2 + i * 0.4)) : 1;
+    const b = 1.3 * lv.b * fl * pulse * lv.on * (1 + 0.35 * PARAMS.night);
+    gl.useProgram(P.line.p); gl.uniform1f(P.line.u.uV, 0.16);
+    gl.uniform4f(P.line.u.uRect, Lp.x - 0.0004, Lp.anchor, 0.0008, Lp.y + bob - Lp.anchor - 0.006); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.useProgram(P.light.p); gl.uniform1f(P.light.u.uB, b);
+    const r = 0.055; gl.uniform4f(P.light.u.uRect, Lp.x, Lp.y + bob, r * H / W, r); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+}
+
+function applyState(s) { if (!s) return; target = { ...(STATES[s.state] || STATES.clear) };
+  sessions = (s.sessions || []).slice(0, 5); while (sessions.length < 5) sessions.push(null); }
+async function requestState() { try { const r = await fetch('state.json', { cache: 'no-store' }); if (r.ok) applyState(await r.json()); } catch (e) {} }
+function nightness() { const d = new Date(), h = CONFIG.clockHours ?? d.getHours() + d.getMinutes() / 60;
+  const ss = x => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); }; return h >= 12 ? ss((h - 17) / 2) : 1 - ss((h - 5) / 2); }
+let paused = false, last = 0, flashT = 0;
+window.wpPause = on => { paused = !!on; if (!paused) requestAnimationFrame(loop); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) requestAnimationFrame(loop); });
+function step(dt) {
+  T += dt; const k = 1 - Math.exp(-dt / 2.5);
+  mistX += dt * (0.08 + PARAMS.wind * 0.25); flow += dt * (0.2 + PARAMS.wind * 0.4);
+  for (const key in target) PARAMS[key] += (target[key] - PARAMS[key]) * k;
+  PARAMS.night = nightness();
+  if (PARAMS.rain > 0.5 && Math.random() < dt * 0.08) flashT = 1;
+  flashT = Math.max(0, flashT - dt * 2.2); PARAMS.flash = flashT * flashT * 0.6 * PARAMS.rain;
+  for (let i = 0; i < 5; i++) { const s = sessions[i], lv = lightLv[i]; if (s) lv.s = s;
+    lv.on += ((s ? 1 : 0) - lv.on) * (1 - Math.exp(-dt / 1.2)); lv.b += ((SESSION[lv.s] || SESSION.clear).b - lv.b) * (1 - Math.exp(-dt / 0.8)); }
+}
+function loop(now) { if (paused || document.hidden) return; requestAnimationFrame(loop);
+  if (now - last < 1000 / CONFIG.fps - 1) return; const dt = Math.min(0.1, (now - last) / 1000 || 1 / 30); last = now;
+  resize(); step(dt); frame(); }
+window.theme = { requestState, applyState, STATES, PARAMS, CONFIG, LIGHTS };
+(async () => {
+  resize();
+  await Promise.all([loadTex('plate.png', 0), loadTex('depth.png', 1), loadTex('masks.png', 2), loadTex('near.png', 3)]);
+  await requestState(); step(1000);
+  setInterval(() => { if (CONFIG.polling && !paused) requestState(); }, 1000);
+  requestAnimationFrame(loop);
+})();
+</script></body></html>

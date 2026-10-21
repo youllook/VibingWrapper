@@ -1,0 +1,8 @@
+{
+  "name": "層疊剪影霧林・Blender 原型",
+  "order": 51,
+  "entry": "index.html",
+  "enabled": true,
+  "bundled": false,
+  "description": "同一個霧林構圖在 Blender 一次烘好（體積霧、出口光暈、水面倒影），執行時只畫會動的：依深度增減的霧、水面漣漪、小燈、雨與閃電。"
+}

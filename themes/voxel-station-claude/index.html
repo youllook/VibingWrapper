@@ -1,0 +1,305 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>體素雨夜加油站</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;width:100%;height:100%}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+/* 體素雨夜加油站（2026-10-21）
+   Fixed-camera cheat (studio/notes/08_固定鏡頭作弊.md): a real 0.1 m voxel scene baked once in Cycles
+   (studio/blender/voxel_station_scene.py, packed by pack_station.py). Light is additive, so every light group
+   is its own image and the runtime re-weights them: each bay lamp follows its session, city windows switch
+   per window, lightning lights the sky and the haze. Cars are separate baked sprites that drive in and out,
+   with their lights, their reflections in the puddles and (storm) exhaust. Rain is shown by what it hits:
+   rings in the puddles, drips falling off the canopy edge. Everything is summed in linear light into a
+   half-float buffer, then tone-mapped once. */
+'use strict';
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl2', { antialias: false, alpha: false });
+gl.getExtension('EXT_color_buffer_float');
+const Q = new URLSearchParams(location.search);
+
+const STATES = {   // rain: puddle rings · drip: canopy drips · haze: extra fog · winOn: share of lit windows · sky · bayBreath
+  clear:    { rain: 0.35, drip: 0.5, haze: 0.00, winOn: 0.85, sky: 1.0, breath: 0, flat: 0 },
+  overcast: { rain: 0.20, drip: 0.3, haze: 0.45, winOn: 0.45, sky: 1.3, breath: 0, flat: 0 },
+  storm:    { rain: 1.00, drip: 1.0, haze: 0.25, winOn: 0.70, sky: 0.8, breath: 0, flat: 0 },
+  clearing: { rain: 0.00, drip: 0.25, haze: -0.1, winOn: 0.90, sky: 1.1, breath: 0, flat: 1 },
+  waiting:  { rain: 0.25, drip: 0.4, haze: 0.10, winOn: 0.75, sky: 1.0, breath: 1, flat: 0 },
+};
+const SESSION = {   // per car: head/tail lights · hazard · fogged glass · exhaust
+  clear:    { lights: 0.0, hazard: 0, fog: 0.0, smoke: 0 },
+  overcast: { lights: 0.25, hazard: 0, fog: 1.0, smoke: 0 },
+  storm:    { lights: 0.0, hazard: 0, fog: 0.2, smoke: 1 },
+  clearing: { lights: 1.0, hazard: 0, fog: 0.0, smoke: 0.4 },
+  waiting:  { lights: 0.0, hazard: 1, fog: 0.0, smoke: 0 },
+};
+const CONFIG = { polling: true, fps: 30, exposure: 1.6 };
+const PARAMS = { ...STATES.clear, flash: 0 };
+let target = { ...STATES.clear }, sessions = [null, null, null, null, null];
+const bays = [0, 1, 2, 3, 4].map(k => ({ s: null, has: 0, drive: 1, dir: 1, lamp: 0.3, lights: 0, hazard: 0, fog: 0, smoke: 0, model: [0, 1, 2, 1, 0][k] }));
+
+function sh(t, src) { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+function prog(vs, fs) { const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) { const a = gl.getActiveUniform(p, i); u[a.name] = gl.getUniformLocation(p, a.name); } return { p, u }; }
+const VS_FULL = `#version 300 es
+out vec2 vUv; void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); vUv = vec2(p.x, 1.0 - p.y); gl_Position = vec4(p * 2.0 - 1.0, 0, 1); }`;
+const VS_RECT = `#version 300 es
+in vec2 aPos; uniform vec4 uRect; out vec2 vT; out vec2 vS;   // uRect: x, y (top-left, screen 0..1 from top), w, h
+void main(){ vT = aPos; vS = uRect.xy + aPos * uRect.zw; gl_Position = vec4(vS.x * 2.0 - 1.0, 1.0 - vS.y * 2.0, 0, 1); }`;
+const COMMON = `
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+vec3 dec(vec3 e){ vec3 q = e * e; return q / max(1.0 - q, 1e-4); }       // pack_station.py: e = sqrt(x / (1 + x))
+uniform vec3 uCam;            // camera height, horizon (screen y), T2 = 2 tan(fov/2)
+uniform float uTime, uRain, uFlat, uAspect;
+// rain rings on the ground plane: returns a screen-space offset for whatever the puddle mirrors
+vec2 ripple(vec2 s){
+  float dep = atan((s.y - 0.5) * uCam.z) - (0.5 - uCam.y) * uCam.z;     // angle below the horizontal (pitch folded in)
+  vec2 o = vec2(0.0);
+  if (dep < 0.003) return o;
+  float d = uCam.x / tan(dep);
+  vec2 wp = vec2((s.x - 0.5) * d * uCam.z * uAspect, d);
+  o.x = (noise(vec2(wp.x * 1.3, wp.y * 0.6 + uTime * 0.25)) - 0.5) * 0.004 * (1.0 - uFlat) / max(d * 0.15, 1.0);   // wind wrinkles
+  if (uRain > 0.01) {
+    float ring = 0.0;
+    for (int k = 0; k < 2; k++) {
+      vec2 g = wp / 0.8 + float(k) * 0.5, id = floor(g) + float(k) * 37.0;
+      float h = hash(id), age = fract(uTime * (0.7 + 0.6 * h) + h * 7.0);
+      vec2 dv = (fract(g) - (vec2(hash(id + 3.0), hash(id + 5.0)) * 0.5 + 0.25)) * 0.8;
+      float big = 0.12 + 0.3 * hash(id + 11.0);
+      float x = (length(dv) - age * big) / (0.012 + 0.02 * age);
+      ring += exp(-x * x) * (1.0 - age) * (1.0 - age) * step(hash(id + 9.0), uRain) * smoothstep(45.0, 8.0, d);
+    }
+    o.y += ring * 0.006;
+  }
+  return o;
+}`;
+
+const P = {};
+P.scene = prog(VS_FULL, `#version 300 es
+precision highp float; in vec2 vUv; out vec4 o;
+uniform sampler2D tStatic, tSky, tWin, tBays, tBayW, tBayW2, tAux;
+uniform float uSky, uHaze, uWinOn, uFlash, uBay[5];
+${COMMON}
+void main(){
+  vec2 uv = vUv;
+  vec4 ax = texture(tAux, vUv);
+  if (ax.r > 0.5) { vec2 r = ripple(vUv); if (texture(tAux, uv + r).r > 0.5) uv += r; }   // the puddle's mirror image wobbles
+  ax = texture(tAux, uv);
+  vec3 c = dec(texture(tStatic, uv).rgb);
+  c += dec(texture(tSky, uv).rgb) * uSky;
+  float win = 1.0;
+  if (ax.g > 0.01) {                                           // a window: on or off by its id; a few switch slowly
+    float id = ax.g, slow = floor(uTime / 40.0 + id * 9.0);
+    win = step(fract(id * 13.7 + hash(vec2(slow, id * 50.0)) * 0.15), uWinOn);
+  }
+  c += dec(texture(tWin, uv).rgb) * win;
+  vec3 w1 = texture(tBayW, uv).rgb, w2 = texture(tBayW2, uv).rgb;
+  float bw = w1.r * uBay[0] + w1.g * uBay[1] + w1.b * uBay[2] + w2.r * uBay[3] + w2.g * uBay[4];
+  c += dec(texture(tBays, uv).rgb) * bw;
+  float dist = ax.b * ax.b * 300.0;
+  float f = 1.0 - exp(-dist * 0.010 * max(uHaze, 0.0));         // extra haze by real depth
+  c = mix(c, vec3(0.020, 0.032, 0.040) * uSky, f);
+  if (uHaze < 0.0) c *= 1.0 + uHaze * 0.4 * smoothstep(40.0, 200.0, dist);
+  c += vec3(0.20, 0.26, 0.34) * uFlash * (0.08 + 0.92 * smoothstep(25.0, 160.0, dist));   // lightning: the far haze and sky light up
+  o = vec4(c, 1);
+}`);
+P.car = prog(VS_RECT, `#version 300 es
+precision highp float; in vec2 vT; in vec2 vS; out vec4 o;
+uniform sampler2D tCar, tCarL, tAux; uniform float uLamp, uLights, uHazard, uFog, uRefl, uGround, uFacing;
+${COMMON}
+void main(){
+  vec2 t = vT;
+  float wet = 1.0;
+  if (uRefl > 0.5) {                                           // mirror below the ground line, only on wet ground
+    float ly = vT.y * 2.0;                                     // this quad is twice the car's height
+    if (ly < uGround) discard;
+    t.y = 2.0 * uGround - ly;
+    if (t.y < 0.0) discard;
+    vec4 ax = texture(tAux, vS);
+    wet = mix(0.12, 0.55, ax.r);
+    t += ripple(vS) * vec2(1.0, 6.0) * ax.r;
+  }
+  vec4 s = texture(tCar, t);
+  if (s.a < 0.01) discard;
+  vec3 c = dec(s.rgb) * (0.35 + 0.65 * uLamp);
+  vec3 m = texture(tCarL, t).rgb;
+  bool glass = m.r > 0.5 && m.g > 0.5 && m.b > 0.5;
+  if (glass) c = mix(c, vec3(0.10, 0.12, 0.13) * (0.4 + uLamp), uFog * 0.85);   // fogged-up windows
+  else {
+    float blink = step(0.5, fract(uTime * 0.9));
+    c += m.r * vec3(4.0, 3.6, 2.8) * uLights * uFacing;        // headlights
+    c += m.g * vec3(3.0, 0.15, 0.08) * max(uLights, 0.15);     // tail lights (always a little)
+    c += m.b * vec3(4.0, 1.6, 0.1) * uHazard * blink;          // hazards
+  }
+  float a = s.a * wet;
+  o = vec4(c * a, a);
+}`);
+P.glow = prog(VS_RECT, `#version 300 es
+precision highp float; in vec2 vT; out vec4 o; uniform vec3 uCol;
+void main(){ vec2 p = vT * 2.0 - 1.0; float d = dot(p, p); o = vec4(uCol * (exp(-d * 6.0) + 0.25 * exp(-d * 1.5)), 0.0); }`);
+P.smoke = prog(VS_RECT, `#version 300 es
+precision highp float; in vec2 vT; out vec4 o; uniform float uA, uSeed;
+${COMMON}
+void main(){ vec2 p = vT * 2.0 - 1.0; float n = noise(vT * 5.0 + vec2(uSeed, -uTime * 0.6));
+  float a = smoothstep(1.0, 0.2, length(p * vec2(1.0, 1.3))) * n * uA; o = vec4(vec3(0.05, 0.055, 0.06) * a, 0.0); }`);
+P.post = prog(VS_FULL, `#version 300 es
+precision highp float; in vec2 vUv; out vec4 o;
+uniform sampler2D tHdr; uniform float uExposure, uDrip, uFlash; uniform vec4 uEdge; uniform vec2 uRes;   // uEdge: canopy edge y at x0, x1 / ground y at x0, x1
+uniform vec2 uEdgeX;
+${COMMON}
+vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+void main(){
+  vec3 c = texture(tHdr, vec2(vUv.x, 1.0 - vUv.y)).rgb * uExposure;   // framebuffer rows start at the bottom
+  // drips off the canopy's front edge: each column of the edge lets a drop go now and then; it falls 4.6 m
+  if (uDrip > 0.01 && vUv.x > uEdgeX.x && vUv.x < uEdgeX.y) {
+    float u = (vUv.x - uEdgeX.x) / (uEdgeX.y - uEdgeX.x);
+    float ey = mix(uEdge.x, uEdge.y, u), gy = mix(uEdge.z, uEdge.w, u);
+    const float COLS = 60.0; float col = floor(u * COLS);
+    for (int k = 0; k < 1; k++) {
+      vec2 id = vec2(col, float(k) * 17.0);
+      if (hash(id) > uDrip) continue;
+      float cx = uEdgeX.x + (col + 0.2 + 0.6 * hash(id + 1.0)) / COLS * (uEdgeX.y - uEdgeX.x);
+      float per = 0.8 + 2.2 * hash(id + 2.0), t = mod(uTime + hash(id + 3.0) * 9.0, per);
+      float fall = 0.5 * 9.8 * t * t / 4.6;                       // fraction of the 4.6 m drop
+      float y = ey + fall * (gy - ey), len = max(3.0 / uRes.y, 9.8 * t * 0.025 / 4.6 * (gy - ey));
+      float a = smoothstep(1.2, 0.2, abs(vUv.x - cx) * uRes.x) * step(y - len, vUv.y) * step(vUv.y, y) * step(fall, 1.0);
+      c += a * vec3(0.16, 0.145, 0.12);                            // lit by the lamps under the canopy
+      float sp = (t - sqrt(2.0 * 4.6 / 9.8));                     // splash ring after it lands
+      if (sp > 0.0 && sp < 0.35) { vec2 q = (vUv - vec2(cx, gy)) * vec2(uRes.x, uRes.y * 3.5) / uRes.y; float r = abs(length(q) - sp * 0.05);
+        c += smoothstep(0.004, 0.0, r) * (1.0 - sp / 0.35) * vec3(0.12, 0.11, 0.09); }
+    }
+  }
+  c = aces(c);
+  c = pow(c, vec3(1.0 / 2.2));
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));                  // night grade: deep blue-charcoal shadows, warm lights
+  c = mix(c, c * vec3(0.78, 0.92, 1.08), smoothstep(0.45, 0.0, l));
+  c = clamp((c - 0.035) * 1.12, 0.0, 1.0);
+  float vig = smoothstep(1.2, 0.35, length((vUv - vec2(0.55, 0.48)) * vec2(1.0, 1.25))); c *= mix(0.72, 1.0, vig);
+  uvec2 g2 = uvec2(gl_FragCoord.xy) * uvec2(1664525u, 1013904223u) + uvec2(uint(uTime * 30.0) * 747796405u);
+  g2 ^= g2.yx >> 16u; g2 *= 2246822519u; g2 ^= g2.yx >> 13u;
+  c += (float((g2.x ^ g2.y) & 0xffffu) / 65535.0 - 0.5) * 0.018;
+  o = vec4(c, 1);
+}`);
+
+const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+const vao = gl.createVertexArray(); gl.bindVertexArray(vao); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+function loadTex(src, filter = gl.LINEAR) { return new Promise(res => { const im = new Image(); im.onload = () => {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  res(t); }; im.onerror = () => res(null); im.src = src; }); }
+function bind(unit, tex, prog, name) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(prog.u[name], unit); }
+
+let W = 0, H = 0, T = 0, hdr = null, fbo = null, TX = {}, SCENE = null, CARS = null;
+function resize() { const dpr = Math.min(window.devicePixelRatio || 1, 2), w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  if (w === W && h === H) return; W = w; H = h; cv.width = w; cv.height = h;
+  if (hdr) gl.deleteTexture(hdr); hdr = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, hdr);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  if (!fbo) fbo = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, hdr, 0); gl.bindFramebuffer(gl.FRAMEBUFFER, null); }
+function common(p) { gl.uniform3f(p.u.uCam, SCENE.cam.z, SCENE.horizon, 2 * Math.tan(SCENE.cam.fov_v * Math.PI / 360));
+  gl.uniform1f(p.u.uTime, T); gl.uniform1f(p.u.uRain, PARAMS.rain); gl.uniform1f(p.u.uFlat, PARAMS.flat); gl.uniform1f(p.u.uAspect, W / H); }
+const SW = 1920, SH = 1080;   // the bake's pixel frame (cars.json rectangles)
+function rect(p, x, y, w, h) { gl.uniform4f(p.u.uRect, x, y, w, h); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); }
+
+function frame() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo); gl.viewport(0, 0, W, H); gl.disable(gl.BLEND);
+  let p = P.scene; gl.useProgram(p.p); common(p);
+  ['tStatic', 'tSky', 'tWin', 'tBays', 'tBayW', 'tBayW2', 'tAux'].forEach((n, i) => bind(i, TX[n], p, n));
+  gl.uniform1f(p.u.uSky, PARAMS.sky); gl.uniform1f(p.u.uHaze, PARAMS.haze); gl.uniform1f(p.u.uWinOn, PARAMS.winOn); gl.uniform1f(p.u.uFlash, PARAMS.flash);
+  gl.uniform1fv(p.u['uBay[0]'], bays.map((b, k) => b.lamp * (PARAMS.breath > 0.01 ? 1 - PARAMS.breath * 0.45 * (0.5 + 0.5 * Math.sin(T * 0.7 - k * 0.9)) : 1)));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // cars: reflection first, then the car (premultiplied over)
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  p = P.car; gl.useProgram(p.p); common(p); bind(7, TX.tAux, p, 'tAux');
+  for (let k = 0; k < 5; k++) {
+    const b = bays[k]; if (b.has < 0.01) continue;
+    const key = b.model + '_' + k, info = CARS[key], ct = TX['car' + key]; if (!info || !ct) continue;
+    const [rx, ry, rw, rh] = info.rect, ox = b.drive * 0.45 * b.dir;
+    bind(5, ct, p, 'tCar'); bind(6, TX['carl' + key], p, 'tCarL');
+    gl.uniform1f(p.u.uLamp, bays[k].lamp); gl.uniform1f(p.u.uLights, b.lights); gl.uniform1f(p.u.uHazard, b.hazard); gl.uniform1f(p.u.uFog, b.fog);
+    gl.uniform1f(p.u.uFacing, info.spots.some(s => s[0] === 'head') ? 1 : 0); gl.uniform1f(p.u.uGround, (info.ground + 0.5) / rh);
+    gl.uniform1f(p.u.uRefl, 1); rect(p, rx / SW + ox, ry / SH, rw / SW, rh / SH * 2);
+    gl.uniform1f(p.u.uRefl, 0); rect(p, rx / SW + ox, ry / SH, rw / SW, rh / SH);
+  }
+  // light halos (additive), exhaust
+  gl.blendFunc(gl.ONE, gl.ONE);
+  p = P.glow; gl.useProgram(p.p);
+  for (let k = 0; k < 5; k++) {
+    const b = bays[k]; if (b.has < 0.5) continue; const info = CARS[b.model + '_' + k]; if (!info) continue;
+    const ox = b.drive * 0.45 * b.dir, blink = (T * 0.9) % 1 > 0.5 ? 1 : 0;
+    for (const [kind, sx, sy] of info.spots) {
+      const v = kind === 'head' ? b.lights : kind === 'tail' ? Math.max(b.lights, 0.15) * 0.6 : b.hazard * blink;
+      if (v < 0.02) continue;
+      const col = kind === 'head' ? [1.0, 0.92, 0.75] : kind === 'tail' ? [1.0, 0.06, 0.03] : [1.0, 0.45, 0.05];
+      const r = kind === 'head' ? 0.05 : 0.025;
+      gl.uniform3f(p.u.uCol, col[0] * v * 1.2, col[1] * v * 1.2, col[2] * v * 1.2); rect(p, sx / SW + ox - r * H / W, sy / SH - r, 2 * r * H / W, 2 * r);
+      gl.uniform3f(p.u.uCol, col[0] * v * 0.35, col[1] * v * 0.35, col[2] * v * 0.35);   // its streak in the wet ground
+      const gy = (info.rect[1] + info.ground) / SH; rect(p, sx / SW + ox - r * 0.5 * H / W, gy, r * H / W, (gy - sy / SH) * 2.5 + 0.08);
+    }
+  }
+  p = P.smoke; gl.useProgram(p.p); common(p);
+  for (let k = 0; k < 5; k++) {
+    const b = bays[k]; if (b.has < 0.5 || b.smoke < 0.02) continue; const info = CARS[b.model + '_' + k]; if (!info) continue;
+    const [rx, ry, rw] = info.rect, gx = (rx + rw * 0.72) / SW + b.drive * 0.45 * b.dir, gy = (ry + info.ground) / SH;
+    for (let i = 0; i < 4; i++) { const t = (T * 0.35 + i / 4) % 1, s = 0.008 + t * 0.03;
+      gl.uniform1f(p.u.uA, b.smoke * (1 - t) * 0.9); gl.uniform1f(p.u.uSeed, k * 7 + i * 3.1);
+      rect(p, gx - s * H / W + t * 0.012, gy - 0.008 - t * 0.04 - s, 2 * s * H / W, 2 * s); }
+  }
+  // to the screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.disable(gl.BLEND);
+  p = P.post; gl.useProgram(p.p); common(p); bind(0, hdr, p, 'tHdr');
+  gl.uniform1f(p.u.uExposure, CONFIG.exposure); gl.uniform1f(p.u.uDrip, PARAMS.drip); gl.uniform1f(p.u.uFlash, PARAMS.flash); gl.uniform2f(p.u.uRes, W, H);
+  const e = SCENE.drip_edge, g = SCENE.ground_at_drip;
+  gl.uniform2f(p.u.uEdgeX, e[0][0], e[1][0]); gl.uniform4f(p.u.uEdge, e[0][1], e[1][1], g[0][1], g[1][1]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function applyState(s) { if (!s) return; target = { ...(STATES[s.state] || STATES.clear) };
+  sessions = (s.sessions || []).slice(0, 5); while (sessions.length < 5) sessions.push(null); }
+async function requestState() { try { const r = await fetch('state.json', { cache: 'no-store' }); if (r.ok) applyState(await r.json()); } catch (e) {} }
+let paused = false, last = 0, flashT = 0;
+window.wpPause = on => { paused = !!on; if (!paused) requestAnimationFrame(loop); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) requestAnimationFrame(loop); });
+function step(dt) {
+  T += dt; const k = 1 - Math.exp(-dt / 2.5);
+  for (const key in target) PARAMS[key] += (target[key] - PARAMS[key]) * k;
+  if (PARAMS.rain > 0.7 && Math.random() < dt * 0.06) flashT = 1;
+  flashT = Math.max(0, flashT - dt * 1.8); PARAMS.flash = flashT * flashT * (0.6 + 0.4 * Math.sin(T * 40)) * (PARAMS.rain > 0.7 ? 1 : 0);
+  const kk = 1 - Math.exp(-dt / 0.8);
+  for (let i = 0; i < 5; i++) {
+    const b = bays[i], s = sessions[i];
+    if (s && !b.has) { b.has = 1; b.drive = 1; b.dir = 1; }                       // arrives from the right
+    if (!s && b.has && b.drive <= 0.001) { b.dir = -1; }                          // leaves to the left
+    if (s) { b.s = s; b.drive = Math.max(0, b.drive - dt / 3.0); }
+    else if (b.has) { b.drive = Math.min(1, b.drive + dt / 3.0) ; if (b.drive >= 1) { b.has = 0; } }
+    const st = SESSION[b.s] || SESSION.clear, moving = b.drive > 0.001;
+    b.lamp += ((s ? 1.0 : 0.3) - b.lamp) * kk;
+    b.lights += ((moving ? 1 : st.lights) - b.lights) * kk; b.hazard = st.hazard; b.fog += (st.fog - b.fog) * kk * 0.3; b.smoke += (st.smoke - b.smoke) * kk;
+  }
+}
+function ease(x) { return x * x * (3 - 2 * x); }
+function loop(now) { if (paused || document.hidden) return; requestAnimationFrame(loop);
+  if (now - last < 1000 / CONFIG.fps - 1) return; const dt = Math.min(0.1, (now - last) / 1000 || 1 / 30); last = now;
+  resize(); step(dt); const saved = bays.map(b => b.drive); bays.forEach(b => { b.drive = ease(b.drive); }); frame(); bays.forEach((b, i) => { b.drive = saved[i]; }); }
+window.theme = { requestState, applyState, STATES, SESSION, PARAMS, CONFIG, bays };
+(async () => {
+  resize();
+  [SCENE, CARS] = await Promise.all([fetch('scene.json').then(r => r.json()), fetch('cars.json').then(r => r.json())]);
+  const names = { tStatic: 'static', tSky: 'sky', tWin: 'windows', tBays: 'bays', tBayW: 'bayw', tBayW2: 'bayw2', tAux: 'masks' };
+  const jobs = Object.entries(names).map(async ([k, f]) => { TX[k] = await loadTex(f + '.png'); });
+  for (const key in CARS) { jobs.push(loadTex('car' + key + '.png').then(t => { TX['car' + key] = t; }));
+    jobs.push(loadTex('carl' + key + '.png', gl.NEAREST).then(t => { TX['carl' + key] = t; })); }
+  await Promise.all(jobs);
+  await requestState();
+  for (let i = 0; i < 5; i++) if (sessions[i]) { bays[i].has = 1; bays[i].drive = 0; bays[i].s = sessions[i]; }   // already parked at load
+  step(30);
+  setInterval(() => { if (CONFIG.polling && !paused) requestState(); }, 1000);
+  requestAnimationFrame(loop);
+})();
+</script></body></html>
