@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>下載主題 · VibingWrapper</title>
+<!-- 下載主題 (2026-10-21): one card per theme pack — size, what it is, then 下載 → confirm → progress bar →
+     解壓 → 已安裝 (使用 / 移除). Data and actions come from main through tools/store-preload.js. -->
+<style>
+  :root { --bg: #eef3f8; --card: #fff; --ink: #17324d; --sub: #5a7590; --line: rgba(23,50,77,.12); --acc: #2f6fae; --bad: #c0392b; --ok: #2e8b57; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px "Microsoft JhengHei UI", "Segoe UI", sans-serif; user-select: none; }
+  header { position: sticky; top: 0; z-index: 2; padding: 14px 18px 10px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 17px; letter-spacing: .05em; }
+  .meta { margin-top: 4px; color: var(--sub); font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+  .meta button { border: 0; background: none; color: var(--acc); cursor: pointer; font: inherit; padding: 0; }
+  main { padding: 12px 14px 18px; display: grid; gap: 10px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; transition: box-shadow .3s; }
+  .card.focus { box-shadow: 0 0 0 2px var(--acc); }
+  .top { display: flex; align-items: baseline; gap: 8px; }
+  .name { font-weight: 600; font-size: 15px; }
+  .size { margin-left: auto; color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: rgba(47,111,174,.12); color: var(--acc); white-space: nowrap; }
+  .chip.on { background: rgba(46,139,87,.14); color: var(--ok); }
+  .desc { margin: 6px 0 10px; color: var(--sub); font-size: 12.5px; line-height: 1.5; }
+  .row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+  .row .msg { font-size: 12.5px; color: var(--sub); }
+  .row .msg.bad { color: var(--bad); }
+  button.b { border: 1px solid var(--acc); background: var(--acc); color: #fff; border-radius: 7px; padding: 5px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+  button.b.ghost { background: transparent; color: var(--acc); }
+  button.b.warn { border-color: var(--bad); color: var(--bad); background: transparent; }
+  button.b:disabled { opacity: .5; cursor: default; }
+  .bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(23,50,77,.1); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--acc); border-radius: 4px; transition: width .15s; }
+  .bar.busy i { width: 100% !important; background: repeating-linear-gradient(90deg, var(--acc) 0 12px, #6c9fd2 12px 24px); animation: slide .8s linear infinite; background-size: 24px 100%; }
+  @keyframes slide { to { background-position: 24px 0; } }
+  .nums { font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 112px; text-align: right; }
+  .empty { padding: 30px 10px; text-align: center; color: var(--sub); }
+</style></head>
+<body>
+<header>
+  <h1>下載主題</h1>
+  <div class="meta"><span id="src">讀取中…</span><button id="refresh">重新整理</button></div>
+</header>
+<main id="list"><div class="empty">讀取中…</div></main>
+<script>
+const api = window.storeAPI;
+const mb = n => !n ? '—' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB';
+let items = [], current = null, focusId = null;
+const ui = {};                                   // id → { confirm, msg, bad }
+const listEl = document.getElementById('list');
+
+async function load(fresh) {
+  const r = await api.catalog(fresh);
+  document.getElementById('src').textContent = r.error ? '讀不到主題清單' : `來源：${r.source} · ${r.items.length} 個主題，可下載共 ${mb(r.items.filter(t => t.status === 'available' || t.status === 'update').reduce((s, t) => s + t.size, 0))}`;
+  current = r.current;
+  items = r.error ? [] : r.items;
+  if (r.error) { listEl.innerHTML = ''; const d = document.createElement('div'); d.className = 'empty'; d.textContent = r.error; listEl.append(d); return; }
+  render();
+}
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function button(text, cls, fn) { const b = el('button', 'b ' + (cls || ''), text); b.addEventListener('click', fn); return b; }
+
+function render() {
+  if (!items.length) { listEl.replaceChildren(el('div', 'empty', '目前沒有可下載的主題')); return; }
+  listEl.replaceChildren(...items.map(t => {
+    const c = el('div', 'card' + (t.id === focusId ? ' focus' : '')); c.dataset.id = t.id;
+    const top = el('div', 'top'); top.append(el('span', 'name', t.name));
+    if (t.status === 'builtin') top.append(el('span', 'chip', '內建'));
+    if (t.status === 'installed') top.append(el('span', 'chip', '已安裝'));
+    if (t.status === 'update') top.append(el('span', 'chip', '有更新'));
+    if (t.id === current) top.append(el('span', 'chip on', '使用中'));
+    top.append(el('span', 'size', mb(t.size)));
+    c.append(top, el('div', 'desc', t.description || ''));
+    const row = el('div', 'row'), u = ui[t.id] || {};
+    if (t.job) {                                   // downloading / unpacking
+      const bar = el('div', 'bar' + (t.job.phase === 'extract' ? ' busy' : '')), fill = el('i'); bar.append(fill);
+      const pct = t.job.total ? t.job.got / t.job.total : 0; fill.style.width = (pct * 100).toFixed(1) + '%';
+      row.append(bar, el('span', 'nums', t.job.phase === 'extract' ? '解壓、安裝中…' : `${mb(t.job.got)} / ${mb(t.job.total)} · ${Math.floor(pct * 100)}%`));
+    } else if (u.confirm) {                        // second step: say what will happen
+      row.append(el('span', 'msg', `${t.status === 'update' ? '更新' : '下載'}「${t.name}」${mb(t.size)}，裝好後可在「桌布」選它。`));
+      row.append(button('確定', '', () => { u.confirm = false; ui[t.id] = u; start(t); }), button('取消', 'ghost', () => { u.confirm = false; render(); }));
+    } else {
+      if (t.status === 'available' || t.status === 'update')
+        row.append(button(`${t.status === 'update' ? '更新' : '下載'} ${mb(t.size)}`, '', () => { ui[t.id] = { confirm: true }; render(); }));
+      if (t.status === 'installed' || t.status === 'builtin' || t.status === 'update') {
+        const b = button(t.id === current ? '使用中' : '使用', 'ghost', () => use(t)); b.disabled = t.id === current; row.append(b); }
+      if (t.status === 'installed' || t.status === 'update') row.append(button('移除', 'warn', () => removeTheme(t)));
+      if (u.msg) row.append(el('span', 'msg' + (u.bad ? ' bad' : ''), u.msg));
+    }
+    c.append(row);
+    return c;
+  }));
+}
+async function start(t) {
+  t.job = { phase: 'download', got: 0, total: t.size }; render();
+  const r = await api.install(t.id);
+  ui[t.id] = { msg: r.ok ? '安裝完成' : r.msg, bad: !r.ok };
+  await load(false);
+}
+async function use(t) { current = await api.use(t.id); ui[t.id] = { msg: '已換成這個桌布' }; render(); }
+async function removeTheme(t) {
+  if (!confirm(`移除「${t.name}」？`)) return;
+  const r = await api.remove(t.id); ui[t.id] = { msg: r.msg, bad: !r.ok }; await load(false);
+}
+api.onProgress(p => {
+  const t = items.find(x => x.id === p.id); if (!t) return;
+  if (p.phase === 'done' || p.phase === 'error') { t.job = null; return; }
+  t.job = { phase: p.phase, got: p.got || 0, total: p.total || t.size }; render();
+});
+api.onFocus(id => { focusId = id; render(); const c = listEl.querySelector(`[data-id="${CSS.escape(id || '')}"]`); if (c) c.scrollIntoView({ block: 'center', behavior: 'smooth' }); });
+document.getElementById('refresh').addEventListener('click', () => load(true));
+window.addEventListener('keydown', e => { if (e.key === 'Escape') window.close(); });
+load(false);
+</script>
+</body></html>

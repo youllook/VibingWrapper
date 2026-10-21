@@ -1,13 +1,14 @@
-// Desktop shell: a transparent, frameless window covering the right third of the
-// primary screen. Only the ice shards take mouse input; everything else clicks through.
+// Desktop shell: a small transparent, frameless HUD in the top-right corner of the primary screen.
+// Only the HUD strip and its open menu take mouse input; everything else clicks through.
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, globalShortcut } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const capture = require('./tools/capture');           // Ctrl+Alt+S region capture (PicPick replacement)
 const claudeBridge = require('./tools/claude-bridge'); // Claude Code hooks → themes/state.json (+ serves themes/)
+const recorder = require('./tools/recorder');        // gear menu / tray → screen recording → Videos
 const wallpaper = require('./tools/wallpaper');       // weather wallpaper behind the desktop icons (replaces Lively)
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
-const bossKey = require('./tools/boss-key');           // 老闆鍵: user-defined hotkey hides every 星圖 window (boss key)
+const bossKey = require('./tools/boss-key');           // 老闆鍵: user-defined hotkey hides every VibingWrapper window (boss key)
 const claudeHooks = require('./tools/claude-hooks');   // 一鍵安裝 Claude hook → ~/.claude/settings.json
 const codexHooks = require('./tools/codex-hooks');     // 一鍵安裝 Codex hook → ~/.codex/hooks.json
 const AGENT_HOOKS = { claude: claudeHooks, codex: codexHooks };
@@ -42,10 +43,9 @@ let win = null, tray = null, settings = null;
 // During quit/relaunch the window is destroyed while the page may still send IPC.
 const alive = () => win && !win.isDestroyed();
 
-// 2026-10-01: the pet is a small HUD (AI state icon + settings) in the top-right corner, where the
-// category map used to be (the 比例生活 star-chart page is not part of the public repo).
+// 2026-10-01: the pet is a small HUD (AI state icon + settings) in the top-right corner.
 const PAGE = 'hud.html';
-const HUD_W = 280, HUD_H = 380;   // HUD_H leaves room for the settings menu to open downwards
+const HUD_W = 280, HUD_H = 440;   // HUD_H leaves room for the settings menu (and its 桌布 / 下載主題 lists) to open downwards
 function petBounds() {
   const wa = screen.getPrimaryDisplay().workArea;
   return { x: wa.x + wa.width - HUD_W, y: wa.y, width: HUD_W, height: HUD_H };
@@ -98,20 +98,45 @@ const wallpaperUrl = () => {
 };
 ipcMain.handle('pet:wallpaper-style', () => settings.wallpaperStyle);
 ipcMain.handle('pet:wallpaper-styles', () => claudeBridge.themes().map(t => ({ id: t.id, name: t.name })));
-ipcMain.handle('pet:set-wallpaper-style', (_e, style) => {
+function setWallpaperStyle(style) {
   if (!claudeBridge.themeUrl(style)) return settings.wallpaperStyle;
   settings.wallpaperStyle = style; saveSettings();
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
+  buildTrayMenu();                                      // keep the tray's radio list in step
   return style;
-});
-// 下載主題: the catalog merged with what is installed; progress is pushed as pet:theme-progress
-ipcMain.handle('pet:theme-catalog', () => themeStore.list(claudeBridge.themes()).catch(e => ({ error: String(e.message || e) })));
-ipcMain.handle('pet:install-theme', async (_e, id) => themeStore.install(String(id), (tid, p) => alive() && win.webContents.send('pet:theme-progress', { id: tid, progress: p })));
-ipcMain.handle('pet:remove-theme', (_e, id) => {
-  const r = themeStore.remove(String(id));
-  if (r.ok && settings.wallpaperStyle === id && !claudeBridge.themeUrl(id)) wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
+}
+ipcMain.handle('pet:set-wallpaper-style', (_e, style) => setWallpaperStyle(style));
+// 下載主題: the HUD menu lists the packs (with sizes); downloading happens in its own window (tools/store.html)
+let storeWin = null;
+function openStore(focusId) {
+  if (storeWin && !storeWin.isDestroyed()) { storeWin.show(); storeWin.focus(); storeWin.webContents.send('store:focus', focusId || null); return; }
+  storeWin = new BrowserWindow({ width: 560, height: 680, minWidth: 420, minHeight: 360, title: '下載主題 · VibingWrapper', autoHideMenuBar: true,
+    icon: path.join(__dirname, 'assets', 'icon.ico'), backgroundColor: '#eef3f8', show: false,
+    webPreferences: { preload: path.join(__dirname, 'tools', 'store-preload.js'), contextIsolation: true, nodeIntegration: false } });
+  storeWin.loadFile(path.join(__dirname, 'tools', 'store.html'));
+  storeWin.once('ready-to-show', () => { storeWin.show(); if (focusId) storeWin.webContents.send('store:focus', focusId); });
+  storeWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  storeWin.webContents.on('will-navigate', e => e.preventDefault());
+  storeWin.on('closed', () => { storeWin = null; });
+}
+const storeList = fresh => themeStore.list(claudeBridge.themes(), fresh);
+ipcMain.handle('pet:theme-catalog', () => storeList().catch(e => ({ error: String(e.message || e) })));
+ipcMain.on('pet:open-store', (_e, id) => openStore(typeof id === 'string' ? id : null));
+ipcMain.handle('store:catalog', (_e, fresh) => storeList(fresh).then(items => ({ items, source: themeStore.sourceLabel(), current: settings.wallpaperStyle }))
+  .catch(e => ({ error: String(e.message || e) })));
+ipcMain.handle('store:install', async (_e, id) => {
+  const send = p => { if (storeWin && !storeWin.isDestroyed()) storeWin.webContents.send('store:progress', p); };
+  const r = await themeStore.install(String(id), send);
+  if (r.ok) buildTrayMenu();
   return r;
 });
+ipcMain.handle('store:remove', (_e, id) => {
+  const r = themeStore.remove(String(id));
+  if (r.ok && settings.wallpaperStyle === id) wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());   // falls back if it is gone
+  buildTrayMenu();
+  return r;
+});
+ipcMain.handle('store:use', (_e, id) => setWallpaperStyle(String(id)));
 ipcMain.handle('pet:time-mode', () => timeMode());
 ipcMain.handle('pet:set-time-mode', (_e, mode) => {
   if (!TIME_MODES.includes(mode)) return timeMode();
@@ -119,6 +144,9 @@ ipcMain.handle('pet:set-time-mode', (_e, mode) => {
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   return mode;
 });
+ipcMain.on('pet:record', () => recorder.toggle());
+ipcMain.handle('pet:gamebar', () => recorder.gameBar());
+ipcMain.handle('pet:rec-state', () => recorder.status());
 ipcMain.handle('pet:ai-state', () => claudeBridge.current());   // AI category asks once on load
 ipcMain.handle('pet:icons-hotkey', () => desktopIcons.status.hotkey);
 ipcMain.handle('pet:toggle-icons', () => desktopIcons.toggle());
@@ -158,11 +186,11 @@ function loginItemArgs() {
   return app.isPackaged ? {} : { path: process.execPath, args: [app.getAppPath().replace(/\\/g, '/')] };
 }
 
-// 2026-09-30: StarWeather logo (Codex) for 星圖 too; the drawn ice diamond stays as a fallback
+// 2026-09-30: StarWeather logo (Codex) for the tray; the drawn ice diamond stays as a fallback
 function makeTray() {
   const logo = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.ico'));
   tray = new Tray(logo.isEmpty() ? makeTrayIcon() : logo);
-  tray.setToolTip('VibingWrapper');
+  tray.setToolTip(recorder.status().state === 'recording' ? 'VibingWrapper · 錄影中' : 'VibingWrapper');
   buildTrayMenu();
 }
 
@@ -171,6 +199,8 @@ function buildTrayMenu() {
   const openAtLogin = app.getLoginItemSettings(loginItemArgs()).openAtLogin;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '範圍截圖' + (capture.status['Control+Alt+S'] ? '\tCtrl+Alt+S' : '（Ctrl+Alt+S 被占用）'), click: () => capture.start('region') },
+    { label: (recorder.status().state === 'idle' ? '螢幕錄影' : '停止錄影') + (recorder.status().hotkey ? '\tCtrl+Alt+R' : '（Ctrl+Alt+R 被占用）'), click: () => recorder.toggle() },
+    { label: '錄目前視窗（Game Bar）\tWin+Alt+R', click: () => recorder.gameBar() },
     { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), click: () => desktopIcons.toggle() },
     { label: (bossKey.status().hidden ? '取消隱藏' : '老闆鍵') + (bossKey.status().registered ? '\t' : '（') + bossKey.pretty(bossKey.status().key) + (bossKey.status().registered ? '' : ' 被占用）'), click: () => bossKey.toggle() },
     { type: 'separator' },
@@ -178,6 +208,8 @@ function buildTrayMenu() {
       label: '動態桌布', type: 'checkbox', checked: settings.weatherWallpaper,
       click: item => { settings.weatherWallpaper = item.checked; wallpaper.setEnabled(item.checked, wallpaperUrl()); saveSettings(); },
     },
+    // 桌布: pick one directly (2026-10-14; the gear menu used to only cycle to the next theme)
+    { label: '桌布', submenu: claudeBridge.themes().map(t => ({ label: t.name, type: 'radio', checked: t.id === settings.wallpaperStyle, click: () => setWallpaperStyle(t.id) })) },
     {
       label: '永遠在最上層', type: 'checkbox', checked: settings.alwaysOnTop,
       click: item => { settings.alwaysOnTop = item.checked; win.setAlwaysOnTop(item.checked); saveSettings(); },
@@ -188,6 +220,8 @@ function buildTrayMenu() {
     },
     { label: claudeHooks.status() === 'on' ? 'Claude hook 已安裝' : '安裝 Claude hook', enabled: claudeHooks.status() !== 'on', click: () => { claudeHooks.install(); buildTrayMenu(); } },
     ...(codexHooks.status() === 'none' ? [] : [{ label: codexHooks.status() === 'on' ? 'Codex hook 已安裝' : '安裝 Codex hook', enabled: codexHooks.status() !== 'on', click: () => { codexHooks.install(); buildTrayMenu(); } }]),
+    { type: 'separator' },
+    { label: '下載主題…', click: () => openStore() },
     { type: 'separator' },
     { label: '開發者工具', click: () => win.webContents.openDevTools({ mode: 'detach' }) },
     { label: '重新載入', click: () => win.reload() },
@@ -207,7 +241,12 @@ app.whenReady().then(() => {
   createWindow();
   makeTray();
   capture.init(buildTrayMenu);
-  claudeBridge.start({ logDir: app.getPath('userData'), stateDir: app.getPath('userData'), themeDirs: [themeStore.init(app.getPath('userData'))],
+  recorder.init(st => {                                 // keep tray + gear menu in step with the recorder
+    buildTrayMenu();
+    if (tray && !tray.isDestroyed()) tray.setToolTip(st.state === 'recording' ? 'VibingWrapper · 錄影中' : 'VibingWrapper');
+    if (alive()) win.webContents.send('pet:rec-state', st);
+  });   // menu is rebuilt when a hotkey gets registered
+  claudeBridge.start({ logDir: app.getPath('userData'), stateDir: app.getPath('userData'), themeDirs: [themeStore.init(app.getPath('userData'), settings.themeStore)],
     version: app.getVersion(), onState: s => alive() && win.webContents.send('pet:ai-state', s) });   // → %APPDATA%\vibing-wrapper\weather-log.jsonl
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   desktopIcons.init(buildTrayMenu);

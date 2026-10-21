@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'">
+<title>recorder</title>
+<script>
+// Hidden recorder page: getDisplayMedia (answered by the main process with the primary screen and,
+// when possible, system audio) → MediaRecorder → 1 s chunks → main appends them to the file.
+let mr = null, stream = null, chunkChain = Promise.resolve();
+
+function pickType() {
+  // NO AAC (mp4a): Chromium's AAC encoder produced garbage samples here (peaks ≫ 1.0, clicks) — the
+  // "odd sounds" the user heard (2026-09-30). Opus is clean, also inside MP4.
+  const types = [
+    ['video/mp4;codecs=avc1,opus', 'mp4'], ['video/webm;codecs=vp9,opus', 'webm'],
+    ['video/webm;codecs=vp8,opus', 'webm'], ['video/webm', 'webm'],
+  ];
+  return types.find(([t]) => MediaRecorder.isTypeSupported(t)) || ['', 'webm'];
+}
+
+async function start() {
+  try {
+    // (loopback audio refuses any processing constraints — asking for them makes the audio source fail)
+    try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true }); }
+    catch { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false }); }   // no loopback → video only
+    const [mime, ext] = pickType();
+    mr = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 });
+    mr.ondataavailable = e => {
+      if (!e.data || !e.data.size) return;
+      // keep order: each chunk is sent after the previous one was read
+      chunkChain = chunkChain.then(() => e.data.arrayBuffer()).then(buf => window.rec.chunk(new Uint8Array(buf)));
+    };
+    mr.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      chunkChain.then(() => window.rec.done());
+    };
+    // the user can also end it from Windows' own "stop sharing" → treat as stop
+    stream.getVideoTracks()[0].addEventListener('ended', () => { if (mr && mr.state === 'recording') mr.stop(); });
+    mr.start(1000);
+    window.rec.started(ext);
+  } catch (e) { window.rec.failed(e && e.message || e); }
+}
+function stop() { if (mr && mr.state !== 'inactive') mr.stop(); else window.rec.done(); }
+
+window.rec.onStart(start);
+window.rec.onStop(stop);
+</script>

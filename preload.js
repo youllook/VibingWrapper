@@ -1,8 +1,8 @@
-// Minimal bridge between the ice page and the desktop shell.
+// Minimal bridge between the HUD page and the desktop shell.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('petAPI', {
-  // true while the pointer is over the ice → the window takes mouse input
+  // true while the pointer is over the HUD strip / open menu → the window takes mouse input
   setInteractive: on => ipcRenderer.send('pet:interactive', !!on),
   // tray menu → same single-letter commands as the keyboard (r, v, m, h, escape)
   // quit and start the whole app again (menu: 重新啟動)
@@ -14,16 +14,21 @@ contextBridge.exposeInMainWorld('petAPI', {
   getWallpaperStyle: () => ipcRenderer.invoke('pet:wallpaper-style'),
   getWallpaperStyles: () => ipcRenderer.invoke('pet:wallpaper-styles'),
   setWallpaperStyle: s => ipcRenderer.invoke('pet:set-wallpaper-style', s),
-  // 下載主題: [{ id, name, size, status: builtin / installed / update / available, progress }] or { error }
+  // 下載主題: [{ id, name, size, status: builtin / installed / update / available, job }] or { error };
+  // openStore(id) opens the download window (focused on that theme)
   themeCatalog: () => ipcRenderer.invoke('pet:theme-catalog'),
-  installTheme: id => ipcRenderer.invoke('pet:install-theme', id),
-  removeTheme: id => ipcRenderer.invoke('pet:remove-theme', id),
-  onThemeProgress: fn => ipcRenderer.on('pet:theme-progress', (_e, p) => fn(p)),
+  openStore: id => ipcRenderer.send('pet:open-store', id),
   getTimeMode: () => ipcRenderer.invoke('pet:time-mode'),        // 模式: 'auto' (real clock) / 'day' / 'night'
   setTimeMode: mode => ipcRenderer.invoke('pet:set-time-mode', mode),
   // 一鍵安裝 hook, agent = 'claude' (default) / 'codex': 'on' / 'partial' / 'off' / 'error' / 'none', and install → { ok, msg }
   hooksStatus: agent => ipcRenderer.invoke('pet:hooks-status', agent),
   installHooks: agent => ipcRenderer.invoke('pet:install-hooks', agent),
+  // screen recording (gear menu): toggle + state { state: idle|starting|recording|stopping, startedAt, file, hotkey }
+  toggleRecord: () => ipcRenderer.send('pet:record'),
+  // Xbox Game Bar recording of the window the user was in (resolves with its title)
+  gameBar: () => ipcRenderer.invoke('pet:gamebar'),
+  getRecState: () => ipcRenderer.invoke('pet:rec-state'),
+  onRecState: fn => ipcRenderer.on('pet:rec-state', (_e, s) => fn(s)),
   getAiState: () => ipcRenderer.invoke('pet:ai-state'),
   onAiState: fn => ipcRenderer.on('pet:ai-state', (_e, s) => fn(s)),
   // hide / show all desktop icons (also Ctrl+Alt+D and the tray menu)

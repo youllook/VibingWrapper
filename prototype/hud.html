@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>VibingWrapper</title>
-<!-- 2026-10-01: the pet is now just this small strip — AI state + settings, top-right of the screen.
-     The ice / star-chart category map (比例生活) is archived in index.html; main.js PAGE switches back. -->
+<!-- 2026-10-01: the pet is just this small strip — AI state + settings, top-right of the screen. -->
 <style>
   html, body { margin: 0; background: transparent; overflow: hidden; user-select: none;
     font-family: "Microsoft JhengHei UI", "Segoe UI", sans-serif; }
@@ -54,6 +53,9 @@
     background: rgba(8,14,40,.28); color: #e6eeff; opacity: .55; transition: opacity .2s, background .2s; }
   #gear:hover, #settings.open #gear { opacity: 1; background: rgba(255,255,255,.75); color: #17324d; }
   #gear svg { width: 18px; height: 18px; display: block; }
+  /* recording: the gear turns red and pulses so you know the screen is being recorded */
+  body.recording #gear { opacity: 1; color: #fff; background: #e5484d; animation: rec-pulse 1.4s ease-in-out infinite; }
+  @keyframes rec-pulse { 50% { background: #9f2a2e; } }
   #menu { display: none; position: absolute; top: 32px; right: 0; min-width: 176px; padding: 6px;
     background: rgba(240,247,255,.95); border: 1px solid rgba(255,255,255,.9); border-radius: 10px;
     box-shadow: 0 6px 20px rgba(10,30,60,.25); }
@@ -64,6 +66,10 @@
   #menu .item:hover { background: rgba(120,170,220,.2); }
   #menu .item .val { color: #4a6a88; font-size: 12px; }
   #menu .sep { height: 1px; margin: 4px 6px; background: rgba(23,50,77,.12); }
+  /* 桌布 page: one row per theme, the current one ticked */
+  #menu .item.pick { padding: 5px 10px; justify-content: flex-start; gap: 8px; }
+  #menu .item.pick .tick { width: 12px; color: #2f6fae; }
+  #menu .item.back { color: #4a6a88; }
   /* 老闆鍵: only a faint gear is left (the way back) */
   body.stealth #ai { display: none; }
   body.stealth #gear { opacity: .35; }
@@ -116,7 +122,7 @@ setAi('clear');
 if (IS_APP) { window.petAPI.getAiState().then(setAi); window.petAPI.onAiState(setAi); }
 
 /* ---- Settings ---- */
-// 桌布 cycles through the theme folders (themes/*/theme.json, in their order); refreshed whenever the menu opens
+// 桌布 opens a list of the theme folders (themes/*/theme.json, in their order) to pick from; refreshed whenever the menu opens
 let WP_STYLES = [{ id: 'weather', name: '天氣' }];
 const wpName = id => (WP_STYLES.find(t => t.id === id) || { name: id }).name;
 const loadStyles = () => IS_APP && window.petAPI.getWallpaperStyles().then(l => { if (l && l.length) { WP_STYLES = l; if (settingsEl.classList.contains('open')) renderMenu(); } });
@@ -129,14 +135,21 @@ const refreshHooks = () => IS_APP && Promise.all(Object.keys(hooks).map(a => win
 const hooksRow = (label, a) => ({ label, show: () => hooks[a] !== 'none', value: () => hooksMsg[a] || HOOKS_LABEL[hooks[a]] || '',
   run: () => window.petAPI.installHooks(a).then(r => { hooksMsg[a] = r.msg; refreshHooks(); }) });
 const TIME_MODES = [['auto', '預設'], ['day', '日間'], ['night', '夜間']];
+let rec = { state: 'idle', startedAt: 0 };
+function recLabel() {
+  if (rec.state === 'starting') return '啟動中…';
+  if (rec.state === 'stopping') return '存檔中…';
+  if (rec.state !== 'recording') return rec.hotkey ? 'Ctrl+Alt+R' : '開始';   // idle: the hotkey, as a reminder
+  const s = Math.max(0, Math.floor((Date.now() - rec.startedAt) / 1000));
+  return '停止 ' + String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
 const SETTINGS = IS_APP ? [
-  { label: '桌布', value: () => wpName(wpStyle),
-    run: () => { const k = WP_STYLES.map(t => t.id); window.petAPI.setWallpaperStyle(k[(k.indexOf(wpStyle) + 1) % k.length]).then(s => { wpStyle = s; renderMenu(); }); } },
+  { label: '桌布', value: () => wpName(wpStyle) + ' ›', run: () => { view = 'wallpaper'; } },
   // 模式: 預設 follows the clock; 日間 / 夜間 hold the wallpaper at late morning / 22:00. Click cycles.
   { label: '　模式', value: () => (TIME_MODES.find(m => m[0] === timeMode) || TIME_MODES[0])[1],
     run: () => { const i = TIME_MODES.findIndex(m => m[0] === timeMode); window.petAPI.setTimeMode(TIME_MODES[(i + 1) % TIME_MODES.length][0]).then(m => { timeMode = m; renderMenu(); }); } },
   // 下載主題: the theme packs on GitHub Releases; the menu turns into that list (← 返回 goes back)
-  { label: '　下載主題', value: () => '', run: () => openStore() },
+  { label: '　下載主題', value: () => '›', run: () => openStore() },
   { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },   // right side = the hotkey, as a reminder
   // 老闆鍵 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
   { label: '老闆鍵', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
@@ -145,56 +158,55 @@ const SETTINGS = IS_APP ? [
   hooksRow('Claude 連動', 'claude'),
   hooksRow('Codex 連動', 'codex'),
   { sep: true },
+  { label: '螢幕錄影', value: () => recLabel(), run: () => window.petAPI.toggleRecord() },
+  // Game Bar records the app window you were in; press again (or Win+Alt+R) to stop
+  { label: '錄目前視窗', value: () => 'Win+Alt+R', run: () => { setMenu(false); window.petAPI.gameBar(); } },
+  { sep: true },
   { label: '重新啟動', run: () => window.petAPI.restart() },
   { label: '解除安裝', run: () => { setMenu(false); window.petAPI.uninstall(); } },   // main shows the confirmation
 ] : [{ label: '重新整理', run: () => location.reload() }];
 
-/* ---- 下載主題 ---- */
+/* ---- 下載主題: every pack with its size; a row opens the download window (tools/store.html) on it ---- */
 let view = 'main', store = null;                          // store: null = loading, [] rows, { error }
-const storeMsg = {}, storeProg = {};
-const mb = n => !n ? '' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576 < 10 ? (n / 1048576).toFixed(1) : Math.round(n / 1048576)) + ' MB';
+const mb = n => !n ? '' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB';
 function openStore() { view = 'store'; store = null; window.petAPI.themeCatalog().then(r => { store = r; if (view === 'store') renderMenu(); }); }
-function storeValue(t) {
-  if (storeProg[t.id] != null) return Math.round(storeProg[t.id] * 100) + '%';
-  if (storeMsg[t.id]) return storeMsg[t.id];
-  return { builtin: '內建', installed: wpStyle === t.id ? '使用中' : '已安裝・點此使用', update: '有更新 ' + mb(t.size), available: '下載 ' + mb(t.size) }[t.status] || '';
-}
-function storeRun(t) {
-  if (storeProg[t.id] != null) return;
-  if (t.status === 'installed' || t.status === 'builtin') {
-    window.petAPI.setWallpaperStyle(t.id).then(s => { wpStyle = s; renderMenu(); }); return; }
-  storeMsg[t.id] = ''; storeProg[t.id] = 0;
-  window.petAPI.installTheme(t.id).then(r => {
-    delete storeProg[t.id]; storeMsg[t.id] = r.msg;
-    if (r.ok) { t.status = 'installed'; loadStyles(); }
-    renderMenu();
-  });
-}
+const STATUS = { builtin: '內建', installed: '已安裝', update: '有更新', available: '下載' };
 const storeItems = () => [
-  { label: '← 返回', run: () => { view = 'main'; } }, { sep: true },
+  { label: '‹ 下載主題', cls: 'back', run: () => { view = 'main'; } },
+  { label: '開啟下載視窗…', run: () => { setMenu(false); window.petAPI.openStore(); } }, { sep: true },
   ...(store === null ? [{ label: '讀取中…', run: () => {} }]
     : store.error ? [{ label: '讀不到主題清單', value: () => '重試', run: () => openStore() }]
     : !store.length ? [{ label: '目前沒有可下載的主題', run: () => {} }]
-    : store.map(t => ({ label: t.name, value: () => storeValue(t), run: () => storeRun(t) }))),
+    : store.map(t => ({ label: t.name, value: () => `${mb(t.size)} · ${t.job ? '安裝中' : STATUS[t.status] || ''}`,
+        run: () => { setMenu(false); window.petAPI.openStore(t.id); } }))),
 ];
-if (IS_APP) window.petAPI.onThemeProgress(p => { if (p.progress == null) return; storeProg[p.id] = p.progress; if (view === 'store' && settingsEl.classList.contains('open')) renderMenu(); });
 
 const settingsEl = document.getElementById('settings'), menuEl = document.getElementById('menu');
 // while hidden the menu offers just the way back
 const STEALTH_MENU = [{ label: '取消隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } }];
+// the 桌布 page: a back row, then every theme; picking one switches at once and keeps the list open to try the next
+function wallpaperPage() {
+  return [{ label: '‹ 桌布', cls: 'back', run: () => { view = 'main'; } }, { sep: true },
+    ...WP_STYLES.map(t => ({ label: t.name, cls: 'pick', tick: t.id === wpStyle,
+      run: () => window.petAPI.setWallpaperStyle(t.id).then(s => { wpStyle = s; renderMenu(); }) }))];
+}
 function renderMenu() {
-  menuEl.replaceChildren(...(boss.hidden ? STEALTH_MENU : view === 'store' ? storeItems() : SETTINGS).filter(s => !s.show || s.show()).map(s => {
+  const page = boss.hidden ? STEALTH_MENU : view === 'store' ? storeItems() : view === 'wallpaper' ? wallpaperPage() : SETTINGS;
+  menuEl.replaceChildren(...page.filter(s => !s.show || s.show()).map(s => {
     if (s.sep) { const d = document.createElement('div'); d.className = 'sep'; return d; }
     const b = document.createElement('button');
-    b.className = 'item'; b.setAttribute('role', 'menuitem');
-    b.textContent = s.label;
+    b.className = 'item' + (s.cls ? ' ' + s.cls : ''); b.setAttribute('role', 'menuitem');
+    if (s.cls === 'pick') { const t = document.createElement('span'); t.className = 'tick'; t.textContent = s.tick ? '✓' : ''; b.append(t); }
+    b.append(s.label);
     if (s.value) { const v = document.createElement('span'); v.className = 'val'; v.textContent = s.value(); b.append(v); }
     b.addEventListener('click', ev => { ev.stopPropagation(); s.run(); renderMenu(); });
     return b;
   }));
 }
 function setMenu(open) {
-  if (open) { bossMsg = ''; hooksMsg.claude = hooksMsg.codex = ''; loadStyles(); refreshHooks(); } else { view = 'main'; if (capturing) endBossCapture(''); }
+  if (open) { bossMsg = ''; hooksMsg.claude = hooksMsg.codex = ''; loadStyles(); refreshHooks();
+    if (IS_APP) window.petAPI.getWallpaperStyle().then(s => { if (s && s !== wpStyle) { wpStyle = s; renderMenu(); } }); }   // the tray may have changed it
+  else { view = 'main'; if (capturing) endBossCapture(''); }
   settingsEl.classList.toggle('open', open); if (open) renderMenu();
 }
 
@@ -228,6 +240,13 @@ if (IS_APP) {
   window.petAPI.iconsHotkey().then(ok => { iconsKey = ok ? 'Ctrl+Alt+D' : '熱鍵被占用'; });
   const setBoss = s => { if (!s) return; boss = s; document.body.classList.toggle('stealth', !!s.hidden); if (settingsEl.classList.contains('open')) renderMenu(); };
   window.petAPI.bossKey().then(setBoss); window.petAPI.onBossState(setBoss);
+  const setRec = s => {
+    rec = s || rec;
+    document.body.classList.toggle('recording', rec.state === 'recording');
+    if (settingsEl.classList.contains('open')) renderMenu();
+  };
+  window.petAPI.getRecState().then(setRec); window.petAPI.onRecState(setRec);
+  setInterval(() => { if (rec.state === 'recording' && settingsEl.classList.contains('open')) renderMenu(); }, 1000);
 
   /* click-through everywhere except the strip and its open menu (main.js starts with
      setIgnoreMouseEvents(true, { forward: true }), so mouse moves still reach us) */

@@ -191,7 +191,7 @@ function themes() {
       seen.add(d.name);
       const entry = typeof t.entry === 'string' && t.entry ? t.entry : 'index.html';
       list.push({ id: d.name, name: String(t.name || d.name), order: Number(t.order) || 99, description: t.description || '', url: BASE + d.name + '/' + entry,
-        builtin: root === THEMES_DIR });
+        builtin: root === THEMES_DIR, bundled: t.bundled !== false });
     }
   }
   return list.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
