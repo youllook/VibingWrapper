@@ -75,6 +75,8 @@ function createWindow() {
   });
   win.setIgnoreMouseEvents(true, { forward: true });
   win.loadFile(path.join(__dirname, 'prototype', PAGE));
+  // a fresh page starts click-through again (a reload mid-hover used to leave the strip holding the mouse)
+  win.webContents.on('did-finish-load', () => { if (alive()) { win.setIgnoreMouseEvents(true, { forward: true }); menuOnTop(false); } });
   win.once('ready-to-show', () => win.showInactive());
   // keep external links / new windows out of the pet
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -82,6 +84,13 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
+// the gear menu opens downwards over other windows: lift the HUD above them while it is open (2026-10-21)
+function menuOnTop(open) {
+  if (!alive()) return;
+  if (open) { win.setAlwaysOnTop(true, 'pop-up-menu'); win.moveTop(); }
+  else win.setAlwaysOnTop(!!settings.alwaysOnTop);
+}
+ipcMain.on('pet:menu-open', (_e, open) => menuOnTop(!!open));
 ipcMain.on('pet:interactive', (_e, on) => {
   if (!alive()) return;
   if (on) win.setIgnoreMouseEvents(false);
@@ -155,6 +164,15 @@ ipcMain.handle('pet:toggle-icons', () => desktopIcons.toggle());
 ipcMain.on('pet:boss', () => bossKey.toggle());
 ipcMain.handle('pet:boss-key', () => bossKey.status());
 ipcMain.on('pet:boss-capture', (_e, on) => bossKey.suspend(!!on));
+// 範圍截圖 key (gear menu, under 螢幕錄影): settings.json `captureKey`
+ipcMain.handle('pet:capture-key', () => capture.status());
+ipcMain.on('pet:capture-capture', (_e, on) => capture.suspend(!!on));
+ipcMain.handle('pet:set-capture-key', (_e, acc) => {
+  const r = capture.setKey(acc);
+  if (r.ok) { settings.captureKey = r.key; saveSettings(); }
+  return r;
+});
+ipcMain.on('pet:capture', () => capture.start('region'));
 ipcMain.handle('pet:set-boss-key', (_e, acc) => {
   const r = bossKey.setKey(acc);
   if (r.ok) { settings.bossKey = r.key; saveSettings(); }
@@ -199,7 +217,7 @@ function buildTrayMenu() {
   if (!tray || tray.isDestroyed()) return;              // no tray while 老闆鍵 is on
   const openAtLogin = app.getLoginItemSettings(loginItemArgs()).openAtLogin;
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '範圍截圖' + (capture.status['Control+Alt+S'] ? '\tCtrl+Alt+S' : '（Ctrl+Alt+S 被占用）'), click: () => capture.start('region') },
+    { label: '範圍截圖' + (capture.status().registered ? '\t' : '（') + bossKey.pretty(capture.status().key) + (capture.status().registered ? '' : ' 被占用）'), click: () => capture.start('region') },
     { label: (recorder.status().state === 'idle' ? '螢幕錄影' : '停止錄影') + (recorder.status().hotkey ? '\tCtrl+Alt+R' : '（Ctrl+Alt+R 被占用）'), click: () => recorder.toggle() },
     { label: '錄目前視窗（Game Bar）\tWin+Alt+R', click: () => recorder.gameBar() },
     { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), click: () => desktopIcons.toggle() },
@@ -235,13 +253,16 @@ function buildTrayMenu() {
 
 app.whenReady().then(() => {
   if (!primary) return;
+  // no application menu: its default accelerators (Ctrl+R reload, Ctrl+Shift+I, Ctrl+W …) hit whichever of our
+  // windows has focus — Ctrl+R reloaded the HUD mid-hover and left it stuck, grey gear (2026-10-21)
+  Menu.setApplicationMenu(null);
   // Windows 設定 →「已安裝的應用程式」→ 解除安裝 starts VibingWrapper.exe --uninstall: only the uninstall dialog
   if (process.argv.includes('--uninstall')) { runUninstall().then(done => { if (!done) app.quit(); }); return; }
   uninstall.register();
   settings = loadSettings();
   createWindow();
   makeTray();
-  capture.init(buildTrayMenu);
+  capture.init(buildTrayMenu, settings.captureKey);
   recorder.init(st => {                                 // keep tray + gear menu in step with the recorder
     buildTrayMenu();
     if (tray && !tray.isDestroyed()) tray.setToolTip(st.state === 'recording' ? 'VibingWrapper · 錄影中' : 'VibingWrapper');

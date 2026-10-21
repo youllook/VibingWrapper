@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('petAPI', {
   // true while the pointer is over the HUD strip / open menu → the window takes mouse input
   setInteractive: on => ipcRenderer.send('pet:interactive', !!on),
+  // the gear menu is open → main keeps the HUD above other windows meanwhile
+  menuOpen: on => ipcRenderer.send('pet:menu-open', !!on),
   // tray menu → same single-letter commands as the keyboard (r, v, m, h, escape)
   // quit and start the whole app again (menu: 重新啟動)
   restart: () => ipcRenderer.send('pet:restart'),
@@ -40,6 +42,11 @@ contextBridge.exposeInMainWorld('petAPI', {
   bossKey: () => ipcRenderer.invoke('pet:boss-key'),
   bossCapture: on => ipcRenderer.send('pet:boss-capture', !!on),
   setBossKey: acc => ipcRenderer.invoke('pet:set-boss-key', acc),
+  // 範圍截圖: start one, its key { key, registered }, record a new key (same flow as the boss key)
+  capture: () => ipcRenderer.send('pet:capture'),
+  captureKey: () => ipcRenderer.invoke('pet:capture-key'),
+  captureCapture: on => ipcRenderer.send('pet:capture-capture', !!on),
+  setCaptureKey: acc => ipcRenderer.invoke('pet:set-capture-key', acc),
   onBossState: fn => ipcRenderer.on('pet:boss-state', (_e, s) => fn(s)),
   onCommand: fn => ipcRenderer.on('pet:command', (_e, key) => fn(key)),
 });

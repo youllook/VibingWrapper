@@ -59,7 +59,7 @@
   #menu { display: none; position: absolute; top: 32px; right: 0; min-width: 176px; padding: 6px;
     background: rgba(240,247,255,.95); border: 1px solid rgba(255,255,255,.9); border-radius: 10px;
     box-shadow: 0 6px 20px rgba(10,30,60,.25); }
-  #settings.open #menu { display: block; max-height: 330px; overflow-y: auto; }
+  #settings.open #menu { display: block; max-height: calc(100vh - 44px); overflow-y: auto; }
   #menu .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
     padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: inherit;
     font: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
@@ -153,7 +153,7 @@ const SETTINGS = IS_APP ? [
   { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },   // right side = the hotkey, as a reminder
   // 老闆鍵 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
   { label: '老闆鍵', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
-  { label: '　變更快捷鍵', value: () => bossMsg, run: () => startBossCapture() },
+  { label: '　變更快捷鍵', value: () => keyMsg.boss, run: () => startKeyCapture('boss') },
   // Claude / Codex 連動: whether our hooks are in ~/.claude/settings.json / ~/.codex/hooks.json; click adds the missing ones
   hooksRow('Claude 連動', 'claude'),
   hooksRow('Codex 連動', 'codex'),
@@ -161,6 +161,9 @@ const SETTINGS = IS_APP ? [
   { label: '螢幕錄影', value: () => recLabel(), run: () => window.petAPI.toggleRecord() },
   // Game Bar records the app window you were in; press again (or Win+Alt+R) to stop
   { label: '錄目前視窗', value: () => 'Win+Alt+R', run: () => { setMenu(false); window.petAPI.gameBar(); } },
+  // 範圍截圖: right side = its key; 變更快捷鍵 records a new one like the boss key does
+  { label: '範圍截圖', value: () => capLabel(), run: () => { setMenu(false); setTimeout(() => window.petAPI.capture(), 150); } },
+  { label: '　變更快捷鍵', value: () => keyMsg.capture, run: () => startKeyCapture('capture') },
   { sep: true },
   { label: '重新啟動', run: () => window.petAPI.restart() },
   { label: '解除安裝', run: () => { setMenu(false); window.petAPI.uninstall(); } },   // main shows the confirmation
@@ -204,31 +207,37 @@ function renderMenu() {
   }));
 }
 function setMenu(open) {
-  if (open) { bossMsg = ''; hooksMsg.claude = hooksMsg.codex = ''; loadStyles(); refreshHooks();
+  if (open) { keyMsg.boss = keyMsg.capture = ''; hooksMsg.claude = hooksMsg.codex = ''; loadStyles(); refreshHooks();
     if (IS_APP) window.petAPI.getWallpaperStyle().then(s => { if (s && s !== wpStyle) { wpStyle = s; renderMenu(); } }); }   // the tray may have changed it
-  else { view = 'main'; if (capturing) endBossCapture(''); }
+  else { view = 'main'; if (capturing) endKeyCapture(''); }
   settingsEl.classList.toggle('open', open); if (open) renderMenu();
+  if (IS_APP && window.petAPI.menuOpen) window.petAPI.menuOpen(open);
 }
 
-/* 老闆鍵: 變更快捷鍵 records the next key combination pressed (the old key is paused meanwhile) */
-let boss = { key: 'Control+Alt+B', registered: true }, bossMsg = '', capturing = false;
+/* 老闆鍵／範圍截圖: 變更快捷鍵 records the next key combination pressed (the old key is paused meanwhile) */
+let boss = { key: 'Control+Alt+B', registered: true }, cap = { key: 'Control+Alt+S', registered: true }, capturing = null;
+const keyMsg = { boss: '', capture: '' };
+const KEY_API = { boss: { pause: on => window.petAPI.bossCapture(on), set: acc => window.petAPI.setBossKey(acc), got: r => { boss = r; } },
+  capture: { pause: on => window.petAPI.captureCapture(on), set: acc => window.petAPI.setCaptureKey(acc), got: r => { cap = r; } } };
 const prettyKey = acc => acc.replace('Control', 'Ctrl').replace('Super', 'Win');
 const bossLabel = () => prettyKey(boss.key) + (boss.registered ? '' : ' 被占用');
-function startBossCapture() { capturing = true; bossMsg = '請按新組合…'; if (IS_APP) window.petAPI.bossCapture(true); }
-function endBossCapture(msg) { capturing = false; bossMsg = msg; if (IS_APP) window.petAPI.bossCapture(false); renderMenu(); }
+const capLabel = () => prettyKey(cap.key) + (cap.registered ? '' : ' 被占用');
+function startKeyCapture(which) { if (capturing) endKeyCapture(''); capturing = which; keyMsg[which] = '請按新組合…'; if (IS_APP) KEY_API[which].pause(true); }
+function endKeyCapture(msg) { const w = capturing; if (!w) return; capturing = null; keyMsg[w] = msg; if (IS_APP) KEY_API[w].pause(false); renderMenu(); }
 const PUNCT = { Space: 'Space', Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', Backslash: '\\' };
 const keyName = code => /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit\d$/.test(code) ? code.slice(5) : /^F\d{1,2}$/.test(code) ? code : PUNCT[code] || null;
 window.addEventListener('keydown', ev => {
   if (!capturing) return;
   ev.preventDefault(); ev.stopImmediatePropagation();
-  if (ev.key === 'Escape') return endBossCapture('');
+  if (ev.key === 'Escape') return endKeyCapture('');
   const k = keyName(ev.code);
   if (!k) return;                                       // a modifier on its own: keep waiting
   const mods = [ev.ctrlKey && 'Control', ev.altKey && 'Alt', ev.shiftKey && 'Shift', ev.metaKey && 'Super'].filter(Boolean);
-  if (!mods.length && !/^F\d/.test(k)) { bossMsg = '要加 Ctrl／Alt／Shift'; renderMenu(); return; }
-  window.petAPI.setBossKey([...mods, k].join('+')).then(r => { boss = r; endBossCapture(r.ok ? '已更新' : '被占用，沒換'); });
+  if (!mods.length && !/^F\d/.test(k)) { keyMsg[capturing] = '要加 Ctrl／Alt／Shift'; renderMenu(); return; }
+  const w = capturing;
+  KEY_API[w].set([...mods, k].join('+')).then(r => { KEY_API[w].got(r); endKeyCapture(r.ok ? '已更新' : '被占用，沒換'); });
 }, true);
-window.addEventListener('blur', () => { if (capturing) endBossCapture(''); });
+window.addEventListener('blur', () => { if (capturing) endKeyCapture(''); });
 document.getElementById('gear').addEventListener('click', ev => { ev.stopPropagation(); setMenu(!settingsEl.classList.contains('open')); });
 settingsEl.addEventListener('click', ev => ev.stopPropagation());
 document.addEventListener('click', () => setMenu(false));
@@ -240,6 +249,7 @@ if (IS_APP) {
   window.petAPI.iconsHotkey().then(ok => { iconsKey = ok ? 'Ctrl+Alt+D' : '熱鍵被占用'; });
   const setBoss = s => { if (!s) return; boss = s; document.body.classList.toggle('stealth', !!s.hidden); if (settingsEl.classList.contains('open')) renderMenu(); };
   window.petAPI.bossKey().then(setBoss); window.petAPI.onBossState(setBoss);
+  window.petAPI.captureKey().then(s => { if (s) cap = s; });
   const setRec = s => {
     rec = s || rec;
     document.body.classList.toggle('recording', rec.state === 'recording');

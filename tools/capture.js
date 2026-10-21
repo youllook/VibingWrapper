@@ -1,5 +1,6 @@
 // Screen tools (2026-09-29): replaces the two PicPick features the user actually used.
 //   Ctrl+Alt+S  crosshair region capture → PNG to the clipboard + a copy saved in SAVE_DIR
+//               (the key can be changed in the gear menu since 2026-10-21; settings.json `captureKey`)
 // Separate from the pet on purpose: it only shares the Electron process (already running at login).
 // Flow: grab the display under the cursor → show a frozen full-screen overlay (pre-created, so it
 // opens fast) → the page reports a rectangle → clipboard.
@@ -8,7 +9,8 @@ const fs = require('fs');
 const path = require('path');
 
 // 2026-10-15: was Ctrl+R — a global shortcut stole it from every app (browser reload). The Ctrl+Q eyedropper was removed.
-const HOTKEYS = { 'Control+Alt+S': 'region' };
+const DEFAULT_KEY = 'Control+Alt+S';
+let key = DEFAULT_KEY;
 const SAVE_DIR = path.join(app.getPath('pictures'), 'Saved Pictures');   // user's choice (2026-09-29)
 
 // 截圖_20260929_154512.png (+ _2, _3 … when several land in the same second)
@@ -21,7 +23,7 @@ function savePng(png) {
   fs.writeFile(file, png, e => e && console.error('[capture] save failed', e));
 }
 let win = null, busy = false, shot = null, retryT = null, onChange = () => {}, shownAt = 0;
-const status = {};  // accelerator -> true when registered
+let registered = false;
 
 function makeWindow() {
   win = new BrowserWindow({
@@ -80,24 +82,38 @@ ipcMain.on('cap:region', (_e, r) => {
 });
 ipcMain.on('cap:done', () => finish());
 
+const fire = () => start('region');
 function register() {
-  let missing = false, changed = false;
-  for (const [acc, mode] of Object.entries(HOTKEYS)) {
-    if (status[acc]) continue;
-    status[acc] = globalShortcut.register(acc, () => start(mode));
-    if (status[acc]) changed = true;
-    if (!status[acc]) missing = true;
-  }
-  // Another program (e.g. PicPick) may still hold the key: keep trying until it lets go.
-  if (changed) onChange();
   clearTimeout(retryT);
-  if (missing) retryT = setTimeout(register, 10000);
+  if (registered) return;
+  try { registered = globalShortcut.register(key, fire); } catch { registered = false; }
+  if (registered) onChange();
+  else retryT = setTimeout(register, 10000);   // another program (e.g. PicPick) may still hold it: keep trying
+}
+function status() { return { key, registered }; }
+// gear menu → 變更快捷鍵: take the new key if it is free, otherwise keep the old one
+function setKey(acc) {
+  if (typeof acc !== 'string' || !acc) return { ok: false, ...status() };
+  if (acc === key && registered) return { ok: true, ...status() };
+  clearTimeout(retryT);
+  if (registered) { globalShortcut.unregister(key); registered = false; }
+  let ok = false;
+  try { ok = globalShortcut.register(acc, fire); } catch { ok = false; }
+  if (ok) { key = acc; registered = true; } else register();
+  onChange();
+  return { ok, ...status() };
+}
+// while the gear menu records a new key, the current one must not fire
+function suspend(on) {
+  if (on && registered) { clearTimeout(retryT); globalShortcut.unregister(key); registered = false; }
+  else if (!on) register();
 }
 
-function init(cb) {
+function init(cb, accelerator) {
   if (cb) onChange = cb;
+  if (typeof accelerator === 'string' && accelerator) key = accelerator;
   makeWindow();
   register();
 }
 
-module.exports = { init, start, status, HOTKEYS };
+module.exports = { init, start, status, setKey, suspend };
