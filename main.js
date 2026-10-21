@@ -45,7 +45,7 @@ const alive = () => win && !win.isDestroyed();
 
 // 2026-10-01: the pet is a small HUD (AI state icon + settings) in the top-right corner.
 const PAGE = 'hud.html';
-const HUD_W = 280, HUD_H = 440;   // HUD_H leaves room for the settings menu (and its 桌布 / 下載主題 lists) to open downwards
+const HUD_W = 280, HUD_H = 520;   // HUD_H leaves room for the settings menu (and its 桌布 / 下載主題 lists) to open downwards
 function petBounds() {
   const wa = screen.getPrimaryDisplay().workArea;
   return { x: wa.x + wa.width - HUD_W, y: wa.y, width: HUD_W, height: HUD_H };
