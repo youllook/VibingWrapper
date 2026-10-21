@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('petAPI', {
   getWallpaperStyle: () => ipcRenderer.invoke('pet:wallpaper-style'),
   getWallpaperStyles: () => ipcRenderer.invoke('pet:wallpaper-styles'),
   setWallpaperStyle: s => ipcRenderer.invoke('pet:set-wallpaper-style', s),
+  // 下載主題: [{ id, name, size, status: builtin / installed / update / available, progress }] or { error }
+  themeCatalog: () => ipcRenderer.invoke('pet:theme-catalog'),
+  installTheme: id => ipcRenderer.invoke('pet:install-theme', id),
+  removeTheme: id => ipcRenderer.invoke('pet:remove-theme', id),
+  onThemeProgress: fn => ipcRenderer.on('pet:theme-progress', (_e, p) => fn(p)),
   getTimeMode: () => ipcRenderer.invoke('pet:time-mode'),        // 模式: 'auto' (real clock) / 'day' / 'night'
   setTimeMode: mode => ipcRenderer.invoke('pet:set-time-mode', mode),
   // 一鍵安裝 hook, agent = 'claude' (default) / 'codex': 'on' / 'partial' / 'off' / 'error' / 'none', and install → { ok, msg }

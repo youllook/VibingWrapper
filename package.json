@@ -9,7 +9,8 @@
     "icon": "node scripts/make-icon.js",
     "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1",
     "dist": "node scripts/dist.js",
-    "dist:lite": "node scripts/dist-lite.js"
+    "dist:lite": "node scripts/dist-lite.js",
+    "themes:pack": "node scripts/pack-themes.js"
   },
   "devDependencies": {
     "electron": "^44.4.5",

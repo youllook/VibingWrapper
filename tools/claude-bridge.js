@@ -4,13 +4,16 @@
 // 2. The same server serves the themes/ folder (one sub-folder per wallpaper theme, 2026-10-01) and
 //    answers every themes/<id>/state.json with that one file, so each page can fetch('state.json') from its
 //    own folder (a file:// page could not). GET /themes/list.json = the enabled themes (see themes/README.md).
-// Localhost only, small bodies only, static files from themes/ only; nothing is executed.
+// 3. GET /themes/events.json = recent events and per-slot detail for the basic theme's live view and debug
+//    panel (2026-10-21): event names, tool names and ids only, like the log.
+// Localhost only, small bodies only, static files from the theme folders only; nothing is executed.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 47321;
+const PORT = Number(process.env.VIBINGWRAPPER_PORT) || 47321;   // env override only for a side-by-side dev copy
 const THEMES_DIR = path.join(__dirname, '..', 'themes');
+let THEME_DIRS = [THEMES_DIR];                           // start({ themeDirs }) puts downloaded themes first
 let STATE_FILE = path.join(THEMES_DIR, 'state.json');   // start({ stateDir }) moves it out of the app folder (read-only once packaged)
 const TYPES = { '.html': 'text/html; charset=utf-8', '.json': 'application/json', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png',
   '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.glsl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
@@ -129,15 +132,28 @@ function publish() {
   catch (e) { console.error('[claude-bridge]', e.message); }
   return changed;
 }
+const RECENT_MAX = 40, recent = [], counts = { total: 0 };   // for events.json
+let startedAt = Date.now(), appVersion = '';
+function remember(source, e, x) {
+  counts.total++; counts[e.kind] = (counts[e.kind] || 0) + 1;
+  if (x) { x.events = (x.events || 0) + 1; if (e.tool) x.tool = e.tool; }
+  recent.push({ t: Date.now(), src: SOURCE_TAG[source], kind: e.kind, event: e.event, tool: e.tool, slot: x ? x.slot : null, sky: skyState() });
+  if (recent.length > RECENT_MAX) recent.shift();
+}
+function eventsJson() {
+  const now = Date.now();
+  return { now, version: appVersion, uptime: now - startedAt, sky: skyState(), counts, recent,
+    sessions: [...sessions.values()].sort((a, b) => a.slot - b.slot).map(x => ({ slot: x.slot, source: x.source, state: x.state, idle: now - x.last, tool: x.tool || null, events: x.events || 0 })) };
+}
 function onEvent(source, e) {
   const id = source + ':' + e.session;
   const base = { event: e.event, src: SOURCE_TAG[source], tool: e.tool, ntype: e.ntype, session: e.session.slice(0, 8) };
-  if (e.kind === 'end') { dropSession(id); log({ ...base, weather: null, sky: skyState(), changed: publish() }); return; }
+  if (e.kind === 'end') { dropSession(id); remember(source, e, null); log({ ...base, weather: null, sky: skyState(), changed: publish() }); return; }
   let x = sessions.get(id);
   let w = KIND_WEATHER[e.kind] || null;
   // while a session waits, its background subagents' tool calls must not wipe the star
   if (x && x.state === 'waiting' && e.agent) w = null;
-  if (!w) { log({ ...base, weather: null, changed: false }); return; }   // e.g. SubagentStop: seen, ignored
+  if (!w) { remember(source, e, x); log({ ...base, weather: null, changed: false }); return; }   // e.g. SubagentStop: seen, ignored
   x = x || addSession(id, source);
   x.last = Date.now();
   clearTimeout(x.clearT);
@@ -146,7 +162,8 @@ function onEvent(source, e) {
     x.state = 'clear';
     log({ event: 'timer', src: SOURCE_TAG[source], session: e.session.slice(0, 8), weather: 'clear', sky: skyState(), changed: publish() });
   }, CLEAR_AFTER_MS);
-  log({ ...base, weather: w, sky: skyState(), changed: publish() });
+  const changed = publish(); remember(source, e, x);
+  log({ ...base, weather: w, sky: skyState(), changed });
 }
 // sessions that went quiet (closed without SessionEnd, crashed, forgotten) leave after a while
 setInterval(() => {
@@ -158,28 +175,39 @@ setInterval(() => {
 
 /* ---- themes (2026-10-01): every folder themes/<id>/ with a theme.json is a wallpaper ----
    theme.json: { name, order, entry = 'index.html', enabled = true, description }. Folders starting with _ or .
-   are skipped. Read fresh on every call, so a new folder shows up without a restart. */
+   are skipped. Read fresh on every call, so a new folder shows up without a restart.
+   Several roots (2026-10-21): downloaded themes (userData/themes, see tools/theme-store.js) come first, so a
+   downloaded copy of a built-in theme replaces it; `root` says where each one lives. */
 const BASE = `http://127.0.0.1:${PORT}/themes/`;
 function themes() {
-  let dirs = [];
-  try { dirs = fs.readdirSync(THEMES_DIR, { withFileTypes: true }).filter(d => d.isDirectory() && !/^[_.]/.test(d.name)); } catch { return []; }
-  const list = [];
-  for (const d of dirs) {
-    let t; try { t = JSON.parse(fs.readFileSync(path.join(THEMES_DIR, d.name, 'theme.json'), 'utf8')); } catch { continue; }
-    if (!t || t.enabled === false) continue;
-    const entry = typeof t.entry === 'string' && t.entry ? t.entry : 'index.html';
-    list.push({ id: d.name, name: String(t.name || d.name), order: Number(t.order) || 99, description: t.description || '', url: BASE + d.name + '/' + entry });
+  const list = [], seen = new Set();
+  for (const root of THEME_DIRS) {
+    let dirs = [];
+    try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory() && !/^[_.]/.test(d.name)); } catch { continue; }
+    for (const d of dirs) {
+      if (seen.has(d.name)) continue;
+      let t; try { t = JSON.parse(fs.readFileSync(path.join(root, d.name, 'theme.json'), 'utf8')); } catch { continue; }
+      if (!t || t.enabled === false) continue;
+      seen.add(d.name);
+      const entry = typeof t.entry === 'string' && t.entry ? t.entry : 'index.html';
+      list.push({ id: d.name, name: String(t.name || d.name), order: Number(t.order) || 99, description: t.description || '', url: BASE + d.name + '/' + entry,
+        builtin: root === THEMES_DIR });
+    }
   }
   return list.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
+// which root serves themes/<id>/… (the first that has it); demo.html etc. at the top level come from the app
+const rootFor = id => THEME_DIRS.find(r => { try { return fs.statSync(path.join(r, id, 'theme.json')).isFile(); } catch { return false; } }) || THEMES_DIR;
 const themeUrl = id => (themes().find(t => t.id === id) || {}).url || null;
 
 function serveThemes(req, res) {
   const rel = decodeURIComponent(req.url.split('?')[0].slice('/themes/'.length)) || 'demo.html';
   const send = (type, buf) => { res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(buf); };
   if (rel === 'list.json') return send(TYPES['.json'], JSON.stringify(themes()));
-  const file = path.basename(rel) === 'state.json' ? STATE_FILE : path.resolve(THEMES_DIR, rel);
-  if (file !== STATE_FILE && !file.startsWith(THEMES_DIR + path.sep)) { res.writeHead(404).end(); return; }   // no traversal
+  if (path.basename(rel) === 'events.json') return send(TYPES['.json'], JSON.stringify(eventsJson()));
+  const root = rel.includes('/') ? rootFor(rel.split('/')[0]) : THEMES_DIR;
+  const file = path.basename(rel) === 'state.json' ? STATE_FILE : path.resolve(root, rel);
+  if (file !== STATE_FILE && !file.startsWith(root + path.sep)) { res.writeHead(404).end(); return; }   // no traversal
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404).end(); return; }
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
@@ -191,6 +219,9 @@ function start(opts = {}) {
   if (opts.logDir) logFile = require('path').join(opts.logDir, 'weather-log.jsonl');
   if (opts.stateDir) STATE_FILE = path.join(opts.stateDir, 'state.json');
   if (opts.onState) listeners.push(opts.onState);
+  if (opts.themeDirs) THEME_DIRS = [...opts.themeDirs, THEMES_DIR];
+  if (opts.version) appVersion = String(opts.version);
+  startedAt = Date.now();
   // pick up the last state; if it is older than 2 min (app was closed / Claude died mid-turn) start clear
   try {
     const st = fs.statSync(STATE_FILE);

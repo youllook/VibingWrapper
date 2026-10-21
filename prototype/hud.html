@@ -57,7 +57,7 @@
   #menu { display: none; position: absolute; top: 32px; right: 0; min-width: 176px; padding: 6px;
     background: rgba(240,247,255,.95); border: 1px solid rgba(255,255,255,.9); border-radius: 10px;
     box-shadow: 0 6px 20px rgba(10,30,60,.25); }
-  #settings.open #menu { display: block; }
+  #settings.open #menu { display: block; max-height: 330px; overflow-y: auto; }
   #menu .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
     padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: inherit;
     font: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
@@ -135,6 +135,8 @@ const SETTINGS = IS_APP ? [
   // 模式: 預設 follows the clock; 日間 / 夜間 hold the wallpaper at late morning / 22:00. Click cycles.
   { label: '　模式', value: () => (TIME_MODES.find(m => m[0] === timeMode) || TIME_MODES[0])[1],
     run: () => { const i = TIME_MODES.findIndex(m => m[0] === timeMode); window.petAPI.setTimeMode(TIME_MODES[(i + 1) % TIME_MODES.length][0]).then(m => { timeMode = m; renderMenu(); }); } },
+  // 下載主題: the theme packs on GitHub Releases; the menu turns into that list (← 返回 goes back)
+  { label: '　下載主題', value: () => '', run: () => openStore() },
   { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },   // right side = the hotkey, as a reminder
   // 老闆鍵 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
   { label: '老闆鍵', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
@@ -147,11 +149,41 @@ const SETTINGS = IS_APP ? [
   { label: '解除安裝', run: () => { setMenu(false); window.petAPI.uninstall(); } },   // main shows the confirmation
 ] : [{ label: '重新整理', run: () => location.reload() }];
 
+/* ---- 下載主題 ---- */
+let view = 'main', store = null;                          // store: null = loading, [] rows, { error }
+const storeMsg = {}, storeProg = {};
+const mb = n => !n ? '' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576 < 10 ? (n / 1048576).toFixed(1) : Math.round(n / 1048576)) + ' MB';
+function openStore() { view = 'store'; store = null; window.petAPI.themeCatalog().then(r => { store = r; if (view === 'store') renderMenu(); }); }
+function storeValue(t) {
+  if (storeProg[t.id] != null) return Math.round(storeProg[t.id] * 100) + '%';
+  if (storeMsg[t.id]) return storeMsg[t.id];
+  return { builtin: '內建', installed: wpStyle === t.id ? '使用中' : '已安裝・點此使用', update: '有更新 ' + mb(t.size), available: '下載 ' + mb(t.size) }[t.status] || '';
+}
+function storeRun(t) {
+  if (storeProg[t.id] != null) return;
+  if (t.status === 'installed' || t.status === 'builtin') {
+    window.petAPI.setWallpaperStyle(t.id).then(s => { wpStyle = s; renderMenu(); }); return; }
+  storeMsg[t.id] = ''; storeProg[t.id] = 0;
+  window.petAPI.installTheme(t.id).then(r => {
+    delete storeProg[t.id]; storeMsg[t.id] = r.msg;
+    if (r.ok) { t.status = 'installed'; loadStyles(); }
+    renderMenu();
+  });
+}
+const storeItems = () => [
+  { label: '← 返回', run: () => { view = 'main'; } }, { sep: true },
+  ...(store === null ? [{ label: '讀取中…', run: () => {} }]
+    : store.error ? [{ label: '讀不到主題清單', value: () => '重試', run: () => openStore() }]
+    : !store.length ? [{ label: '目前沒有可下載的主題', run: () => {} }]
+    : store.map(t => ({ label: t.name, value: () => storeValue(t), run: () => storeRun(t) }))),
+];
+if (IS_APP) window.petAPI.onThemeProgress(p => { if (p.progress == null) return; storeProg[p.id] = p.progress; if (view === 'store' && settingsEl.classList.contains('open')) renderMenu(); });
+
 const settingsEl = document.getElementById('settings'), menuEl = document.getElementById('menu');
 // while hidden the menu offers just the way back
 const STEALTH_MENU = [{ label: '取消隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } }];
 function renderMenu() {
-  menuEl.replaceChildren(...(boss.hidden ? STEALTH_MENU : SETTINGS).filter(s => !s.show || s.show()).map(s => {
+  menuEl.replaceChildren(...(boss.hidden ? STEALTH_MENU : view === 'store' ? storeItems() : SETTINGS).filter(s => !s.show || s.show()).map(s => {
     if (s.sep) { const d = document.createElement('div'); d.className = 'sep'; return d; }
     const b = document.createElement('button');
     b.className = 'item'; b.setAttribute('role', 'menuitem');
@@ -162,7 +194,7 @@ function renderMenu() {
   }));
 }
 function setMenu(open) {
-  if (open) { bossMsg = ''; hooksMsg.claude = hooksMsg.codex = ''; loadStyles(); refreshHooks(); } else if (capturing) endBossCapture('');
+  if (open) { bossMsg = ''; hooksMsg.claude = hooksMsg.codex = ''; loadStyles(); refreshHooks(); } else { view = 'main'; if (capturing) endBossCapture(''); }
   settingsEl.classList.toggle('open', open); if (open) renderMenu();
 }
 

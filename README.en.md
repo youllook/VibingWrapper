@@ -98,7 +98,7 @@ The UI is in Traditional Chinese.
 3. Click the gear (top right) → "Claude 連動" to add the hooks to `~/.claude/settings.json` (your file is backed up once as `settings.json.vibing-backup`; existing settings are kept).
 4. Restart Claude Code and start working: the sky follows along.
 
-No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled. To just try the wallpapers without Claude Code, take the `-lite` zip (weather, weather + sea, 海月).
+No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled. To just try the wallpapers without Claude Code, take the `-lite` zip: it ships only 基礎版 (basic: misty grey hills with the live state of every session in the middle and a debug panel), and the other wallpapers install from the gear menu → 下載主題 (download themes).
 
 **Uninstall**: gear → "解除安裝", or Windows Settings → Installed apps → VibingWrapper → Uninstall (it is listed there after the first run). It removes our hooks from Claude Code (other settings stay), turns off start-with-Windows, and after the app closes deletes `%APPDATA%ibing-wrapper` and the program files.
 

@@ -97,7 +97,7 @@ Claude 在想事情，天空轉陰；開始跑工具，就下起雷雨；做完�
 3. 點右上角齒輪 →「Claude 連動」→ 點一下，自動把 hook 加進 `~/.claude/settings.json`（原檔會先備份成 `settings.json.vibing-backup`，已有的設定都會保留）。
 4. 重開 Claude Code，開始工作，天空就會跟著變。
 
-不需要 Node.js，七種桌布（含 Godot 做的平交道）都包在裡面。只想試看看桌布、不用 Claude Code 的話，可以下載 `-lite` 精簡版（天氣、天氣＋海、海月三種）。
+不需要 Node.js，七種桌布（含 Godot 做的平交道）都包在裡面。只想試看看桌布、不用 Claude Code 的話，可以下載 `-lite` 精簡版：只帶「基礎版」（低飽和山霧＋正中間即時顯示每個 session 的狀態，右下有除錯資訊），其他桌布從齒輪 →「下載主題」裝。
 
 **解除安裝**：齒輪 →「解除安裝」，或 Windows 設定 →「已安裝的應用程式」→ VibingWrapper → 解除安裝（第一次執行後就會出現在那裡）。會移除 Claude Code 裡我們的 hook（其他設定不動）、關掉開機自動啟動，程式關閉後刪掉 `%APPDATA%ibing-wrapper` 和程式檔案。
 

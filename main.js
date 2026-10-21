@@ -13,6 +13,10 @@ const codexHooks = require('./tools/codex-hooks');     // 一鍵安裝 Codex hoo
 const AGENT_HOOKS = { claude: claudeHooks, codex: codexHooks };
 const agentHooks = a => AGENT_HOOKS[a] || claudeHooks;
 const uninstall = require('./tools/uninstall');         // 解除安裝: hooks out, settings + program files deleted after exit
+const themeStore = require('./tools/theme-store');     // 下載主題: theme packs from GitHub Releases → userData/themes/
+
+// a dev copy can run beside the installed app: its own profile (and VIBINGWRAPPER_PORT for the bridge)
+if (process.env.VIBINGWRAPPER_PROFILE) app.setPath('userData', process.env.VIBINGWRAPPER_PROFILE);
 
 // a second copy only hands its arguments to the first (second-instance below) and leaves; it must not run
 // whenReady itself, or --uninstall would ask twice (seen 2026-10-16)
@@ -99,6 +103,14 @@ ipcMain.handle('pet:set-wallpaper-style', (_e, style) => {
   settings.wallpaperStyle = style; saveSettings();
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   return style;
+});
+// 下載主題: the catalog merged with what is installed; progress is pushed as pet:theme-progress
+ipcMain.handle('pet:theme-catalog', () => themeStore.list(claudeBridge.themes()).catch(e => ({ error: String(e.message || e) })));
+ipcMain.handle('pet:install-theme', async (_e, id) => themeStore.install(String(id), (tid, p) => alive() && win.webContents.send('pet:theme-progress', { id: tid, progress: p })));
+ipcMain.handle('pet:remove-theme', (_e, id) => {
+  const r = themeStore.remove(String(id));
+  if (r.ok && settings.wallpaperStyle === id && !claudeBridge.themeUrl(id)) wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
+  return r;
 });
 ipcMain.handle('pet:time-mode', () => timeMode());
 ipcMain.handle('pet:set-time-mode', (_e, mode) => {
@@ -195,7 +207,8 @@ app.whenReady().then(() => {
   createWindow();
   makeTray();
   capture.init(buildTrayMenu);
-  claudeBridge.start({ logDir: app.getPath('userData'), stateDir: app.getPath('userData'), onState: s => alive() && win.webContents.send('pet:ai-state', s) });   // → %APPDATA%\vibing-wrapper\weather-log.jsonl
+  claudeBridge.start({ logDir: app.getPath('userData'), stateDir: app.getPath('userData'), themeDirs: [themeStore.init(app.getPath('userData'))],
+    version: app.getVersion(), onState: s => alive() && win.webContents.send('pet:ai-state', s) });   // → %APPDATA%\vibing-wrapper\weather-log.jsonl
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   desktopIcons.init(buildTrayMenu);
   // 老闆鍵: everything goes except the HUD, which shrinks to its gear (the way back); the tray icon goes too
