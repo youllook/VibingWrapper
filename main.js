@@ -1,6 +1,6 @@
 // Desktop shell: a small transparent, frameless HUD in the top-right corner of the primary screen.
 // Only the HUD strip and its open menu take mouse input; everything else clicks through.
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, globalShortcut, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const capture = require('./tools/capture');           // Ctrl+Alt+S region capture (PicPick replacement)
@@ -15,6 +15,7 @@ const AGENT_HOOKS = { claude: claudeHooks, codex: codexHooks };
 const agentHooks = a => AGENT_HOOKS[a] || claudeHooks;
 const uninstall = require('./tools/uninstall');         // 解除安裝: hooks out, settings + program files deleted after exit
 const themeStore = require('./tools/theme-store');     // 下載主題: theme packs from GitHub Releases → userData/themes/
+const debugLog = require('./tools/debug-log');         // 除錯紀錄 → userData/debug.log (send this file when it won't open)
 
 // a dev copy can run beside the installed app: its own profile (and VIBINGWRAPPER_PORT for the bridge)
 if (process.env.VIBINGWRAPPER_PROFILE) app.setPath('userData', process.env.VIBINGWRAPPER_PROFILE);
@@ -22,7 +23,12 @@ if (process.env.VIBINGWRAPPER_PROFILE) app.setPath('userData', process.env.VIBIN
 // a second copy only hands its arguments to the first (second-instance below) and leaves; it must not run
 // whenReady itself, or --uninstall would ask twice (seen 2026-10-16)
 const primary = app.requestSingleInstanceLock();
-if (!primary) app.quit();
+debugLog.init(app.getPath('userData'), primary);
+if (!primary) {
+  // the common "double-click does nothing": a copy is already running (maybe stuck, with no tray icon)
+  debugLog.log('quit', 'another copy is already running → this one exits', process.argv.slice(1).join(' '));
+  app.quit();
+} else debugLog.watch(app);
 // 2026-10-01: render on the high-performance GPU (RTX 2060 SUPER). Chromium picked the Intel UHD 630 that
 // drives the screen, and the ocean wallpaper alone kept it ~47% busy.
 app.commandLine.appendSwitch('force_high_performance_gpu');
@@ -242,6 +248,7 @@ function buildTrayMenu() {
     { type: 'separator' },
     { label: '下載主題…', click: () => openStore() },
     { type: 'separator' },
+    { label: '開啟除錯紀錄', click: () => { const f = debugLog.file(); if (f) shell.showItemInFolder(f); } },
     { label: '開發者工具', click: () => win.webContents.openDevTools({ mode: 'detach' }) },
     { label: '重新載入', click: () => win.reload() },
     { type: 'separator' },
@@ -253,6 +260,7 @@ function buildTrayMenu() {
 
 app.whenReady().then(() => {
   if (!primary) return;
+  debugLog.startup(app, screen);
   // no application menu: its default accelerators (Ctrl+R reload, Ctrl+Shift+I, Ctrl+W …) hit whichever of our
   // windows has focus — Ctrl+R reloaded the HUD mid-hover and left it stuck, grey gear (2026-10-21)
   Menu.setApplicationMenu(null);

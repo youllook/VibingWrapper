@@ -1,6 +1,6 @@
 {
   "name": "vibing-wrapper",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "VibingWrapper：跟著 Claude Code 工作節奏變天的動態桌布（天空、海、船隊）＋桌面小工具",
   "main": "main.js",
