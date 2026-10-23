@@ -80,7 +80,7 @@ it shows up in the gear menu's wallpaper list, no changes to the app needed. The
 | Feature | Shortcut | What it does |
 |---|---|---|
 | Hide desktop icons (收桌面) | Ctrl+Alt+D | Hides / shows every icon on the desktop: folders, shortcuts and files alike (one feature). Press again to bring them back |
-| Boss key (老闆鍵) | Ctrl+Alt+B (**changeable in the gear menu**) | Wallpaper and tray icon vanish, the HUD shrinks to a faint gear, and icons hidden by Ctrl+Alt+D come back, so it looks like an ordinary work desktop. **Press the same shortcut again to restore** — no need to click the gear (gear → 取消隱藏 also works) |
+| Boss key (還原桌面) | Ctrl+Alt+B (**changeable in the gear menu**) | Wallpaper and tray icon vanish, the HUD shrinks to a faint gear, and icons hidden by Ctrl+Alt+D come back, so it looks like an ordinary work desktop. **Press the same shortcut again to restore** — no need to click the gear (gear → 取消隱藏 also works) |
 | Region screenshot (範圍截圖) | Ctrl+Alt+S | Drag a box: PNG to the clipboard plus a copy in `Pictures\Saved Pictures` (`截圖_date_time.png`). Esc or right-click cancels |
 
 These are **global shortcuts**: while VibingWrapper runs it takes them from every app, so they all start with Ctrl+Alt and leave everyday keys like Ctrl+R (reload) and Ctrl+Q alone.
@@ -90,6 +90,21 @@ Only the boss key can be changed in the gear menu (gear → 變更快捷鍵, the
 The UI is in Traditional Chinese.
 
 ## Install
+
+### Let an AI install it (recommended)
+
+Paste this to Claude Code or Codex. It reviews the code for security concerns first and installs only once you agree:
+
+```text
+Install VibingWrapper (https://github.com/youllook/VibingWrapper) for me: a Windows live wallpaper that follows Claude Code / Codex.
+1. Clone it into a folder I choose (ask me if I haven't said). Before installing, do a security review and sum it up in a few sentences:
+   - which local port it opens, what data it receives, whether it talks to any outside server
+   - which files it writes (especially the hooks it adds to ~/.claude/settings.json and ~/.codex/hooks.json)
+   - anything suspicious in package.json dependencies or install scripts
+2. Once I agree, run npm install and npm start, and npm run shortcut for a desktop shortcut.
+3. Ask me to click the gear (top right) → "Claude 連動" (and "Codex 連動" if I use Codex) to add the hooks, then tell me which sessions to restart.
+Note: this only works with Claude Code (CLI, or the Code tab in Claude Desktop) and Codex; plain Claude Desktop chats have no hooks, so the sky won't react.
+```
 
 ### Quick try (no install)
 
