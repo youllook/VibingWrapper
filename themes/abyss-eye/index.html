@@ -418,11 +418,11 @@ function eyeMaterial() {
   });
 }
 /* ------------------------------ the skin ------------------------------
- * The head (Tripo, from the concept art's eye crop) already has sculpted socket folds and scars in its mesh and
- * texture, so only cheap extras are injected into its standard material: a tint from Tripo's purple toward oxblood
- * with world-space mottling, blotchy roughness, a faint concentric fold sheen around the eye (a normal ripple by the
- * distance from the eye centre in the camera plane — the camera never rotates, so world xy = view xy), and a red
- * glow of light passing under the skin near the lure (fake subsurface). Front faces only (Tripo exports double-sided).
+ * The head (Tripo, from the concept art's eye crop) has sculpted socket folds and scars in its mesh, and its maps were
+ * re-baked in Blender (E:\tmp\colossal-squid\skin\bake_skin.py): warm ochre with pale blotches and speckles, and a
+ * normal map with concentric folds round the eye, fine crinkles and pores. So only cheap extras are injected into
+ * its standard material: blotchy roughness, a red glow of light passing under the skin near the lure (fake
+ * subsurface) and the photophores' bleed. Front faces only (Tripo exports double-sided).
  * All of it is lit only by the lure, so it comes out of the dark as the lure brightens. */
 const skinU = { uEye: { value: new THREE.Vector3() }, uEyeR: { value: 0.115 }, uLure: { value: new THREE.Vector3() }, uL: { value: 0 },
                 uPh: { value: Array.from({ length: 7 }, () => new THREE.Vector3(0, 0, 99)) }, uPhK: { value: 0 } };
@@ -445,22 +445,9 @@ function skinMaterial(mat) {
         varying vec3 vWPos; uniform vec3 uEye, uLure, uPh[7]; uniform float uEyeR, uL, uPhK;
         ${NOISE_GLSL}
 `)
-      .replace('#include <map_fragment>', `#include <map_fragment>
-        // the Tripo head carries its own sculpted folds and scars; only a cheap tint, mottling and fold sheen are added
-        vec2 rel = (vWPos.xy - uEye.xy) / uEyeR; float dEye = length(rel);
-        float mott = n3(vWPos * 9.0);
-        float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        // Tripo's texture is magenta: drop its hue, re-tint to dark ochre-red, let the pale blotches stay greyish-pale
-        diffuseColor.rgb = mix(lum * vec3(0.55, 0.22, 0.2) * 3.2, vec3(lum * 0.8), smoothstep(0.4, 0.7, lum) * 0.6) * (0.8 + 0.4 * mott);`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        float mott = n3(vWPos * 9.0);
         roughnessFactor = clamp(roughnessFactor * (0.5 + 1.0 * mott), 0.28, 1.0);   // only the mottling's lows get wet glints near the lure`)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        {
-          float k = 7.0, band = smoothstep(1.02, 1.25, dEye) * smoothstep(3.6, 1.7, dEye);
-          float slope = cos(dEye * k + mott * 2.0) * band * 0.45;
-          vec2 dir = dEye > 1e-3 ? rel / dEye : vec2(0.0);
-          normal = normalize(normal + vec3(dir * slope, 0.0));
-        }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         { float d = length(vWPos - uLure); totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.25, 0.2) * uL / (d * d) * 0.05; }
         // the photophores glow from inside the flesh: a cyan Σ1/d² bleed around each, so they grow out of the skin

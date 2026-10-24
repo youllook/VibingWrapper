@@ -59,19 +59,19 @@
 - **角膜**：銳利高光之外再加一片寬的柔反光（0.5）。
 - **眼窩外不畫**：眼球有一部分露在眼窩外，掠射 fresnel 會畫出一圈灰月牙；反光與虹膜都依「離眼窩軸多遠」用 smoothstep 淡掉。
 
-## 皮膚（`skinMaterial()`，注入 Tripo 的標準材質）
+## 皮膚（烘焙貼圖＋`skinMaterial()`）
 
-頭模本身已有雕出的眼窩肉環與疤痕貼圖，shader 只補便宜的東西（下列疤痕與毛孔已拿掉）；材質改成單面（Tripo 導出是雙面，背面會多一整層全螢幕成本）。
+頭模本身有雕出的眼窩肉環與疤痕；**貼圖在 Blender 重烤過**（2026-10-25，`E:	mp\colossal-squid\skinake_skin.py`，再用同資料夾的 `repack_glb.py` 把貼圖轉成 JPEG）。Tripo 的 UV 是碎塊，所以所有花紋都在物件空間（眼心為原點、眼窩軸為軸）算好再烤回 UV，沒有接縫：
 
+- **底色 2k**：保留 Tripo 底色的明暗（雕塑陰影、疤、眼窩環），換成暗紅褐 → 暖赭 → 灰白的色階，加斑駁、灰白斑塊與細點；皺褶凹處偏暗。
+- **法線 2k**：Tripo 原本的法線＋繞眼窩的波浪皺褶（波長約 3 cm、用噪聲扭歪，只在眼周 0.12–0.38 m）、細皺紋、毛孔。
+- 要重烤：`blender -b --factory-startup -P bake_skin.py -- <原始頭模.glb> <輸出.glb> [預覽資料夾]`，原始頭模在 `E:	mp\colossal-squid\socket\outbyss_head.glb`（一定要從原始的烤，不要從已烤過的再烤）；然後 `python repack_glb.py <輸出.glb> <最終.glb> baked_base=90 baked_normal=95`。
 
-- 底色：Tripo 貼圖是洋紅色，先去飽和，再乘暗赭 (0.55, 0.22, 0.2)；亮的斑塊保留一點灰白（像目標圖的淡斑）。
-- 粗糙度下限 0.28，只有斑駁的低谷會變光滑：燈旁有幾點濕閃。（之前頭頂的藍色塑膠光其實是輪廓光造成的，已把輪廓光移到更後方、調弱。）
+shader 只補便宜的東西；材質改成單面（Tripo 導出是雙面，背面會多一整層全螢幕成本）：
+
+- 粗糙度斑駁，下限 0.28：只有斑駁的低谷會變光滑，燈旁有幾點濕閃。（頭頂的藍色塑膠光是輪廓光造成的，輪廓光已移到更後方、調弱。）
 - 發光器長在肉裡：7 顆發光器位置傳進皮膚 shader，周圍做 Σ1/d² 的青色暈染。
-- 眼周同心皺褶：依「到眼心距離」做放射狀正弦，擾動法線。
-- 三個圓形舊疤（抹香鯨的吸盤痕）。
-- 粗糙度斑駁、細毛孔法線。
 - 靠近餌燈處有偽次表面紅光。
-- 噪聲只用兩層，因為特寫時皮膚佔滿整個畫面，是主要的成本。
 
 ## 光與空氣
 
@@ -88,15 +88,15 @@
 ## 技術
 
 - three.js r170，放在 `vendor/`（MIT，`vendor/LICENSE-three.txt`）。
-- 模型：`assets/abyss_head.glb`（魷魚頭，約 1.1 m、18,941 三角、2k 貼圖；`eye_L` 眼球、`photophore_L_01..07`）、`assets/anglerfish.glb`（0.185 m）。都是 Tripo 專業版產出再經 Blender 腳本處理。整隻魷魚 `colossal_squid.glb` 已從主題移除（留在素材庫）。
+- 模型：`assets/abyss_head.glb`（魷魚頭，約 1.1 m、18,941 三角、2k 貼圖（Blender 重烤，5.5 MB）；`eye_L` 眼球、`photophore_L_01..07`）、`assets/anglerfish.glb`（0.185 m）。都是 Tripo 專業版產出再經 Blender 腳本處理。整隻魷魚 `colossal_squid.glb` 已從主題移除（留在素材庫）。
 - 30 fps 上限、像素預算 1920×1080 的一半。
-- 實測每格約 6.3–7.4 ms（1357×763，內建瀏覽器，`theme.frame()` 連跑 30 格、前後 `readPixels` 同步）。
+- 實測每格約 4–4.5 ms（1357×763，內建瀏覽器，`theme.frame()` 連跑 30 格、前後 `readPixels` 同步）。
 - 測試網址參數：`?t=55` 固定在演出第 55 秒、`?state=waiting` 固定狀態（不讀 state.json）。
 - `window.theme`：`requestState`、`applyState`、`setTime(秒|null)`、`setSessions([...])`、`frame()`、`place()`、`CONFIG`、`squid`、`fish`、`renderer`。
 
 ## 已知問題 / 下一步
 
 - 安康魚在最暗時幾乎是全黑剪影（目標圖裡也是逆光）。
-- 皺褶與疤痕是程式畫的；要更像目標圖，可以照 Fable 的素材建議，在 Blender 烘一張眼周細節法線，或用 AI 生成 2k 皮膚貼圖。
+- 皮膚貼圖是程式花紋烤出來的；要再更像目標圖，可以用 AI 生成的 2k 皮膚貼圖當底，再疊同一套皺褶法線。
 - 沒有用 bloom 後製：光暈靠 sprite，省下一整個全螢幕 pass。
 - 2026-10-25 第一版已在 VibingWrapper 本體驗過（裝在 `%APPDATA%\vibing-wrapper\themes`）。重做版要重新安裝後再看。
