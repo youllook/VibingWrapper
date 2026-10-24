@@ -1,0 +1,502 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>十六位像素熱帶丘陵・Claude</title>
+<style>html,body{margin:0;height:100%;background:#1975fc;overflow:hidden}canvas{display:block;width:100%;height:100%;image-rendering:pixelated}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+/* 十六位像素熱帶丘陵・Claude（2026-10-21）
+   Real low-res pixel art: everything is drawn into a 480×270 buffer of palette indices and blown up with
+   nearest-neighbour. Organic pieces (cliffs with falls, palms, far range, islands, bushes, clouds) are
+   Codex-generated sprites snapped to the logical grid and to palette.json by studio/blender/pixel_key.py;
+   sky, lagoon, checkered hills and the sunflowers are drawn here.
+   Animation is palette work, as on 16-bit hardware: water glints and waterfalls are palette cycling;
+   the states (overcast / storm / evening / night / lightning) are palette transforms, not grey overlays.
+   Lighting (2026-10-23): each sprite has a normal map from Sprite Fusion's Sprite Normals (normals/<name>_n.png).
+   A pixel turned to the sun swaps to a lit copy of its colour, one turned away to a shaded copy; the sun walks
+   across the sky with the clock. At night every session's sunflower is a warm lamp lighting its neighbours. */
+'use strict';
+const cv = document.getElementById('c'), cx = cv.getContext('2d');
+const Q = new URLSearchParams(location.search);
+const LW = 480, LH = 270, T_ = 255;                 // T_ = transparent index
+
+const STATES = {   // desat · dark · warm (evening) · clouds (extra) · rain · rainbow · wind
+  clear:    { desat: 0.00, dark: 0.00, warm: 0.00, clouds: 0.0, rain: 0, rainbow: 0, wind: 0.3 },
+  overcast: { desat: 0.55, dark: 0.12, warm: 0.00, clouds: 1.0, rain: 0, rainbow: 0, wind: 0.5 },
+  storm:    { desat: 0.70, dark: 0.35, warm: 0.00, clouds: 1.0, rain: 1, rainbow: 0, wind: 1.0 },
+  clearing: { desat: 0.00, dark: -0.04, warm: 0.00, clouds: 0.3, rain: 0, rainbow: 1, wind: 0.2 },
+  waiting:  { desat: 0.10, dark: 0.05, warm: 1.00, clouds: 0.3, rain: 0, rainbow: 0, wind: 0.2 },
+};
+const SESSION = { clear: 'sway', overcast: 'bow', storm: 'spin', clearing: 'sparkle', waiting: 'face' };
+const CONFIG = { polling: true, clockHours: Q.has('hour') ? +Q.get('hour') : Q.has('day') ? 10.5 : Q.has('night') ? 22 : null, fps: 30 };
+const PARAMS = { ...STATES.clear, flash: 0, night: 0 };
+let target = { ...STATES.clear }, sessions = [null, null, null, null, null];
+const FLOWERS = [{ x: 300 }, { x: 328 }, { x: 356 }, { x: 384 }, { x: 412 }];   // stem x; they stand on the hill top
+const FLOWER_Y = 183;
+const flowerLv = FLOWERS.map(() => ({ on: 0, s: null, rot: 0 }));
+
+// ---------------------------------------------------------------- palette
+let BASE = [];                       // [r,g,b] for the 48 fitted colours
+const PAL = new Uint8Array(512 * 3); // current frame palette
+const LIT0 = 256, SH0 = 304, DSH0 = 352, LAMP0 = 400, LAMPS0 = 448;   // lit / shaded / lamp-lit copies of the 48 fitted colours
+let IDX = new Map();                 // '#rrggbb' → index
+const near = hex => { const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); let b = 0, bd = 1e9;
+  BASE.forEach((p, i) => { const d = (p[0] - c[0]) ** 2 * 0.3 + (p[1] - c[1]) ** 2 * 0.59 + (p[2] - c[2]) ** 2 * 0.11; if (d < bd) { bd = d; b = i; } }); return b; };
+// cycling ranges (indices above the fitted palette)
+const WATER0 = 64, FALL0 = 128, FOAM0 = 176;        // water: band*8+phase · fall: level*8+phase · foam: phase
+const GLOW_FLY = 200, GLOW_STAR = 201;              // fireflies and stars: untouched by the night palette
+let WATER_BANDS = [], WATER_HI = [], FALL_LEVELS = [];
+
+function tf(c, out, o) {             // the state palette transform
+  let [r, g, b] = c;
+  const l = 0.299 * r + 0.587 * g + 0.114 * b;
+  const ds = PARAMS.desat; r = l + (r - l) * (1 - ds); g = l + (g - l) * (1 - ds); b = l + (b - l) * (1 - ds);
+  const w = PARAMS.warm;             // evening: warm light, pink-orange sky, deeper shadows
+  r = r * (1 + 0.18 * w) + 18 * w; g = g * (1 - 0.06 * w) + 4 * w; b = b * (1 - 0.30 * w);
+  const dk = PARAMS.dark; r *= 1 - dk; g *= 1 - dk; b *= 1 - dk * 0.8;
+  const n = PARAMS.night;            // moonlit: towards deep indigo, keeps a little of the hue
+  r = r * (1 - 0.8 * n) + (l * 0.22 + 10) * 0.8 * n; g = g * (1 - 0.8 * n) + (l * 0.32 + 18) * 0.8 * n; b = b * (1 - 0.8 * n) + (l * 0.55 + 56) * 0.8 * n;
+  const f = PARAMS.flash; r += (255 - r) * f; g += (255 - g) * f; b += (255 - b) * f;
+  out[o] = r < 0 ? 0 : r > 255 ? 255 : r; out[o + 1] = g < 0 ? 0 : g > 255 ? 255 : g; out[o + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+}
+function buildPalette(t) {
+  for (let i = 0; i < BASE.length; i++) tf(BASE[i], PAL, i * 3);
+  const ph = Math.floor(t * 7) & 7;                       // water glints: a dash lights up on its phase
+  WATER_BANDS.forEach((bi, b) => { for (let p = 0; p < 8; p++) {
+    const k = (p - ph) & 7; const c = k === 0 ? WATER_HI[b] : k === 1 ? WATER_BANDS[Math.max(0, b - 1)] : bi;
+    tf(BASE[c], PAL, (WATER0 + b * 8 + p) * 3); } });
+  const fp = Math.floor(t * 14) & 7, WAVE = [0, 1, 1, 0, 0, -1, -1, 0];   // falls: light bands sliding down
+  FALL_LEVELS.forEach((_, lv) => { for (let p = 0; p < 8; p++) {
+    const k = Math.max(0, Math.min(FALL_LEVELS.length - 1, lv + WAVE[(p - fp) & 7])); tf(BASE[FALL_LEVELS[k]], PAL, (FALL0 + lv * 8 + p) * 3); } });
+  const sp = Math.floor(t * 10);
+  for (let p = 0; p < 8; p++) tf(BASE[((p + sp) % 3) ? FALL_LEVELS[FALL_LEVELS.length - 1] : FALL_LEVELS[FALL_LEVELS.length - 2]], PAL, (FOAM0 + p) * 3);
+  const n = PARAMS.night;
+  for (let i = 0; i < BASE.length; i++) { const [r, g, b] = BASE[i];
+    tf([r * 1.10 + 12, g * 1.06 + 8, b * 0.96], PAL, (LIT0 + i) * 3);       // facing the sun: warmer, brighter
+    tf([r * 0.74, g * 0.76, b * 0.88], PAL, (SH0 + i) * 3);                 // turned away: cooler
+    tf([r * 0.54, g * 0.56, b * 0.74], PAL, (DSH0 + i) * 3);
+    PARAMS.night = n * 0.15; tf([r * 1.25 + 30, g + 12, b * 0.6], PAL, (LAMP0 + i) * 3);   // flower lamps: the night palette barely touches them
+    PARAMS.night = n * 0.55; tf([r * 1.1 + 14, g * 0.92 + 4, b * 0.7], PAL, (LAMPS0 + i) * 3);
+    PARAMS.night = n; }
+  tf([0, 0, 0], PAL, T_ * 3);
+  const fl = PARAMS.flash; PAL.set([200 + 55 * fl, 255, 90 + 165 * fl], GLOW_FLY * 3); PAL.set([235, 240, 255], GLOW_STAR * 3);
+}
+
+// ---------------------------------------------------------------- helpers
+const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => (v + 0.5) / 16);
+const bayer = (x, y) => BAYER[(y & 3) * 4 + (x & 3)];
+function blit(dst, spr, x0, y0, flip = false, fn = null) {   // spr: {w,h,px: Uint8Array of indices}
+  for (let y = 0; y < spr.h; y++) { const Y = y0 + y; if (Y < 0 || Y >= LH) continue;
+    for (let x = 0; x < spr.w; x++) { const X = x0 + x; if (X < 0 || X >= LW) continue;
+      const v = spr.px[y * spr.w + (flip ? spr.w - 1 - x : x)]; if (v === T_) continue;
+      if (fn && !fn(X, Y)) continue; dst[Y * LW + X] = v; } } }
+const loadImg = src => new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
+function toSprite(im) {
+  const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+  const g = c.getContext('2d'); g.drawImage(im, 0, 0); const d = g.getImageData(0, 0, im.width, im.height).data;
+  const px = new Uint8Array(im.width * im.height);
+  for (let i = 0; i < px.length; i++) { if (d[i * 4 + 3] < 128) { px[i] = T_; continue; }
+    const hex = '#' + [0, 1, 2].map(k => d[i * 4 + k].toString(16).padStart(2, '0')).join('');
+    px[i] = IDX.has(hex) ? IDX.get(hex) : near(hex); }
+  let sx = 0, n = 0;                                         // foot: centre of the bottom rows
+  for (let y = im.height - 3; y < im.height; y++) for (let x = 0; x < im.width; x++) if (px[y * im.width + x] !== T_) { sx += x; n++; }
+  return { w: im.width, h: im.height, px, foot: n ? sx / n : im.width / 2 };
+}
+
+function toNormals(im) {     // Sprite Normals output (OpenGL, +G up) -> [nx, ny] per pixel, x100
+  const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+  const g = c.getContext('2d'); g.drawImage(im, 0, 0); const d = g.getImageData(0, 0, im.width, im.height).data;
+  const n = new Int8Array(im.width * im.height * 2);
+  for (let i = 0; i < im.width * im.height; i++) { n[i * 2] = Math.round((d[i * 4] / 127.5 - 1) * 100); n[i * 2 + 1] = Math.round((d[i * 4 + 1] / 127.5 - 1) * 100); }
+  return n;
+}
+const SUN = { x: -0.4, y: 0.8, z: 0.45, k: 1, px: 42, py: 26 };
+function shade(v, nx, ny, dx, dy) {   // colour index -> its lit / shaded copy by how far the normal turns towards the sun
+  if (v >= BASE.length || SUN.k < 0.02) return v;
+  const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+  const d = (nx * SUN.x + ny * SUN.y + nz * SUN.z - SUN.z) * SUN.k + (bayer(dx, dy) - 0.5) * 0.1;
+  return d > 0.2 ? LIT0 + v : d < -0.42 ? DSH0 + v : d < -0.18 ? SH0 + v : v;
+}
+
+// ---------------------------------------------------------------- scene
+// layout, measured off the target at 480×270: [sprite, x of its foot (bottom-row centre), bottom y, flip, haze]
+const BACK_SPRITES = [       // in front of the sky and clouds, behind the hills
+  ['far_range', 196, 151, false, 0.22],
+  ['arch_isle', 40, 152, false, 0.12],
+  ['islet_b', 118, 153, false, 0.10], ['islet_a', 228, 161, false, 0], ['islet_a_s', 268, 151, true, 0.15],
+  ['cliffs_falls', 386, 142],
+  ['rock_near', 168, 241, false, 0], ['rock_near_s', 222, 240, true, 0],
+];
+const MID_SPRITES = [        // on the hills, behind the flowers
+  ['bush_a_s', 64, 211], ['palm_small', 44, 212],
+  ['bush_a', 276, 176], ['palm_tall', 277, 177],
+  ['palm_short', 484, 189, true], ['palm_tall_xl', 452, 187],
+  ['bush_b', 120, 234],
+];
+const FRONT_SPRITES = [      // in front of the flowers
+  ['bush_a', 446, 188], ['bush_a', 222, 247, true], ['bush_a_s', 14, 271], ['bush_b', 330, 271, true],
+];
+const CLOUDS = [             // [sprite, x, top y, px per second, needs extra clouds (overcast)]
+  ['cloud_mid', 40, 84, 0.8, 0], ['cloud_mid', 110, 88, 0.8, 0], ['cloud_mid', 180, 86, 0.8, 0], ['cloud_mid', 250, 90, 0.8, 0],   // bank on the horizon
+  ['cloud_xl', 150, 30, 1.2, 0], ['cloud_big', -10, 58, 1.5, 0], ['cloud_mid', 62, 70, 1.4, 0],
+  ['cloud_small', 100, 36, 2.2, 0], ['cloud_small', 330, 16, 1.9, 0], ['cloud_small', 230, 22, 2.0, 0], ['cloud_small', 20, 40, 2.1, 0],
+  ['cloud_big', 330, 10, 1.0, 0.4], ['cloud_mid', 250, 48, 1.3, 0.2], ['cloud_big', 40, 20, 1.1, 0.7], ['cloud_mid', 410, 60, 1.5, 0.5],
+];
+const SPR = {};
+let SKY_ROWS = [], BACK = null, HORIZON = 149, LAGOON = 139;
+const HILLS = [              // drawn into BACK after the back sprites, in order (measured off the target at 480×270)
+  { x0: -6, x1: 28, top: 160, face: false, cell: 12 },                       // left column
+  { x0: -6, x1: 95, top: 210, round: 4 },                                    // left ledge
+  { x0: 70, x1: 186, top: 232, round: 5, face: true },                       // middle ledge
+  { x0: 243, x1: 284, top: 174, round: 3, face: true },                      // big hill: front lip
+  { x0: 272, x1: 486, top: 182, openRight: true },                           // big hill: flower terrace
+  { x0: 140, x1: 330, top: 243, round: 8, curve: x => ((x - 236) / 92) ** 2 * 20, grass: 12 },   // front mound
+];
+
+function drawHill(buf, h) {  // {x0, x1, top, grass: 9, round: 5, face: bool}
+  const C = (hex) => near(hex);
+  const SOIL_A = C('#c65315'), SOIL_B = C('#79271b'), SOIL_HI = C('#cc7b40'), SOIL_SH = C('#4a1a19'), OUT = C('#290c17');
+  const SOIL_M = C('#a23d15'), SOIL_D = C('#641e17');
+  const G0 = C('#a1ec14'), G1 = C('#5cc923'), G2 = C('#279f23'), G3 = C('#13691f'), G4 = C('#094320');
+  for (let x = h.x0; x <= h.x1; x++) {
+    if (x < 0 || x >= LW) continue;
+    const dl = x - h.x0, dr = h.x1 - x;
+    let top = h.top + (h.curve ? Math.round(h.curve(x)) : 0);
+    const rnd = h.round || 0; const cut = Math.min(dl, dr) < rnd ? Math.round(rnd - Math.sqrt(Math.max(0, rnd * rnd - (rnd - Math.min(dl, dr)) ** 2))) : 0;
+    top += cut;
+    const blade = (x % 3 === 0 ? 2 : x % 3 === 1 ? 1 : 0) - (hash(x, h.top) < 0.25 ? 1 : 0);
+    const gEnd = top + (h.grass ?? 9) + Math.floor(hash(x, 7) * 4) + (x % 4 === 1 ? 2 : 0);   // ragged lower fringe
+    for (let y = Math.max(0, top - blade); y < LH; y++) {
+      let v;
+      const gy = y - top;
+      if (y < gEnd) {
+        v = gy < 0 ? G1 : gy === 0 ? G0 : gy < 3 ? (hash(x, y) < 0.3 ? G0 : G1) : gy < 6 ? G1 : y >= gEnd - 2 ? G3 : G2;
+        if (y === gEnd - 1) v = G4;
+        if (h.face && dl < 2 && gy > 1) v = G3;
+      } else {
+        const sy = y - gEnd;
+        if (sy < 2) v = SOIL_SH;
+        else { const cs = h.cell || 12; const ck = ((Math.floor((x - h.x0) / cs) + Math.floor((y - h.top) / cs)) & 1);
+          const cy = (y - h.top) % cs, cxl = (x - h.x0) % cs, deep = Math.floor((y - h.top) / cs) >= 4;   // whole tile rows darken deeper down
+          v = ck ? (deep ? SOIL_D : SOIL_B) : (deep ? SOIL_M : SOIL_A);
+          if (!ck && cy === 0 && cxl < cs - 1 && !deep) v = SOIL_HI;                  // lit top edge of the light tiles
+          if (!ck && cxl === cs - 1) v = deep ? SOIL_D : SOIL_B;                       // shaded right edge
+          if (ck === 0 && (y - h.top) % cs === cs - 1) v = SOIL_B;
+          if (h.face && dl < 3) v = dl === 0 ? OUT : SOIL_HI;
+          if (h.face && dl >= 3 && dl < 10 && !ck && bayer(x, y) < 0.35) v = SOIL_HI;
+          if (dr === 0 && !h.openRight) v = OUT; }
+      }
+      buf[y * LW + x] = v; if (buf === BACK) BACK_N[(y * LW + x) * 2] = BACK_N[(y * LW + x) * 2 + 1] = 0;
+    }
+    const fh = hash(x, h.top * 3 + 1);                       // a few little flowers poking out of the grass
+    if (fh < 0.07 && dl > 2 && dr > 2 && top > 3) { const fc = near(fh < 0.03 ? '#dae5e8' : fh < 0.05 ? '#e0d763' : '#a95448');
+      buf[(top - 2) * LW + x] = fc; buf[(top - 1) * LW + x] = G2; if (fh < 0.02 && x + 1 < LW) buf[(top - 2) * LW + x + 1] = fc; }
+  }
+}
+
+const waterTop = x => x >= 300 ? LAGOON : x >= 286 ? Math.round(HORIZON + (LAGOON - HORIZON) * (x - 286) / 14) : HORIZON;
+function drawWater(buf) {
+  for (let y = LAGOON; y < LH; y++) {
+    const b = Math.min(WATER_BANDS.length - 1, Math.floor(Math.pow(Math.max(0, y - HORIZON) / (LH - 40 - HORIZON), 0.8) * WATER_BANDS.length));
+    for (let x = 0; x < LW; x++) {
+      const wt = waterTop(x); if (y < wt) continue;
+      let v = WATER_BANDS[Math.max(0, b)];
+      if (y < wt + 2) v = near('#96cbf8');                              // bright far shore line
+      // glint dashes: short horizontal runs, longer and sparser near the camera
+      const len = 2 + Math.max(0, y - HORIZON) / 18, row = Math.floor(x / (len * 3));
+      if ((y & 1) && hash(row, y) < 0.5 && (x % Math.ceil(len * 3)) < len) v = WATER0 + Math.max(0, b) * 8 + (Math.floor(hash(row, y + 99) * 8));
+      buf[y * LW + x] = v; if (buf === BACK) BACK_N[(y * LW + x) * 2] = BACK_N[(y * LW + x) * 2 + 1] = 0;
+    }
+  }
+}
+
+function markFalls(spr) {    // the light blues / whites inside a cliff sprite become cycling waterfall pixels
+  for (let y = 0; y < spr.h; y++) for (let x = 0; x < spr.w; x++) {
+    const v = spr.px[y * spr.w + x]; const lv = FALL_LEVELS.indexOf(v); if (lv < 0) continue;
+    spr.px[y * spr.w + x] = y > spr.h - 8 && lv >= FALL_LEVELS.length - 2 ? FOAM0 + Math.floor(hash(x, y) * 8) : FALL0 + lv * 8 + (y & 7);
+  }
+}
+
+function hazed(n, amt) {     // aerial perspective by palette: every colour → the palette colour nearest to it mixed with haze
+  const s = SPR[n]; if (!s) return null; const H = [150, 190, 240], map = new Map();
+  const px = s.px.map(v => { if (v >= BASE.length) return v; if (!map.has(v)) { const c = BASE[v].map((k, i) => Math.round(k + (H[i] - k) * amt));
+    map.set(v, near('#' + c.map(k => k.toString(16).padStart(2, '0')).join(''))); } return map.get(v); });
+  return { ...s, px };
+}
+let WATER_SET = null;
+const isWater = v => (WATER_SET ||= new Set([...WATER_BANDS, near('#96cbf8')])).has(v) || (v >= WATER0 && v < FALL0);
+function reflectMap() {      // what a colour looks like mirrored in the lagoon: mixed into the water blue, then snapped to the palette
+  const m = new Map(), W = [18, 84, 200];
+  return v => { if (v >= BASE.length) return v; if (!m.has(v)) { const c = BASE[v].map((k, i) => Math.round(k * 0.38 + W[i] * 0.62));
+    m.set(v, near('#' + c.map(k => k.toString(16).padStart(2, '0')).join(''))); } return m.get(v); };
+}
+let MIST_PTS = [];
+let BACK_N = null, BACK_SH = null;   // normals of the baked layer, and the layer shaded for the current sun
+function blitN(s, x0, y0, flip, k) {
+  for (let y = 0; y < s.h; y++) { const Y = y0 + y; if (Y < 0 || Y >= LH) continue;
+    for (let x = 0; x < s.w; x++) { const X = x0 + x; if (X < 0 || X >= LW) continue;
+      const j = y * s.w + (flip ? s.w - 1 - x : x); if (s.px[j] === T_) continue;
+      BACK_N[(Y * LW + X) * 2] = (flip ? -1 : 1) * s.nrm[j * 2] * k; BACK_N[(Y * LW + X) * 2 + 1] = s.nrm[j * 2 + 1] * k; } } }
+function shadeBack() {
+  for (let i = 0; i < BACK.length; i++) { const v = BACK[i];
+    BACK_SH[i] = v === T_ ? T_ : shade(v, BACK_N[i * 2] / 100, BACK_N[i * 2 + 1] / 100, i % LW, (i / LW) | 0); } }
+function bakeLayers() {
+  BACK = new Uint8Array(LW * LH).fill(T_); BACK_N = new Int8Array(LW * LH * 2); BACK_SH = new Uint16Array(LW * LH);
+  drawWater(BACK);
+  const spans = [];
+  const place = (buf, list) => { for (const [n, x, y, f, hz] of list) { const s = hz ? hazed(n, hz) : SPR[n]; if (!s) continue;
+    const x0 = Math.round(x - (f ? s.w - 1 - s.foot : s.foot)); blit(buf, s, x0, y - s.h, f);
+    if (s.nrm) blitN(s, x0, y - s.h, f, 1 - (hz || 0) * 2);       // hazed distance flattens the relief
+    spans.push([n, x0, x0 + s.w - 1, y, s]); } };
+  place(BACK, BACK_SPRITES);
+  for (const h of HILLS) drawHill(BACK, h);
+  for (let y = HORIZON + 1; y < LH; y++) for (let x = 1; x < LW - 1; x++) {   // waves lapping at the hill sides
+    const i = y * LW + x; if (!isWater(BACK[i])) continue;
+    const l = BACK[i - 1], r = BACK[i + 1];
+    if ((!isWater(l) && l !== T_ && l < FALL0) || (!isWater(r) && r !== T_ && r < FALL0)) BACK[i] = FOAM0 + Math.floor(hash(x, y) * 8);
+  }
+  const rm = reflectMap();
+  for (const [n, x0, x1, line, s] of spans) {             // broken mirror rows under every island and the cliffs
+    const depth = Math.min(Math.round(s.h * (n === 'far_range' ? 0.12 : 0.45)), 34);
+    for (let x = Math.max(0, x0); x <= Math.min(LW - 1, x1); x++) for (let k = 1; k <= depth; k++) {
+      const dy = line - 1 + k, sy = line - k; if (dy >= LH || sy < 0) continue;
+      const di = dy * LW + x, sv = BACK[sy * LW + x];
+      if (!isWater(BACK[di]) || sv === T_ || isWater(sv)) continue;
+      if (k % 2 === 0 || bayer(x, dy) < (k / depth - 0.35) * 1.6) continue;   // every other row, thinning out
+      BACK[di] = sv >= FALL0 ? sv : rm(sv);
+    }
+    if (n !== 'far_range') for (let x = Math.max(0, x0); x <= Math.min(LW - 1, x1); x++) {   // foam where the rock meets the water
+      if (BACK[(line - 1) * LW + x] !== T_ && !isWater(BACK[(line - 1) * LW + x]) && line < LH) BACK[line * LW + x] = FOAM0 + Math.floor(hash(x, line) * 8); }
+  }
+  MIST_PTS = [];
+  for (const [n, x0, , line, s] of spans) if (n.startsWith('cliffs'))
+    for (let y = s.h - 6; y < s.h; y++) for (let x = 0; x < s.w; x += 2) { const v = s.px[y * s.w + x]; if (v >= FOAM0 && v < FOAM0 + 8) MIST_PTS.push([x0 + x, line - s.h + y]); }
+  // sky rows: the fitted sky blues, dithered where two bands meet
+  const SKY = ['#1975fc', '#1a77fd', '#1b79fd', '#1e7cfc', '#2180fc', '#2785fb', '#2d8afa', '#2e92f9', '#349af5', '#5abafa', '#96cbf8'].map(near);
+  SKY_ROWS = [];
+  for (let y = 0; y < HORIZON; y++) { const t = Math.pow(y / HORIZON, 2.2) * (SKY.length - 1); SKY_ROWS.push([SKY[Math.floor(t)], SKY[Math.min(SKY.length - 1, Math.floor(t) + 1)], t % 1]); }
+}
+
+// ---------------------------------------------------------------- per frame
+const FB = new Uint16Array(LW * LH);
+const LF = new Uint8Array(LW * LH), NF = new Int8Array(LW * LH * 2);   // lamp-lightable: 1 baked layer, 2 swaying sprite (normal in NF), 3 flat
+let T = 0;
+function drawSky() {
+  for (let y = 0; y < HORIZON; y++) { const [a, b, f] = SKY_ROWS[y];
+    for (let x = 0; x < LW; x++) FB[y * LW + x] = bayer(x, y) < f ? b : a; }
+  for (let y = HORIZON; y < LH; y++) FB.fill(SKY_ROWS[HORIZON - 1][1], y * LW, (y + 1) * LW);
+  // sun (or moon): stepped rings
+  const sx = SUN.px, sy = SUN.py, night = PARAMS.night > 0.5;
+  const R = [[9, '#dae5e8'], [11, night ? '#849cd2' : '#e0d763'], [15, '#96cbf8'], [19, '#5abafa']];
+  for (let y = sy - 19; y <= sy + 19; y++) for (let x = sx - 19; x <= sx + 19; x++) {
+    const d = Math.hypot(x - sx, y - sy); let v = -1;
+    for (let k = R.length - 1; k >= 0; k--) if (d <= R[k][0] && (k < 2 || bayer(x, y) < (k === 2 ? 0.6 : 0.3))) v = k;
+    if (v >= 0 && bayer(x, y) >= PARAMS.clouds * 1.1 - 0.05) FB[y * LW + x] = near(R[v][1]);   // overcast hides the sun
+  }
+  if (PARAMS.night > 0.3) for (let i = 0; i < 70; i++) { const x = Math.floor(hash(i, 1) * LW), y = Math.floor(hash(i, 2) * (HORIZON - 30));
+    if (hash(i, Math.floor(T * 1.5 + i)) < 0.85 && bayer(x, y) < (PARAMS.night - 0.3) * 2.5) FB[y * LW + x] = GLOW_STAR; }
+  if (PARAMS.rainbow > 0.01) {            // stepped rainbow arc behind everything, faded in with ordered dither
+    const RB = ['#a23d15', '#f5951f', '#e0d763', '#5cc923', '#20a5f3', '#65528f'].map(near);
+    for (let y = 30; y < HORIZON; y++) for (let x = 40; x < 300; x++) {
+      const d = Math.hypot(x - 170, (y - 165) * 1.05), k = Math.floor((d - 104) / 3);
+      if (k >= 0 && k < 6 && bayer(x, y) < PARAMS.rainbow * 0.75 * Math.min(1, (HORIZON - y) / 30)) FB[y * LW + x] = RB[k];
+    }
+  }
+  for (const [n, x0, y, sp, need] of CLOUDS) { const s = SPR[n]; if (!s) continue;
+    const span = LW + s.w + 40, x = Math.round(((x0 + s.w + 20 + T * sp * (0.5 + PARAMS.wind)) % span + span) % span) - s.w - 20;
+    if (need > 0 && PARAMS.clouds < 0.02) continue;
+    blit(FB, s, x, y, false, need > 0 ? (X, Y) => bayer(X, Y) < (PARAMS.clouds - need) * 4 : null); }   // extra clouds dissolve in, then solid
+}
+function drawFlower(i) {
+  const F = FLOWERS[i], lv = flowerLv[i], st = SESSION[lv.s] || 'sway';
+  const C = near, GS = C('#279f23'), GD = C('#13691f'), GL = C('#5cc923'), OUT = C('#094320');
+  const P0 = C('#e0d763'), P1 = C('#f5951f'), P2 = C('#4a1a19'), D0 = C('#13691f'), D1 = C('#094320'), DH = C('#228366');
+  const put = (x, y, v) => { if (x >= 0 && x < LW && y >= 0 && y < LH) { FB[y * LW + x] = v; LF[y * LW + x] = 3; } };
+  const base = FLOWER_Y, x0 = F.x;
+  if (lv.on < 0.5) {                       // a closed bud
+    for (let y = base - 9; y < base; y++) put(x0, y, GS);
+    for (const [dx, dy, v] of [[0, -12, GL], [-1, -11, GS], [0, -11, GL], [1, -11, GD], [-1, -10, GD], [0, -10, GS], [1, -10, GD], [-2, -6, GL], [2, -5, GL]]) put(x0 + dx, base + dy, v);
+    return;
+  }
+  const t = T + i * 0.7;
+  let sway = 0, bob = 0, sx = 0.78, drop = 0;
+  if (st === 'sway') sway = Math.round(Math.sin(t * 1.4) * (0.6 + PARAMS.wind));
+  if (st === 'bow') { drop = 4; sway = 2; sx = 0.6; }
+  if (st === 'spin') { lv.rot += 0.35; sway = Math.round(Math.sin(t * 5) * 1); }
+  if (st === 'face') { sx = 1.0; bob = -Math.round(Math.abs(Math.sin(t * 3.2)) * 3); }
+  if (st === 'sparkle') sway = Math.round(Math.sin(t * 1.2) * 0.6);
+  const H = 34, top = base - H + bob;
+  const sw = y => Math.round(sway * (1 - (y - top) / H));
+  for (let y = top + 8; y < base; y++) { put(x0 - 1 + sw(y), y, GD); put(x0 + sw(y), y, GS); put(x0 + 1 + sw(y), y, GL); put(x0 + 2 + sw(y), y, OUT); }
+  for (const [dy, dir] of [[16, -1], [16, 1], [24, -1], [24, 1]]) {             // paired round leaves
+    const y = top + dy, xs = x0 + sw(y) + (dir > 0 ? 3 : -2);
+    for (let yy = -2; yy <= 2; yy++) for (let k = 0; k < 6; k++) { const e = ((k - 2.5) / 3) ** 2 + (yy / 2.2) ** 2; if (e > 1) continue;
+      put(xs + dir * k, y + yy, e > 0.6 ? OUT : yy < 0 ? GL : GS); } }
+  const hx = x0 + 0.5 + sw(top), hy = top + 2 + drop, rot = lv.rot;
+  for (let y = -12; y <= 12; y++) for (let x = -12; x <= 12; x++) {
+    const X = Math.round(hx + x), Y = Math.round(hy + y);
+    const px = x / sx, py = y + (st === 'bow' ? -x * 0.25 : 0), d = Math.hypot(px, py), a = Math.atan2(py, px);
+    const u = (a - rot) / (Math.PI / 6), tri = 1 - Math.abs((((u % 1) + 1) % 1) * 2 - 1);   // 12 pointed petals
+    const petal = 6.4 + 4.4 * tri;
+    if (d <= 5.2) put(X, Y, d > 4.4 ? D1 : (px + py < -2.5 ? DH : ((X + Y) & 1 ? D0 : D1)));
+    else if (d <= petal) put(X, Y, d > petal - 1.1 ? P1 : (px + py < 3 ? P0 : P1));
+    else if (d <= petal + 1.0) put(X, Y, P2);                                 // dark rim: the flowers read against the cliffs
+  }
+  if (st === 'sparkle') for (let k = 0; k < 3; k++) { const ph = (t * 1.3 + k * 0.37) % 1; if (ph > 0.5) continue;
+    const ax = Math.round(hx + Math.cos(k * 2.1 + Math.floor(t * 1.3 + k * 0.37)) * 11), ay = Math.round(hy + Math.sin(k * 2.1 + Math.floor(t * 1.3)) * 9);
+    const W = C('#dae5e8'); put(ax, ay, W); if (ph < 0.3) { put(ax - 1, ay, W); put(ax + 1, ay, W); put(ax, ay - 1, W); put(ax, ay + 1, W); } }
+}
+const SWAY = { palm_small: 1.0, palm_tall: 1.6, palm_tall_xl: 2.2, palm_short: 1.6, bush_a: 0.7, bush_a_s: 0.5, bush_b: 0.4 };
+function drawSwaying(list) { // rows shift by whole pixels, more towards the top: stepped 16-bit wind
+  list.forEach(([n, x, y, f], j) => { const s = SPR[n]; if (!s) return;
+    const x0 = Math.round(x - (f ? s.w - 1 - s.foot : s.foot)), y0 = y - s.h;
+    const amp = (SWAY[n] || 0) * (0.35 + PARAMS.wind * 1.8), ph = T * (1.0 + PARAMS.wind * 1.2) + j * 1.7 + x * 0.05;
+    for (let r = 0; r < s.h; r++) { const Y = y0 + r; if (Y < 0 || Y >= LH) continue;
+      const k = 1 - r / s.h, off = Math.round(amp * k * k * (Math.sin(ph) + 0.35 * Math.sin(ph * 2.3 + 1)));
+      for (let c = 0; c < s.w; c++) { const X = x0 + c + off; if (X < 0 || X >= LW) continue;
+        const j = r * s.w + (f ? s.w - 1 - c : c), v = s.px[j]; if (v === T_) continue;
+        const nx = s.nrm ? (f ? -1 : 1) * s.nrm[j * 2] / 100 : 0, ny = s.nrm ? s.nrm[j * 2 + 1] / 100 : 0, i = Y * LW + X;
+        FB[i] = shade(v, nx, ny, c, r); LF[i] = 2; NF[i * 2] = nx * 100; NF[i * 2 + 1] = ny * 100; } } });
+}
+function drawLamps() {        // night: every session's sunflower lights what faces it, in two warm steps
+  const n = PARAMS.night; if (n < 0.05) return;
+  const L = []; FLOWERS.forEach((F, i) => { const on = flowerLv[i].on * n; if (on > 0.05) L.push([F.x + 0.5, FLOWER_Y - 32, on]); });
+  if (!L.length) return;
+  const R2 = 30 * 30, DZ = 16;
+  const level = (x, y, nx, ny) => {   // 0 dark, 1 soft, 2 strong; the nearest lamp counts fully, the others only a little
+    const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny)); let top = 0, sum = 0;
+    for (const [lx, ly, on] of L) { const dx = lx - x, dy = y - ly, d2 = dx * dx + dy * dy + DZ * DZ; if (d2 > 8000) continue;
+      const c = on * Math.max(0, (nx * dx + ny * dy + nz * DZ) / Math.sqrt(d2)) / (1 + d2 / R2); sum += c; if (c > top) top = c; }
+    const I = top + 0.25 * (sum - top) + (bayer(x, y) - 0.5) * 0.12; return I > 0.5 ? 2 : I > 0.2 ? 1 : 0; };
+  const key = L.map(l => l[0] + ':' + Math.round(l[2] * 10)).join();
+  if (key !== LAMP_KEY) { LAMP_KEY = key;                   // the baked layer only changes when a lamp turns up or down
+    for (let y = LAMP_Y0; y < LH; y++) for (let x = 0; x < LW; x++) { const i = y * LW + x;
+      LAMP_BACK[i] = BACK[i] === T_ ? 0 : level(x, y, BACK_N[i * 2] / 100, BACK_N[i * 2 + 1] / 100); } }
+  for (let i = LAMP_Y0 * LW; i < LW * LH; i++) {
+    const f = LF[i]; if (!f) continue;
+    const v = FB[i], b = v < BASE.length ? v : v >= LIT0 && v < LAMP0 ? (v - LIT0) % 48 : -1; if (b < 0) continue;
+    const x = i % LW, y = (i / LW) | 0;
+    const lv = f === 1 ? LAMP_BACK[i] : f === 2 ? level(x, y, NF[i * 2] / 100, NF[i * 2 + 1] / 100) : level(x, y, 0, 0);
+    if (lv === 2) FB[i] = LAMP0 + b; else if (lv === 1) FB[i] = LAMPS0 + b;
+  }
+}
+const LAMP_Y0 = FLOWER_Y - 130, LAMP_BACK = new Uint8Array(LW * LH); let LAMP_KEY = '';
+const put1 = (x, y, v) => { x = Math.round(x); y = Math.round(y); if (x >= 0 && x < LW && y >= 0 && y < LH) FB[y * LW + x] = v; };
+function drawLife() {
+  const calm = PARAMS.rain < 0.3, day = PARAMS.night < 0.6;
+  // a few gulls cross the sky now and then
+  const BP = 18, c = Math.floor(T / BP), p = (T % BP) / 14;
+  if (calm && day && p < 1) { const dir = hash(c, 2) < 0.5 ? 1 : -1, by = 44 + hash(c, 1) * 34, D = near('#33316b'), Wt = near('#dae5e8');
+    [[0, 0], [-11, 5], [-19, -4]].slice(0, 2 + (hash(c, 3) < 0.6 ? 1 : 0)).forEach(([ox, oy], j) => {
+      const bx = Math.round((dir > 0 ? -20 + p * 520 : 500 - p * 520) + ox * dir), yy = Math.round(by + oy + Math.sin(p * 9 + j) * 2), up = (Math.floor(T * 4 + j * 2) & 1);
+      const WING = up ? [[-4, -3], [-3, -2], [-2, -1], [-1, 0], [1, 0], [2, -1], [3, -2], [4, -3]] : [[-4, 1], [-3, 0], [-2, 0], [-1, 0], [1, 0], [2, 0], [3, 0], [4, 1]];
+      for (const [dx, dy] of WING) put1(bx + dx, yy + dy, Math.abs(dx) === 4 ? D : Wt);
+      put1(bx, yy, Wt); put1(bx, yy + 1, D); put1(bx + dir, yy, D); }); }
+  // a fish jumps in the open lagoon
+  const FP = 6, fc = Math.floor(T / FP), tt = T - fc * FP - 2;
+  if (calm && hash(fc, 5) < 0.75 && tt > -0.1 && tt < 2) {
+    const fx = 104 + hash(fc, 6) * 120, fy = 190 + hash(fc, 7) * 22, F = near('#f5951f'), Fd = near('#a23d15'), Wt = near('#dae5e8');
+    if (tt >= 0 && tt < 1) { const x = Math.round(fx + tt * 12), y = Math.round(fy - Math.sin(tt * Math.PI) * 13), up = tt < 0.5 ? -1 : 1;
+      for (let k = 0; k < 4; k++) put1(x + 2 - k, y + Math.round((k - 1.5) * up * 0.5), k === 3 ? Fd : F);
+      put1(x - 2, y - up, Fd); put1(x - 2, y + up, Fd); put1(x + 2, y, Wt); }
+    for (const [sx, st] of [[fx, tt], [fx + 12, tt - 1]]) if (st > -0.1 && st < 0.9) { const r = Math.max(0, st) * 9;   // splash, then a widening ring
+      if (st < 0.3) for (const [dx, dy] of [[0, -1 - st * 10], [-1, -2 - st * 6], [1, -2 - st * 6], [-2, -1], [2, -1]]) put1(sx + dx, fy + dy, Wt);
+      for (const q of [-1, 1]) { put1(sx + q * r, fy, Wt); put1(sx + q * (r - 1), fy, Wt); if (r > 2) put1(sx + q * r * 0.6, fy + 1, Wt); } }
+  }
+  // spray rising off the foot of the waterfalls
+  const Wm = near('#dae5e8'), Wl = near('#96cbf8');
+  if (MIST_PTS.length) for (let i = 0; i < 26; i++) { const b = MIST_PTS[Math.floor(hash(i, 11) * MIST_PTS.length)], ph = (T * 0.7 + hash(i, 12)) % 1;
+    put1(b[0] + Math.sin(T * 1.3 + i) * 2 + ph * 3 * (hash(i, 13) - 0.5) * 2, b[1] - 1 - ph * 12, ph < 0.5 ? Wm : Wl); }
+  // sun glints twinkling on the water
+  if (day && PARAMS.clouds < 0.7) for (let i = 0; i < 7; i++) { const k = Math.floor(T * 0.8 + hash(i, 21) * 5), ph = (T * 0.8 + hash(i, 21) * 5) % 1;
+    if (ph > 0.35) continue; const x = 40 + hash(i, k) * 230, y = 158 + hash(k, i + 3) * 60, v = BACK[Math.round(y) * LW + Math.round(x)];
+    if (!isWater(v)) continue; put1(x, y, Wm); if (ph < 0.18) { put1(x - 1, y, Wl); put1(x + 1, y, Wl); put1(x, y - 1, Wl); put1(x, y + 1, Wl); } }
+  // butterflies by the sunflowers; fireflies at night
+  if (calm && day) for (let k = 0; k < 2; k++) { const x = 352 + Math.sin(T * 0.6 + k * 2.4) * 50 + Math.sin(T * 1.9 + k) * 6, y = 142 + Math.sin(T * 1.05 + k * 3) * 13 + Math.sin(T * 3.1 + k) * 2;
+    const col = near(k ? '#e0d763' : '#dae5e8'), op = Math.floor(T * 9 + k * 3) & 1;
+    put1(x, y, near('#33316b')); if (op) { put1(x - 1, y, col); put1(x + 1, y, col); put1(x - 1, y - 1, col); put1(x + 1, y - 1, col); } else { put1(x, y - 1, col); put1(x, y - 2, col); } }
+  if (PARAMS.night > 0.5 && PARAMS.rain < 0.5) for (let i = 0; i < 16; i++) { const ph = (T * 0.4 + hash(i, 31)) % 1; if (ph > 0.6) continue;
+    const x = hash(i, 32) * LW + Math.sin(T * 0.5 + i) * 6, y = 168 + hash(i, 33) * 80 + Math.sin(T * 0.7 + i * 2) * 4; put1(x, y, GLOW_FLY); }
+}
+function drawRain() {
+  const R = near('#96cbf8'), S = near('#dae5e8'), n = Math.round(220 * PARAMS.rain);
+  for (let i = 0; i < n; i++) {
+    const sp = 260 + hash(i, 3) * 120, x0 = hash(i, 1) * (LW + 80), y = ((hash(i, 2) * (LH + 40) + T * sp) % (LH + 40)) - 20;
+    for (let k = 0; k < 4; k++) { const X = Math.floor(x0 - (y + k) * 0.35), Y = Math.floor(y + k); if (X >= 0 && X < LW && Y >= 0 && Y < LH) FB[Y * LW + X] = R; }
+    if (y > LH - 25 && hash(i, Math.floor(T * 4)) < 0.05) { const X = Math.floor(x0 - y * 0.35), Y = Math.floor(y); for (const dx of [-1, 1]) if (X + dx >= 0 && X + dx < LW && Y < LH) FB[Y * LW + X + dx] = S; }
+  }
+}
+
+let img = null, img32 = null, low = null, lowCx = null;
+function frame() {
+  buildPalette(T);
+  drawSky();
+  LF.fill(0);
+  for (let i = 0; i < FB.length; i++) { const v = BACK_SH[i]; if (v !== T_) { FB[i] = v; LF[i] = 1; } }
+  drawLife();
+  drawSwaying(MID_SPRITES);
+  for (let i = 0; i < FLOWERS.length; i++) drawFlower(i);
+  drawSwaying(FRONT_SPRITES);
+  drawLamps();
+  if (PARAMS.rain > 0.05) drawRain();
+  for (let i = 0; i < FB.length; i++) { const o = FB[i] * 3; img32[i] = 0xff000000 | (PAL[o + 2] << 16) | (PAL[o + 1] << 8) | PAL[o]; }
+  lowCx.putImageData(img, 0, 0);
+  cx.imageSmoothingEnabled = false;
+  const s = Math.max(cv.width / LW, cv.height / LH), w = LW * s, h = LH * s;
+  cx.drawImage(low, (cv.width - w) / 2, (cv.height - h) / 2, w, h);
+}
+
+// ---------------------------------------------------------------- state plumbing
+function resize() { const dpr = Math.min(window.devicePixelRatio || 1, 2); const w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; } }
+function applyState(s) { if (!s) return; target = { ...(STATES[s.state] || STATES.clear) };
+  sessions = (s.sessions || []).slice(0, 5); while (sessions.length < 5) sessions.push(null); }
+async function requestState() { try { const r = await fetch('state.json', { cache: 'no-store' }); if (r.ok) applyState(await r.json()); } catch (e) {} }
+function clockHour() { const d = new Date(); return CONFIG.clockHours ?? d.getHours() + d.getMinutes() / 60; }
+let SUN_KEY = '';
+function moveSun() {         // the sun (moon at night) walks an arc with the clock; its side lights the sprites
+  const h = clockHour(), day = h >= 6 && h < 18, p = day ? (h - 6) / 12 : ((((h - 18) % 24) + 24) % 24) / 12, a = Math.PI * p;
+  SUN.px = Math.round(30 + p * 420); SUN.py = Math.round(78 - Math.sin(a) * 54);
+  const x = -Math.cos(a), y = Math.sin(a) * 0.85 + 0.15, z = 0.5, l = Math.hypot(x, y, z);
+  SUN.x = x / l; SUN.y = y / l; SUN.z = z / l; SUN.k = 1.3 * (1 - PARAMS.night) * (1 - 0.75 * PARAMS.clouds);
+  const key = Math.round(a * 30) + ':' + Math.round(SUN.k * 12);
+  if (key !== SUN_KEY && BACK) { SUN_KEY = key; shadeBack(); }
+}
+function nightness() { const h = clockHour();
+  const ss = x => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); }; return h >= 12 ? ss((h - 18) / 1.5) : 1 - ss((h - 5) / 1.5); }
+let paused = false, last = 0, flashT = 0;
+window.wpPause = on => { paused = !!on; if (!paused) requestAnimationFrame(loop); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) requestAnimationFrame(loop); });
+function step(dt) {
+  T += dt; const k = 1 - Math.exp(-dt / 2.5);
+  for (const key in target) PARAMS[key] += (target[key] - PARAMS[key]) * k;
+  PARAMS.night = nightness();
+  moveSun();
+  if (PARAMS.rain > 0.5 && Math.random() < dt * 0.1) flashT = 1;
+  flashT = Math.max(0, flashT - dt * 4); PARAMS.flash = flashT > 0.6 ? 0.75 : flashT > 0.3 ? 0.0 : flashT > 0.1 ? 0.4 : 0;   // a 16-bit flash: whole palette, in steps
+  for (let i = 0; i < 5; i++) { const s = sessions[i], lv = flowerLv[i]; if (s) lv.s = s; lv.on += ((s ? 1 : 0) - lv.on) * (1 - Math.exp(-dt / 0.4)); }
+}
+function loop(now) { if (paused || document.hidden) return; requestAnimationFrame(loop);
+  if (now - last < 1000 / CONFIG.fps - 1) return; const dt = Math.min(0.1, (now - last) / 1000 || 1 / 30); last = now;
+  resize(); step(dt); frame(); }
+window.theme = { requestState, applyState, STATES, PARAMS, CONFIG, FLOWERS, SUN };
+
+(async () => {
+  resize();
+  const pj = await (await fetch('palette.json')).json();
+  BASE = pj.colors.map(h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)));
+  pj.colors.forEach((h, i) => IDX.set(h.toLowerCase(), i));
+  WATER_BANDS = ['#2180fc', '#1975fc', '#2785fb', '#20a5f3', '#2ac1f1', '#32d3ee', '#4be4e3'].map(near);
+  WATER_HI = ['#96cbf8', '#96cbf8', '#5abafa', '#96cbf8', '#dae5e8', '#dae5e8', '#dae5e8'].map(near);
+  FALL_LEVELS = [...new Set(['#2596cb', '#20a5f3', '#5abafa', '#96cbf8', '#dae5e8'].map(near))];
+  const names = [...new Set([...BACK_SPRITES, ...MID_SPRITES, ...FRONT_SPRITES, ...CLOUDS].map(s => s[0]))];   // MID / FRONT sway, drawn every frame
+  await Promise.all(names.map(async n => { const [im, nm] = await Promise.all([loadImg(`sprites/${n}.png`), n.startsWith('cloud') ? null : loadImg(`normals/${n}_n.png`)]);
+    if (!im) return; SPR[n] = toSprite(im); if (nm && nm.width === im.width && nm.height === im.height) SPR[n].nrm = toNormals(nm); }));
+  for (const n of Object.keys(SPR)) if (n.startsWith('cliffs')) markFalls(SPR[n]);
+  bakeLayers();
+  low = document.createElement('canvas'); low.width = LW; low.height = LH; lowCx = low.getContext('2d');
+  img = lowCx.createImageData(LW, LH); img32 = new Uint32Array(img.data.buffer);
+  await requestState(); step(1000); T = 0;          // settle the state, keep the clock at 0
+  setInterval(() => { if (CONFIG.polling && !paused) requestState(); }, 1000);
+  requestAnimationFrame(loop);
+})();
+</script></body></html>

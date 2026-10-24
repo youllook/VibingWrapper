@@ -6,6 +6,7 @@
 const { BrowserWindow, screen } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
+const { log } = require('./debug-log');
 
 let win = null, enabled = false, retryT = null, currentUrl = null, paused = false;
 
@@ -16,9 +17,14 @@ function attach() {
   const id = hwnd.length >= 8 ? hwnd.readBigUInt64LE(0) : BigInt(hwnd.readUInt32LE(0));
   execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'attach-wallpaper.ps1'),
     '-Hwnd', id.toString(), '-X', String(b.x), '-Y', String(b.y), '-W', String(b.width), '-H', String(b.height)],
-    { windowsHide: true, timeout: 20000 }, (err, out) => {
+    { windowsHide: true, timeout: 20000 }, (err, out, errOut) => {
       if (!win || win.isDestroyed()) return;
-      if (err || !(Number(String(out).trim()) > 0)) { console.error('[wallpaper] attach failed', err || out); return; }
+      const lines = String(out || '').trim().split(/\r?\n/);
+      const parent = Number(lines[0]);
+      const diag = (lines.find(l => l.startsWith('diag ')) || '').slice(5);
+      // a PowerShell that can't compile the helper (locked-down PCs, antivirus) shows up here as err / stderr
+      if (err || !(parent > 0)) { log('wallpaper', 'attach FAILED', err ? String(err.message || err) : '', String(errOut || '').trim().slice(0, 600), '|', diag); return; }
+      log('wallpaper', `attached under ${parent} (${b.width}x${b.height}) |`, diag);
       win.setOpacity(1);                                  // invisible until it sits under the icons
     });
 }
@@ -34,11 +40,14 @@ function create(url) {
   });
   win.setIgnoreMouseEvents(true);
   win.setOpacity(0);
+  log('wallpaper', 'open', url);
   win.loadURL(url);
   win.once('ready-to-show', () => { win.showInactive(); attach(); });
+  win.webContents.on('did-fail-load', (_e, code, desc, u) => log('wallpaper', 'page failed to load', code, desc, u));
   win.webContents.on('did-finish-load', applyPause);
   // Explorer restarts destroy the WorkerW (and our window with it): come back after a moment
-  win.on('closed', () => { win = null; if (enabled) { clearTimeout(retryT); retryT = setTimeout(() => create(currentUrl || url), 3000); } });
+  win.on('closed', () => { win = null; if (enabled) log('wallpaper', 'window closed (Explorer restart?) → reopening in 3 s');
+    if (enabled) { clearTimeout(retryT); retryT = setTimeout(() => create(currentUrl || url), 3000); } });
 }
 
 function setEnabled(on, url) {

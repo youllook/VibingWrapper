@@ -1,0 +1,243 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>基礎版</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#c9cdd1}canvas{display:block;width:100%;height:100%}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+/* 基礎版（2026-10-21）—— the trial theme and the debug view.
+   Background: five layered hills fading into mist, almost no saturation, drifting a little.
+   Centre: the live data. A ring of 5 arcs = the 5 session slots (state colour + its own motion), a 60 s
+   activity clock inside it (one bar per second, events counted from events.json), tool names flying off
+   the ring as they are used, and a 2-minute event line under it.
+   Debug panel (bottom right; ?debug=0 hides it): bridge latency, state.json, every slot, recent events,
+   frame time, errors. Data: state.json (every theme) + events.json (bridge, 2026-10-21; missing → the ring
+   still follows state.json). Canvas 2D, no textures: nothing to download. */
+'use strict';
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const Q = new URLSearchParams(location.search);
+const DEBUG = Q.get('debug') !== '0';
+const STATES = {   // colour = state accent (muted, it sits on a grey world) · zh = caption
+  clear:    { c: [150, 170, 190], zh: '待命',   en: 'idle' },
+  overcast: { c: [170, 160, 205], zh: '思考中', en: 'thinking' },
+  storm:    { c: [222, 176, 92],  zh: '執行中', en: 'working' },
+  clearing: { c: [130, 196, 165], zh: '收尾',   en: 'wrapping up' },
+  waiting:  { c: [232, 128, 112], zh: '等你',   en: 'waiting for you' },
+};
+const CONFIG = { polling: true, clockHours: Q.has('day') ? 10.5 : Q.has('night') ? 22 : null, fps: 30 };
+const PARAMS = { night: 0 };
+let sky = 'clear', slots = [null, null, null, null, null], sources = [null, null, null, null, null];
+let ev = null, evOk = null, lastLatency = 0, stateAt = performance.now(), errors = [];
+window.addEventListener('error', e => { errors.push(String(e.message).slice(0, 80)); if (errors.length > 3) errors.shift(); });
+
+// ---------------------------------------------------------------- background: layered hills in mist
+let W = 0, H = 0, DPR = 1, layers = [], layersNight = -1;
+const mix = (a, b, t) => a + (b - a) * t;
+function hillCanvas(i, night) {
+  const c = document.createElement('canvas'), w = Math.ceil(W * 1.08); c.width = w; c.height = H;
+  const x = c.getContext('2d');
+  const k = i / 4;                                                   // 0 far … 1 near
+  const L = mix(mix(206, 34, night), mix(118, 18, night), k);        // far = light, near = dark
+  const tint = [L - 2, L + 1, L + 4];                                // a breath of cool blue
+  const base = H * mix(0.58, 0.86, k), amp = H * mix(0.05, 0.11, k), seed = i * 17.3;
+  x.beginPath(); x.moveTo(0, H);
+  for (let px = 0; px <= w; px += 6) {
+    const u = px / w * Math.PI * 2;
+    const y = base - amp * (0.55 * Math.sin(u * (1.3 + k) + seed) + 0.3 * Math.sin(u * (3.1 + k * 2) + seed * 2.1) + 0.15 * Math.sin(u * 7.7 + seed * 3.7));
+    x.lineTo(px, y);
+  }
+  x.lineTo(w, H); x.closePath();
+  const gr = x.createLinearGradient(0, base - amp, 0, H);           // lighter crest: mist sitting on each ridge
+  gr.addColorStop(0, `rgb(${tint.map(v => Math.round(v + mix(16, 6, night))).join(',')})`);
+  gr.addColorStop(0.35, `rgb(${tint.map(Math.round).join(',')})`);
+  gr.addColorStop(1, `rgb(${tint.map(v => Math.round(v * 0.92)).join(',')})`);
+  x.fillStyle = gr; x.fill();
+  return c;
+}
+function buildLayers() { const n = Math.round(PARAMS.night * 8) / 8; layersNight = n; layers = [0, 1, 2, 3, 4].map(i => hillCanvas(i, n)); }
+function drawBackground(t) {
+  const n = layersNight;
+  const sk = g.createLinearGradient(0, 0, 0, H);
+  sk.addColorStop(0, `rgb(${[214, 218, 222].map(v => Math.round(mix(v, 26 + v * 0.03, n))).join(',')})`);
+  sk.addColorStop(0.6, `rgb(${[200, 204, 208].map(v => Math.round(mix(v, 36 + v * 0.04, n))).join(',')})`);
+  sk.addColorStop(1, `rgb(${[188, 192, 196].map(v => Math.round(mix(v, 40, n))).join(',')})`);
+  g.fillStyle = sk; g.fillRect(0, 0, W, H);
+  layers.forEach((c, i) => {
+    const drift = Math.sin(t * 0.012 * (1 + i * 0.4) + i) * W * 0.035 * (0.4 + i * 0.15) - W * 0.04;
+    g.drawImage(c, Math.round(drift), 0);
+    if (i < 4) { const m = g.createLinearGradient(0, H * mix(0.5, 0.8, i / 4), 0, H); m.addColorStop(0, 'rgba(225,228,231,0)');   // mist between layers
+      m.addColorStop(0.5, `rgba(${n > 0.5 ? '60,64,70' : '225,228,231'},${0.10 + 0.03 * Math.sin(t * 0.05 + i)})`); m.addColorStop(1, 'rgba(225,228,231,0)');
+      g.fillStyle = m; g.fillRect(0, 0, W, H); }
+  });
+}
+
+// ---------------------------------------------------------------- live data
+const seen = new Set(), hist = [];                 // hist: [{t (ms, local clock), slot, kind, tool}]
+let sparks = [], arcState = slots.map(() => ({ s: null, since: 0, glow: 0 }));
+function ingest(e, offset) {
+  const key = e.t + '|' + e.kind + '|' + e.slot + '|' + (e.tool || '');
+  if (seen.has(key)) return; seen.add(key);
+  const t = e.t - offset;
+  hist.push({ t, slot: e.slot, kind: e.kind, tool: e.tool });
+  if (performance.now() - t < 3000 && e.slot != null) spark(e.slot, e.kind === 'tool' && e.tool ? e.tool.replace(/^mcp__[^_]+__/, '') : null, e.kind);
+}
+function spark(slot, label, kind) {
+  const a = slotAngle(slot) + (Math.random() - 0.5) * 0.6;
+  sparks.push({ a, r: 0, v: 0.6 + Math.random() * 0.5, life: 1, label, kind, slot });
+  if (sparks.length > 60) sparks.shift();
+  arcState[slot].glow = 1;
+}
+async function requestState() {
+  const t0 = performance.now();
+  try { const r = await fetch('state.json', { cache: 'no-store' }); lastLatency = performance.now() - t0; if (r.ok) applyState(await r.json()); } catch (e) {}
+  try {
+    const r = await fetch('events.json', { cache: 'no-store' });
+    if (r.ok) { ev = await r.json(); evOk = true; const offset = ev.now - Date.now(); for (const e of ev.recent || []) ingest(e, offset - (performance.now() - Date.now())); }
+    else evOk = false;
+  } catch (e) { evOk = false; }
+}
+function applyState(s) {
+  if (!s) return;
+  if (s.state !== sky) { sky = STATES[s.state] ? s.state : 'clear'; stateAt = performance.now(); }
+  const nxt = (s.sessions || []).slice(0, 5); while (nxt.length < 5) nxt.push(null);
+  nxt.forEach((st, i) => { if (st !== slots[i]) { arcState[i] = { s: st, since: performance.now(), glow: 1 };
+    if (!evOk && st) spark(i, null, st); } });                     // no events.json: still react to changes
+  slots = nxt; sources = (s.sources || []).slice(0, 5);
+}
+
+// ---------------------------------------------------------------- the centre
+const slotAngle = i => -Math.PI / 2 + (i + 0.5) * (Math.PI * 2 / 5);
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+function drawCentre(t, now) {
+  const n = PARAMS.night, cx = W * 0.5, cy = H * 0.45, R = Math.min(W, H) * 0.17;
+  const ink = n > 0.5 ? [220, 224, 230] : [52, 58, 66];
+  // soft disc so the data reads on any layer
+  const disc = g.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.9);
+  disc.addColorStop(0, n > 0.5 ? 'rgba(20,22,26,.35)' : 'rgba(236,238,240,.55)'); disc.addColorStop(1, 'rgba(236,238,240,0)');
+  g.fillStyle = disc; g.fillRect(cx - R * 2, cy - R * 2, R * 4, R * 4);
+
+  // 60 s activity clock: one bar per second, the hand at the current second
+  const nowS = Math.floor(now / 1000), counts = new Array(60).fill(0);
+  for (const h of hist) { const age = nowS - Math.floor(h.t / 1000); if (age >= 0 && age < 60) counts[age]++; }
+  const mx = Math.max(3, ...counts);
+  for (let k = 0; k < 60; k++) {
+    const a = -Math.PI / 2 - k * (Math.PI * 2 / 60) + ((now / 1000) % 1) * (Math.PI * 2 / 60) * 0;
+    const len = R * 0.30 * Math.sqrt(counts[k] / mx), r0 = R * 0.52;
+    g.strokeStyle = rgba(ink, counts[k] ? 0.55 * (1 - k / 75) : 0.10); g.lineWidth = Math.max(1, R * 0.018);
+    g.beginPath(); g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); g.lineTo(cx + Math.cos(a) * (r0 + Math.max(len, R * 0.02)), cy + Math.sin(a) * (r0 + Math.max(len, R * 0.02))); g.stroke();
+  }
+
+  // the 5 slot arcs
+  const span = Math.PI * 2 / 5, gap = 0.16;
+  for (let i = 0; i < 5; i++) {
+    const st = slots[i], as = arcState[i], a0 = slotAngle(i) - span / 2 + gap / 2, a1 = slotAngle(i) + span / 2 - gap / 2;
+    as.glow = Math.max(0, as.glow - 0.02);
+    if (!st) { g.setLineDash([R * 0.03, R * 0.05]); g.strokeStyle = rgba(ink, 0.18); g.lineWidth = R * 0.02;
+      g.beginPath(); g.arc(cx, cy, R, a0, a1); g.stroke(); g.setLineDash([]); continue; }
+    const c = STATES[st].c, ph = t + i * 1.3;
+    let w = R * 0.05, al = 0.85;
+    if (st === 'clear') { w = R * 0.035; al = 0.55 + 0.2 * Math.sin(ph * 1.2); }
+    if (st === 'storm') w = R * (0.07 + 0.02 * Math.sin(ph * 9) + 0.04 * as.glow);
+    if (st === 'waiting') { al = 0.55 + 0.45 * Math.abs(Math.sin(ph * 2.4)); w = R * 0.07; }
+    g.lineCap = 'round'; g.strokeStyle = rgba(c, al); g.lineWidth = w;
+    if (st === 'clearing') { const p = Math.min(1, (now - as.since) / 1500); g.beginPath(); g.arc(cx, cy, R, a0, a0 + (a1 - a0) * p); g.stroke(); }
+    else { g.beginPath(); g.arc(cx, cy, R, a0, a1); g.stroke(); }
+    if (st === 'overcast' || st === 'storm') {                        // a bright bead running along the arc
+      const sp = st === 'storm' ? 2.2 : 0.7, u = (ph * sp) % 1, a = a0 + (a1 - a0) * u;
+      g.fillStyle = rgba([255, 255, 255], 0.75); g.beginPath(); g.arc(cx + Math.cos(a) * R, cy + Math.sin(a) * R, w * 0.42, 0, Math.PI * 2); g.fill(); }
+    if (st === 'waiting') {                                           // a ring calling out from that slot
+      const u = (ph * 0.5) % 1; g.strokeStyle = rgba(c, 0.5 * (1 - u)); g.lineWidth = R * 0.015;
+      g.beginPath(); g.arc(cx + Math.cos(slotAngle(i)) * R, cy + Math.sin(slotAngle(i)) * R, R * (0.08 + u * 0.5), 0, Math.PI * 2); g.stroke(); }
+    if (as.glow > 0) { g.strokeStyle = rgba(c, 0.35 * as.glow); g.lineWidth = w + R * 0.08 * as.glow; g.beginPath(); g.arc(cx, cy, R, a0, a1); g.stroke(); }
+    // slot label outside the arc: source tag
+    const la = slotAngle(i), lr = R * 1.16;
+    g.fillStyle = rgba(ink, 0.55); g.font = `${Math.round(R * 0.075)}px "Segoe UI", "Microsoft JhengHei UI", sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText((sources[i] || '') + ' ' + (i + 1), cx + Math.cos(la) * lr, cy + Math.sin(la) * lr);
+  }
+  g.lineCap = 'butt';
+
+  // tool names flying off the ring
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  sparks = sparks.filter(s => (s.life -= 0.012) > 0);
+  for (const s of sparks) {
+    s.r += s.v * R * 0.012;
+    const c = (STATES[slots[s.slot]] || STATES.storm).c, rr = R * 1.05 + s.r, x = cx + Math.cos(s.a) * rr, y = cy + Math.sin(s.a) * rr;
+    g.fillStyle = rgba(c, 0.9 * s.life); g.beginPath(); g.arc(x, y, R * 0.018 * (0.5 + s.life), 0, Math.PI * 2); g.fill();
+    if (s.label) { g.fillStyle = rgba(ink, 0.75 * s.life); g.font = `${Math.round(R * 0.08)}px Consolas, monospace`; g.fillText(s.label, x + Math.cos(s.a) * R * 0.12, y + Math.sin(s.a) * R * 0.08); }
+  }
+
+  // caption in the middle
+  const S = STATES[sky], active = slots.filter(Boolean).length;
+  const pulse = sky === 'waiting' ? 0.75 + 0.25 * Math.sin(t * 4) : 1;
+  g.fillStyle = rgba(sky === 'clear' ? ink : S.c.map(v => v * (n > 0.5 ? 1 : 0.8)), pulse);
+  g.font = `600 ${Math.round(R * 0.26)}px "Microsoft JhengHei UI", "Segoe UI", sans-serif`; g.fillText(S.zh, cx, cy - R * 0.06);
+  g.fillStyle = rgba(ink, 0.55); g.font = `${Math.round(R * 0.085)}px "Segoe UI", sans-serif`;
+  g.fillText(`${S.en} · ${active ? active + ' session' + (active > 1 ? 's' : '') : 'no session'}`, cx, cy + R * 0.2);
+
+  // 2-minute event line under the ring
+  const lw = R * 2.6, lx = cx - lw / 2, ly = cy + R * 1.62, lh = R * 0.32, B = 60, bins = new Array(B).fill(0);
+  for (const h of hist) { const age = (now - h.t) / 2000; if (age >= 0 && age < B) bins[B - 1 - Math.floor(age)]++; }
+  const bm = Math.max(4, ...bins);
+  g.strokeStyle = rgba(ink, 0.15); g.lineWidth = 1; g.beginPath(); g.moveTo(lx, ly); g.lineTo(lx + lw, ly); g.stroke();
+  g.strokeStyle = rgba(S.c, 0.8); g.lineWidth = Math.max(1.5, R * 0.012); g.beginPath();
+  bins.forEach((v, k) => { const x = lx + (k / (B - 1)) * lw, y = ly - (v / bm) * lh * (0.85 + 0.15 * Math.sin(t * 6 + k)); k ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.stroke();
+  g.fillStyle = rgba(ink, 0.4); g.font = `${Math.round(R * 0.065)}px "Segoe UI", sans-serif`; g.textAlign = 'left'; g.fillText('2 min', lx, ly + R * 0.1);
+  g.textAlign = 'right'; g.fillText('now', lx + lw, ly + R * 0.1);
+  while (hist.length && now - hist[0].t > 130000) hist.shift();
+  if (seen.size > 2000) seen.clear();
+}
+
+// ---------------------------------------------------------------- debug panel
+let fps = 0, frameMs = 0;
+function drawDebug(now) {
+  const n = PARAMS.night, ink = n > 0.5 ? 'rgba(220,224,230,.78)' : 'rgba(40,46,54,.78)';
+  const fs = Math.round(Math.max(11, H / 95)), lh = fs * 1.35;
+  const sec = ms => ms < 60000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms / 60000) + 'm';
+  const L = [];
+  L.push(`VibingWrapper ${ev && ev.version || '?'} · basic · bridge ${lastLatency.toFixed(0)} ms · events.json ${evOk === null ? '…' : evOk ? 'ok' : 'missing'}`);
+  L.push(`sky ${sky} (${sec(performance.now() - stateAt)})  slots [${slots.map(s => s || '-').join(' ')}]`);
+  if (ev) {
+    const c = ev.counts || {};
+    L.push(`events ${c.total || 0}  ` + ['prompt', 'tool', 'wait', 'stop', 'end'].map(k => `${k} ${c[k] || 0}`).join('  ') + `  · up ${sec(ev.uptime)}`);
+    L.push('slot src state     idle   events tool');
+    for (const x of ev.sessions || []) L.push(`${String(x.slot + 1).padEnd(4)} ${String(x.source).slice(0, 5).padEnd(5)} ${String(x.state).padEnd(9)} ${sec(x.idle).padEnd(6)} ${String(x.events).padEnd(6)} ${x.tool || ''}`);
+    const r = (ev.recent || []).slice(-5).reverse();
+    for (const e of r) { const d = new Date(e.t); L.push(`${d.toTimeString().slice(0, 8)} ${e.src || '--'} ${String(e.event || e.kind).padEnd(16)} ${(e.tool || '').slice(0, 24)}${e.slot != null ? ' #' + (e.slot + 1) : ''}`); }
+  }
+  L.push(`render ${fps.toFixed(0)} fps · ${frameMs.toFixed(1)} ms · ${W}×${H} @${DPR} · ${CONFIG.clockHours != null ? 'clock ' + CONFIG.clockHours : 'real clock'} night ${PARAMS.night.toFixed(2)}`);
+  L.push(errors.length ? 'errors: ' + errors.join(' | ') : 'errors: none');
+  g.font = `${fs}px Consolas, "Cascadia Mono", monospace`; g.textAlign = 'left'; g.textBaseline = 'top';
+  const pw = Math.max(...L.map(s => g.measureText(s).width)) + fs * 1.2, ph = L.length * lh + fs, px = W - pw - fs * 1.5, py = H - ph - fs * 1.5;
+  g.fillStyle = n > 0.5 ? 'rgba(10,12,14,.35)' : 'rgba(240,242,244,.45)'; g.fillRect(px, py, pw, ph);
+  g.fillStyle = ink;
+  L.forEach((s, i) => g.fillText(s, px + fs * 0.6, py + fs * 0.5 + i * lh));
+}
+
+// ---------------------------------------------------------------- loop
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+  const w = Math.round(innerWidth * DPR), h = Math.round(innerHeight * DPR);
+  if (w !== W || h !== H) { W = w; H = h; cv.width = w; cv.height = h; buildLayers(); }
+}
+function nightness() { const d = new Date(), h = CONFIG.clockHours ?? d.getHours() + d.getMinutes() / 60;
+  const ss = x => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); }; return h >= 12 ? ss((h - 17.5) / 2) : 1 - ss((h - 5) / 2); }
+let paused = false, last = 0, T = 0;
+window.wpPause = on => { paused = !!on; if (!paused) requestAnimationFrame(loop); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) requestAnimationFrame(loop); });
+function frame() {
+  const f0 = performance.now();
+  PARAMS.night = nightness();
+  if (Math.abs(Math.round(PARAMS.night * 8) / 8 - layersNight) > 0.01) buildLayers();
+  drawBackground(T); drawCentre(T, performance.now());
+  if (DEBUG) drawDebug();
+  frameMs = frameMs * 0.9 + (performance.now() - f0) * 0.1;
+}
+function loop(now) { if (paused || document.hidden) return; requestAnimationFrame(loop);
+  if (now - last < 1000 / CONFIG.fps - 1) return; const dt = Math.min(0.1, (now - last) / 1000 || 1 / 30); last = now;
+  T += dt; fps = fps * 0.95 + (1 / dt) * 0.05; resize(); frame(); }
+window.theme = { requestState, applyState, STATES, PARAMS, CONFIG };
+(async () => {
+  resize(); await requestState();
+  setInterval(() => { if (CONFIG.polling && !paused) requestState(); }, 1000);
+  requestAnimationFrame(loop);
+})();
+</script></body></html>

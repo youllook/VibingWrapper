@@ -8,7 +8,8 @@
 #      grabbed some unrelated hidden WorkerW and the wallpaper never showed. Our window becomes a layered
 #      (alpha 255) child of Progman, placed directly below SHELLDLL_DefView, i.e. above Explorer's WorkerW.
 # 3. Size it to the given rectangle (parent client coordinates).
-# Usage: attach-wallpaper.ps1 -Hwnd <decimal> -X 0 -Y 0 -W 1920 -H 1080     Prints the parent handle (0 = failed).
+# Usage: attach-wallpaper.ps1 -Hwnd <decimal> -X 0 -Y 0 -W 1920 -H 1080     Prints the parent handle (0 = failed),
+# then one "diag ..." line describing what it found (2026-10-22: goes to debug.log for people whose wallpaper won't show).
 param([Int64]$Hwnd, [int]$X, [int]$Y, [int]$W, [int]$H)
 
 Add-Type @"
@@ -26,6 +27,9 @@ public static class DeskAttach {
   [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h, uint key, byte alpha, uint flags);
+
+  public static string Info = "";
+  static void Note(string s) { Info += (Info.Length > 0 ? "; " : "") + s; }
 
   static IntPtr Progman() { return FindWindow("Progman", null); }
 
@@ -55,19 +59,23 @@ public static class DeskAttach {
 
   public static long Attach(long hwnd, int x, int y, int w, int h) {
     IntPtr progman = Progman();
-    if (progman == IntPtr.Zero) return 0;
+    if (progman == IntPtr.Zero) { Note("no Progman window (is Explorer running?)"); return 0; }
+    Note("progman=" + progman.ToInt64() + " icons-in-progman=" + (FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero)
+       + " raised-before=" + Raised(progman) + " classic-before=" + (ClassicWorker() != IntPtr.Zero));
     // send once; Explorer reference-counts the split, so only fall back to the legacy (0, 0) form when nothing came of it
-    if (!Raised(progman) && ClassicWorker() == IntPtr.Zero) Split(progman, new IntPtr(0xD), new IntPtr(1));
-    if (!Raised(progman) && ClassicWorker() == IntPtr.Zero) Split(progman, IntPtr.Zero, IntPtr.Zero);
+    if (!Raised(progman) && ClassicWorker() == IntPtr.Zero) { Split(progman, new IntPtr(0xD), new IntPtr(1)); Note("sent 0x052C(0xD,1)"); }
+    if (!Raised(progman) && ClassicWorker() == IntPtr.Zero) { Split(progman, IntPtr.Zero, IntPtr.Zero); Note("sent 0x052C(0,0)"); }
 
     IntPtr win = new IntPtr(hwnd), parent, after;
     if (Raised(progman)) {
       parent = progman;
       after = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);   // insert right below the icons
+      Note("layout=raised");
     } else {
       parent = ClassicWorker();
       after = IntPtr.Zero;
-      if (parent == IntPtr.Zero) return 0;
+      if (parent == IntPtr.Zero) { Note("layout=none: no WorkerW behind the icons after the split"); return 0; }
+      Note("layout=classic worker=" + parent.ToInt64());
     }
 
     // Make it a plain child window (2026-09-30): as a top-level style window Windows once re-laid it out
@@ -82,7 +90,7 @@ public static class DeskAttach {
       SetLayeredWindowAttributes(win, 0, 255, 0x2);                           // LWA_ALPHA, fully opaque
     }
     SetParent(win, parent);
-    if (GetParent(win) != parent) return 0;
+    if (GetParent(win) != parent) { Note("SetParent did not take (parent now " + GetParent(win).ToInt64() + ")"); return 0; }
     // classic: SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW; raised: same but with a z-order
     uint flags = 0x0010 | 0x0020 | 0x0040 | (after == IntPtr.Zero ? 0x0004u : 0u);
     SetWindowPos(win, after, x, y, w, h, flags);
@@ -91,3 +99,4 @@ public static class DeskAttach {
 }
 "@
 [DeskAttach]::Attach($Hwnd, $X, $Y, $W, $H)
+"diag " + [DeskAttach]::Info

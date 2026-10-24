@@ -80,7 +80,9 @@ it shows up in the gear menu's wallpaper list, no changes to the app needed. The
 
 These are **global shortcuts**: while VibingWrapper runs it takes them from every app, so they all start with Ctrl+Alt and leave everyday keys like Ctrl+R (reload) and Ctrl+Q alone.
 If another program already holds one, the tray menu marks it 被占用 (taken) and the feature is still a click away in the tray or gear menu.
-Only the boss key can be changed in the gear menu (gear → 變更快捷鍵, then press the new combination).
+The boss key and the region screenshot key can be changed: gear → 設定 (settings) → 快捷鍵, click one, then press the new combination.
+
+**Updates**: a red dot on the gear means a newer build is out. Gear → 設定 → 更新方式 picks 自動 (automatic, the default: downloads, swaps the files and restarts while Claude is idle) or 手動 (manual: only the dot; click 更新 to install). Settings, logs and downloaded themes live in `%APPDATA%\vibing-wrapper` and survive updates. Running from source, update with `git pull`.
 
 The UI is in Traditional Chinese.
 
@@ -108,7 +110,7 @@ Note: this only works with Claude Code (CLI, or the Code tab in Claude Desktop) 
 3. Click the gear (top right) → "Claude 連動" to add the hooks to `~/.claude/settings.json` (your file is backed up once as `settings.json.vibing-backup`; existing settings are kept).
 4. Restart Claude Code and start working: the sky follows along.
 
-No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled. To just try the wallpapers without Claude Code, take the `-lite` zip (weather, weather + sea, 海月).
+No Node.js needed; all seven wallpapers (including the Godot level crossing) are bundled. To just try the wallpapers without Claude Code, take the `-lite` zip: it ships only 基礎版 (basic: misty grey hills with the live state of every session in the middle and a debug panel), and the other wallpapers install from the gear menu → 桌布 → 主題庫 (theme library).
 
 **Uninstall**: gear → "解除安裝", or Windows Settings → Installed apps → VibingWrapper → Uninstall (it is listed there after the first run). It removes our hooks from Claude Code (other settings stay), turns off start-with-Windows, and after the app closes deletes `%APPDATA%ibing-wrapper` and the program files.
 
