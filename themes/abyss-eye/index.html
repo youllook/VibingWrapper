@@ -152,6 +152,9 @@ scene.add(rim);
 // in the concept art the lure washes the whole face in blue-white, which is wrong optically but right for the mood.
 const lureLight = new THREE.PointLight(0xcff4ff, 0, 0, 1.3);
 const lureFill = new THREE.PointLight(0x7fa6e8, 0, 0, 0.6);
+// The fish stays as visible as in the concept art whatever Claude is doing: a small lamp of its own, constant, that
+// dies out within 0.3 m so it never reaches the squid (only the squid's reveal follows the state).
+const fishLamp = new THREE.PointLight(0xcff4ff, 0.05, 0.3, 2);
 // the lure's glow in the murky water: a tight hot core and a wide soft halo, both additive sprites
 function glowTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -358,6 +361,16 @@ function lookAtLure(dt, t, L) {
   }
 }
 
+// a cold back-light rim on the fish (fresnel), so its fins, spines and teeth read as a silhouette even in the dark
+function fishRim(mat) {
+  mat.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      { float f = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 3.0);
+        totalEmissiveRadiance += vec3(0.30, 0.45, 0.62) * f * 0.35; }`);
+  };
+  mat.needsUpdate = true;
+}
+
 /* ------------------------------ models ------------------------------ */
 const squid = { root: new THREE.Group(), chains: [], spine: [], head: null, photo: null, eye: new THREE.Vector3(), ready: false };
 const fish = { root: new THREE.Group(), parts: {}, jaw: null, esca: null, escaMat: null, ready: false };
@@ -405,7 +418,8 @@ loader.load('assets/anglerfish.glb', g => {
   });
   fish.esca = fish.parts.esca;
   fish.escaMat = fish.esca.material;
-  fish.esca.add(lureLight, lureFill);
+  fish.esca.add(lureLight, lureFill, fishLamp);
+  m.traverse(o => { if (o.isMesh && o.material.isMeshStandardMaterial && o !== fish.esca) fishRim(o.material); });
   keep(fish.parts.illicium);
   fish.ready = true;
 }, undefined, e => console.warn('anglerfish not loaded:', e));
@@ -466,12 +480,12 @@ function animate(dt) {
 
   if (fish.ready) {
     // a small slow loop between the camera and the eye; the fish mostly faces the eye, its lure held up to it
-    const c = (squid.ready ? squid.eye : stage).clone().add(CONFIG.fishOrbit);
+    const c = stage.clone().add(CONFIG.fishOrbit);       // anchored to the stage point: it waits there while the eye comes and goes
     const w = (2 * Math.PI) / 46;
     prevFish.copy(fish.root.position);
     fish.root.position.set(c.x + 0.09 * Math.sin(t * w), c.y + 0.03 * Math.sin(2 * t * w + 0.7), c.z + 0.06 * Math.sin(2 * t * w));
     tmp.copy(fish.root.position).sub(prevFish).normalize().multiplyScalar(0.6)
-      .add((squid.ready ? squid.eye : stage).clone().sub(fish.root.position).normalize());
+      .add(stage.clone().sub(fish.root.position).normalize());
     fish.root.lookAt(tmp.add(fish.root.position));
     const p = fish.parts;
     if (p.fin_tail) wiggle(p.fin_tail, 0, Math.sin(t * 3.1) * 0.35, 0);
@@ -484,7 +498,7 @@ function animate(dt) {
     // the lure: glow + the scene's only light
     lureLight.intensity = L * 1.3;
     lureFill.intensity = L * 0.9;
-    fish.escaMat.emissiveIntensity = 0.6 + 2.5 * Math.min(1, L / 0.25) + 0.15 * Math.sin(t * 2.9);
+    fish.escaMat.emissiveIntensity = 2.0 + 1.5 * Math.min(1, L / 0.25) + 0.15 * Math.sin(t * 2.9);   // never dim: it is the fish's own light
     fish.esca.getWorldPosition(lurePos);
   }
   if (squid.ready && fish.ready) lookAtLure(dt, t, L);
@@ -493,7 +507,7 @@ function animate(dt) {
   for (const sp of halo) {
     sp.position.copy(lurePos);
     sp.scale.setScalar(sp.userData.size * (0.55 + 0.8 * hk));
-    sp.material.opacity = sp.userData.size < 0.1 ? 0.5 + 0.5 * hk : 0.08 + 0.3 * hk;
+    sp.material.opacity = sp.userData.size < 0.1 ? 0.75 + 0.25 * hk : 0.14 + 0.24 * hk;
   }
   snowMat.uniforms.uTime.value = t;
   snowMat.uniforms.uLure.value.copy(lurePos);
