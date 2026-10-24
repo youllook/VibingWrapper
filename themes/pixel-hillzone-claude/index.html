@@ -9,7 +9,10 @@
    Codex-generated sprites snapped to the logical grid and to palette.json by studio/blender/pixel_key.py;
    sky, lagoon, checkered hills and the sunflowers are drawn here.
    Animation is palette work, as on 16-bit hardware: water glints and waterfalls are palette cycling;
-   the states (overcast / storm / evening / night / lightning) are palette transforms, not grey overlays. */
+   the states (overcast / storm / evening / night / lightning) are palette transforms, not grey overlays.
+   Lighting (2026-10-23): each sprite has a normal map from Sprite Fusion's Sprite Normals (normals/<name>_n.png).
+   A pixel turned to the sun swaps to a lit copy of its colour, one turned away to a shaded copy; the sun walks
+   across the sky with the clock. At night every session's sunflower is a warm lamp lighting its neighbours. */
 'use strict';
 const cv = document.getElementById('c'), cx = cv.getContext('2d');
 const Q = new URLSearchParams(location.search);
@@ -23,7 +26,7 @@ const STATES = {   // desat · dark · warm (evening) · clouds (extra) · rain 
   waiting:  { desat: 0.10, dark: 0.05, warm: 1.00, clouds: 0.3, rain: 0, rainbow: 0, wind: 0.2 },
 };
 const SESSION = { clear: 'sway', overcast: 'bow', storm: 'spin', clearing: 'sparkle', waiting: 'face' };
-const CONFIG = { polling: true, clockHours: Q.has('day') ? 10.5 : Q.has('night') ? 22 : null, fps: 30 };
+const CONFIG = { polling: true, clockHours: Q.has('hour') ? +Q.get('hour') : Q.has('day') ? 10.5 : Q.has('night') ? 22 : null, fps: 30 };
 const PARAMS = { ...STATES.clear, flash: 0, night: 0 };
 let target = { ...STATES.clear }, sessions = [null, null, null, null, null];
 const FLOWERS = [{ x: 300 }, { x: 328 }, { x: 356 }, { x: 384 }, { x: 412 }];   // stem x; they stand on the hill top
@@ -32,7 +35,8 @@ const flowerLv = FLOWERS.map(() => ({ on: 0, s: null, rot: 0 }));
 
 // ---------------------------------------------------------------- palette
 let BASE = [];                       // [r,g,b] for the 48 fitted colours
-const PAL = new Uint8Array(256 * 3); // current frame palette
+const PAL = new Uint8Array(512 * 3); // current frame palette
+const LIT0 = 256, SH0 = 304, DSH0 = 352, LAMP0 = 400, LAMPS0 = 448;   // lit / shaded / lamp-lit copies of the 48 fitted colours
 let IDX = new Map();                 // '#rrggbb' → index
 const near = hex => { const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); let b = 0, bd = 1e9;
   BASE.forEach((p, i) => { const d = (p[0] - c[0]) ** 2 * 0.3 + (p[1] - c[1]) ** 2 * 0.59 + (p[2] - c[2]) ** 2 * 0.11; if (d < bd) { bd = d; b = i; } }); return b; };
@@ -64,6 +68,14 @@ function buildPalette(t) {
     const k = Math.max(0, Math.min(FALL_LEVELS.length - 1, lv + WAVE[(p - fp) & 7])); tf(BASE[FALL_LEVELS[k]], PAL, (FALL0 + lv * 8 + p) * 3); } });
   const sp = Math.floor(t * 10);
   for (let p = 0; p < 8; p++) tf(BASE[((p + sp) % 3) ? FALL_LEVELS[FALL_LEVELS.length - 1] : FALL_LEVELS[FALL_LEVELS.length - 2]], PAL, (FOAM0 + p) * 3);
+  const n = PARAMS.night;
+  for (let i = 0; i < BASE.length; i++) { const [r, g, b] = BASE[i];
+    tf([r * 1.10 + 12, g * 1.06 + 8, b * 0.96], PAL, (LIT0 + i) * 3);       // facing the sun: warmer, brighter
+    tf([r * 0.74, g * 0.76, b * 0.88], PAL, (SH0 + i) * 3);                 // turned away: cooler
+    tf([r * 0.54, g * 0.56, b * 0.74], PAL, (DSH0 + i) * 3);
+    PARAMS.night = n * 0.15; tf([r * 1.25 + 30, g + 12, b * 0.6], PAL, (LAMP0 + i) * 3);   // flower lamps: the night palette barely touches them
+    PARAMS.night = n * 0.55; tf([r * 1.1 + 14, g * 0.92 + 4, b * 0.7], PAL, (LAMPS0 + i) * 3);
+    PARAMS.night = n; }
   tf([0, 0, 0], PAL, T_ * 3);
   const fl = PARAMS.flash; PAL.set([200 + 55 * fl, 255, 90 + 165 * fl], GLOW_FLY * 3); PAL.set([235, 240, 255], GLOW_STAR * 3);
 }
@@ -88,6 +100,21 @@ function toSprite(im) {
   let sx = 0, n = 0;                                         // foot: centre of the bottom rows
   for (let y = im.height - 3; y < im.height; y++) for (let x = 0; x < im.width; x++) if (px[y * im.width + x] !== T_) { sx += x; n++; }
   return { w: im.width, h: im.height, px, foot: n ? sx / n : im.width / 2 };
+}
+
+function toNormals(im) {     // Sprite Normals output (OpenGL, +G up) -> [nx, ny] per pixel, x100
+  const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+  const g = c.getContext('2d'); g.drawImage(im, 0, 0); const d = g.getImageData(0, 0, im.width, im.height).data;
+  const n = new Int8Array(im.width * im.height * 2);
+  for (let i = 0; i < im.width * im.height; i++) { n[i * 2] = Math.round((d[i * 4] / 127.5 - 1) * 100); n[i * 2 + 1] = Math.round((d[i * 4 + 1] / 127.5 - 1) * 100); }
+  return n;
+}
+const SUN = { x: -0.4, y: 0.8, z: 0.45, k: 1, px: 42, py: 26 };
+function shade(v, nx, ny, dx, dy) {   // colour index -> its lit / shaded copy by how far the normal turns towards the sun
+  if (v >= BASE.length || SUN.k < 0.02) return v;
+  const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+  const d = (nx * SUN.x + ny * SUN.y + nz * SUN.z - SUN.z) * SUN.k + (bayer(dx, dy) - 0.5) * 0.1;
+  return d > 0.2 ? LIT0 + v : d < -0.42 ? DSH0 + v : d < -0.18 ? SH0 + v : v;
 }
 
 // ---------------------------------------------------------------- scene
@@ -158,7 +185,7 @@ function drawHill(buf, h) {  // {x0, x1, top, grass: 9, round: 5, face: bool}
           if (h.face && dl >= 3 && dl < 10 && !ck && bayer(x, y) < 0.35) v = SOIL_HI;
           if (dr === 0 && !h.openRight) v = OUT; }
       }
-      buf[y * LW + x] = v;
+      buf[y * LW + x] = v; if (buf === BACK) BACK_N[(y * LW + x) * 2] = BACK_N[(y * LW + x) * 2 + 1] = 0;
     }
     const fh = hash(x, h.top * 3 + 1);                       // a few little flowers poking out of the grass
     if (fh < 0.07 && dl > 2 && dr > 2 && top > 3) { const fc = near(fh < 0.03 ? '#dae5e8' : fh < 0.05 ? '#e0d763' : '#a95448');
@@ -177,7 +204,7 @@ function drawWater(buf) {
       // glint dashes: short horizontal runs, longer and sparser near the camera
       const len = 2 + Math.max(0, y - HORIZON) / 18, row = Math.floor(x / (len * 3));
       if ((y & 1) && hash(row, y) < 0.5 && (x % Math.ceil(len * 3)) < len) v = WATER0 + Math.max(0, b) * 8 + (Math.floor(hash(row, y + 99) * 8));
-      buf[y * LW + x] = v;
+      buf[y * LW + x] = v; if (buf === BACK) BACK_N[(y * LW + x) * 2] = BACK_N[(y * LW + x) * 2 + 1] = 0;
     }
   }
 }
@@ -203,12 +230,23 @@ function reflectMap() {      // what a colour looks like mirrored in the lagoon:
     m.set(v, near('#' + c.map(k => k.toString(16).padStart(2, '0')).join(''))); } return m.get(v); };
 }
 let MIST_PTS = [];
+let BACK_N = null, BACK_SH = null;   // normals of the baked layer, and the layer shaded for the current sun
+function blitN(s, x0, y0, flip, k) {
+  for (let y = 0; y < s.h; y++) { const Y = y0 + y; if (Y < 0 || Y >= LH) continue;
+    for (let x = 0; x < s.w; x++) { const X = x0 + x; if (X < 0 || X >= LW) continue;
+      const j = y * s.w + (flip ? s.w - 1 - x : x); if (s.px[j] === T_) continue;
+      BACK_N[(Y * LW + X) * 2] = (flip ? -1 : 1) * s.nrm[j * 2] * k; BACK_N[(Y * LW + X) * 2 + 1] = s.nrm[j * 2 + 1] * k; } } }
+function shadeBack() {
+  for (let i = 0; i < BACK.length; i++) { const v = BACK[i];
+    BACK_SH[i] = v === T_ ? T_ : shade(v, BACK_N[i * 2] / 100, BACK_N[i * 2 + 1] / 100, i % LW, (i / LW) | 0); } }
 function bakeLayers() {
-  BACK = new Uint8Array(LW * LH).fill(T_);
+  BACK = new Uint8Array(LW * LH).fill(T_); BACK_N = new Int8Array(LW * LH * 2); BACK_SH = new Uint16Array(LW * LH);
   drawWater(BACK);
   const spans = [];
   const place = (buf, list) => { for (const [n, x, y, f, hz] of list) { const s = hz ? hazed(n, hz) : SPR[n]; if (!s) continue;
-    const x0 = Math.round(x - (f ? s.w - 1 - s.foot : s.foot)); blit(buf, s, x0, y - s.h, f); spans.push([n, x0, x0 + s.w - 1, y, s]); } };
+    const x0 = Math.round(x - (f ? s.w - 1 - s.foot : s.foot)); blit(buf, s, x0, y - s.h, f);
+    if (s.nrm) blitN(s, x0, y - s.h, f, 1 - (hz || 0) * 2);       // hazed distance flattens the relief
+    spans.push([n, x0, x0 + s.w - 1, y, s]); } };
   place(BACK, BACK_SPRITES);
   for (const h of HILLS) drawHill(BACK, h);
   for (let y = HORIZON + 1; y < LH; y++) for (let x = 1; x < LW - 1; x++) {   // waves lapping at the hill sides
@@ -239,14 +277,15 @@ function bakeLayers() {
 }
 
 // ---------------------------------------------------------------- per frame
-const FB = new Uint8Array(LW * LH);
+const FB = new Uint16Array(LW * LH);
+const LF = new Uint8Array(LW * LH), NF = new Int8Array(LW * LH * 2);   // lamp-lightable: 1 baked layer, 2 swaying sprite (normal in NF), 3 flat
 let T = 0;
 function drawSky() {
   for (let y = 0; y < HORIZON; y++) { const [a, b, f] = SKY_ROWS[y];
     for (let x = 0; x < LW; x++) FB[y * LW + x] = bayer(x, y) < f ? b : a; }
   for (let y = HORIZON; y < LH; y++) FB.fill(SKY_ROWS[HORIZON - 1][1], y * LW, (y + 1) * LW);
   // sun (or moon): stepped rings
-  const sx = 42, sy = 26, night = PARAMS.night > 0.5;
+  const sx = SUN.px, sy = SUN.py, night = PARAMS.night > 0.5;
   const R = [[9, '#dae5e8'], [11, night ? '#849cd2' : '#e0d763'], [15, '#96cbf8'], [19, '#5abafa']];
   for (let y = sy - 19; y <= sy + 19; y++) for (let x = sx - 19; x <= sx + 19; x++) {
     const d = Math.hypot(x - sx, y - sy); let v = -1;
@@ -271,7 +310,7 @@ function drawFlower(i) {
   const F = FLOWERS[i], lv = flowerLv[i], st = SESSION[lv.s] || 'sway';
   const C = near, GS = C('#279f23'), GD = C('#13691f'), GL = C('#5cc923'), OUT = C('#094320');
   const P0 = C('#e0d763'), P1 = C('#f5951f'), P2 = C('#4a1a19'), D0 = C('#13691f'), D1 = C('#094320'), DH = C('#228366');
-  const put = (x, y, v) => { if (x >= 0 && x < LW && y >= 0 && y < LH) FB[y * LW + x] = v; };
+  const put = (x, y, v) => { if (x >= 0 && x < LW && y >= 0 && y < LH) { FB[y * LW + x] = v; LF[y * LW + x] = 3; } };
   const base = FLOWER_Y, x0 = F.x;
   if (lv.on < 0.5) {                       // a closed bud
     for (let y = base - 9; y < base; y++) put(x0, y, GS);
@@ -314,8 +353,33 @@ function drawSwaying(list) { // rows shift by whole pixels, more towards the top
     for (let r = 0; r < s.h; r++) { const Y = y0 + r; if (Y < 0 || Y >= LH) continue;
       const k = 1 - r / s.h, off = Math.round(amp * k * k * (Math.sin(ph) + 0.35 * Math.sin(ph * 2.3 + 1)));
       for (let c = 0; c < s.w; c++) { const X = x0 + c + off; if (X < 0 || X >= LW) continue;
-        const v = s.px[r * s.w + (f ? s.w - 1 - c : c)]; if (v !== T_) FB[Y * LW + X] = v; } } });
+        const j = r * s.w + (f ? s.w - 1 - c : c), v = s.px[j]; if (v === T_) continue;
+        const nx = s.nrm ? (f ? -1 : 1) * s.nrm[j * 2] / 100 : 0, ny = s.nrm ? s.nrm[j * 2 + 1] / 100 : 0, i = Y * LW + X;
+        FB[i] = shade(v, nx, ny, c, r); LF[i] = 2; NF[i * 2] = nx * 100; NF[i * 2 + 1] = ny * 100; } } });
 }
+function drawLamps() {        // night: every session's sunflower lights what faces it, in two warm steps
+  const n = PARAMS.night; if (n < 0.05) return;
+  const L = []; FLOWERS.forEach((F, i) => { const on = flowerLv[i].on * n; if (on > 0.05) L.push([F.x + 0.5, FLOWER_Y - 32, on]); });
+  if (!L.length) return;
+  const R2 = 30 * 30, DZ = 16;
+  const level = (x, y, nx, ny) => {   // 0 dark, 1 soft, 2 strong; the nearest lamp counts fully, the others only a little
+    const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny)); let top = 0, sum = 0;
+    for (const [lx, ly, on] of L) { const dx = lx - x, dy = y - ly, d2 = dx * dx + dy * dy + DZ * DZ; if (d2 > 8000) continue;
+      const c = on * Math.max(0, (nx * dx + ny * dy + nz * DZ) / Math.sqrt(d2)) / (1 + d2 / R2); sum += c; if (c > top) top = c; }
+    const I = top + 0.25 * (sum - top) + (bayer(x, y) - 0.5) * 0.12; return I > 0.5 ? 2 : I > 0.2 ? 1 : 0; };
+  const key = L.map(l => l[0] + ':' + Math.round(l[2] * 10)).join();
+  if (key !== LAMP_KEY) { LAMP_KEY = key;                   // the baked layer only changes when a lamp turns up or down
+    for (let y = LAMP_Y0; y < LH; y++) for (let x = 0; x < LW; x++) { const i = y * LW + x;
+      LAMP_BACK[i] = BACK[i] === T_ ? 0 : level(x, y, BACK_N[i * 2] / 100, BACK_N[i * 2 + 1] / 100); } }
+  for (let i = LAMP_Y0 * LW; i < LW * LH; i++) {
+    const f = LF[i]; if (!f) continue;
+    const v = FB[i], b = v < BASE.length ? v : v >= LIT0 && v < LAMP0 ? (v - LIT0) % 48 : -1; if (b < 0) continue;
+    const x = i % LW, y = (i / LW) | 0;
+    const lv = f === 1 ? LAMP_BACK[i] : f === 2 ? level(x, y, NF[i * 2] / 100, NF[i * 2 + 1] / 100) : level(x, y, 0, 0);
+    if (lv === 2) FB[i] = LAMP0 + b; else if (lv === 1) FB[i] = LAMPS0 + b;
+  }
+}
+const LAMP_Y0 = FLOWER_Y - 130, LAMP_BACK = new Uint8Array(LW * LH); let LAMP_KEY = '';
 const put1 = (x, y, v) => { x = Math.round(x); y = Math.round(y); if (x >= 0 && x < LW && y >= 0 && y < LH) FB[y * LW + x] = v; };
 function drawLife() {
   const calm = PARAMS.rain < 0.3, day = PARAMS.night < 0.6;
@@ -366,11 +430,13 @@ let img = null, img32 = null, low = null, lowCx = null;
 function frame() {
   buildPalette(T);
   drawSky();
-  for (let i = 0; i < FB.length; i++) { const v = BACK[i]; if (v !== T_) FB[i] = v; }
+  LF.fill(0);
+  for (let i = 0; i < FB.length; i++) { const v = BACK_SH[i]; if (v !== T_) { FB[i] = v; LF[i] = 1; } }
   drawLife();
   drawSwaying(MID_SPRITES);
   for (let i = 0; i < FLOWERS.length; i++) drawFlower(i);
   drawSwaying(FRONT_SPRITES);
+  drawLamps();
   if (PARAMS.rain > 0.05) drawRain();
   for (let i = 0; i < FB.length; i++) { const o = FB[i] * 3; img32[i] = 0xff000000 | (PAL[o + 2] << 16) | (PAL[o + 1] << 8) | PAL[o]; }
   lowCx.putImageData(img, 0, 0);
@@ -385,7 +451,17 @@ function resize() { const dpr = Math.min(window.devicePixelRatio || 1, 2); const
 function applyState(s) { if (!s) return; target = { ...(STATES[s.state] || STATES.clear) };
   sessions = (s.sessions || []).slice(0, 5); while (sessions.length < 5) sessions.push(null); }
 async function requestState() { try { const r = await fetch('state.json', { cache: 'no-store' }); if (r.ok) applyState(await r.json()); } catch (e) {} }
-function nightness() { const d = new Date(), h = CONFIG.clockHours ?? d.getHours() + d.getMinutes() / 60;
+function clockHour() { const d = new Date(); return CONFIG.clockHours ?? d.getHours() + d.getMinutes() / 60; }
+let SUN_KEY = '';
+function moveSun() {         // the sun (moon at night) walks an arc with the clock; its side lights the sprites
+  const h = clockHour(), day = h >= 6 && h < 18, p = day ? (h - 6) / 12 : ((((h - 18) % 24) + 24) % 24) / 12, a = Math.PI * p;
+  SUN.px = Math.round(30 + p * 420); SUN.py = Math.round(78 - Math.sin(a) * 54);
+  const x = -Math.cos(a), y = Math.sin(a) * 0.85 + 0.15, z = 0.5, l = Math.hypot(x, y, z);
+  SUN.x = x / l; SUN.y = y / l; SUN.z = z / l; SUN.k = 1.3 * (1 - PARAMS.night) * (1 - 0.75 * PARAMS.clouds);
+  const key = Math.round(a * 30) + ':' + Math.round(SUN.k * 12);
+  if (key !== SUN_KEY && BACK) { SUN_KEY = key; shadeBack(); }
+}
+function nightness() { const h = clockHour();
   const ss = x => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); }; return h >= 12 ? ss((h - 18) / 1.5) : 1 - ss((h - 5) / 1.5); }
 let paused = false, last = 0, flashT = 0;
 window.wpPause = on => { paused = !!on; if (!paused) requestAnimationFrame(loop); };
@@ -394,6 +470,7 @@ function step(dt) {
   T += dt; const k = 1 - Math.exp(-dt / 2.5);
   for (const key in target) PARAMS[key] += (target[key] - PARAMS[key]) * k;
   PARAMS.night = nightness();
+  moveSun();
   if (PARAMS.rain > 0.5 && Math.random() < dt * 0.1) flashT = 1;
   flashT = Math.max(0, flashT - dt * 4); PARAMS.flash = flashT > 0.6 ? 0.75 : flashT > 0.3 ? 0.0 : flashT > 0.1 ? 0.4 : 0;   // a 16-bit flash: whole palette, in steps
   for (let i = 0; i < 5; i++) { const s = sessions[i], lv = flowerLv[i]; if (s) lv.s = s; lv.on += ((s ? 1 : 0) - lv.on) * (1 - Math.exp(-dt / 0.4)); }
@@ -401,7 +478,7 @@ function step(dt) {
 function loop(now) { if (paused || document.hidden) return; requestAnimationFrame(loop);
   if (now - last < 1000 / CONFIG.fps - 1) return; const dt = Math.min(0.1, (now - last) / 1000 || 1 / 30); last = now;
   resize(); step(dt); frame(); }
-window.theme = { requestState, applyState, STATES, PARAMS, CONFIG, FLOWERS };
+window.theme = { requestState, applyState, STATES, PARAMS, CONFIG, FLOWERS, SUN };
 
 (async () => {
   resize();
@@ -412,7 +489,8 @@ window.theme = { requestState, applyState, STATES, PARAMS, CONFIG, FLOWERS };
   WATER_HI = ['#96cbf8', '#96cbf8', '#5abafa', '#96cbf8', '#dae5e8', '#dae5e8', '#dae5e8'].map(near);
   FALL_LEVELS = [...new Set(['#2596cb', '#20a5f3', '#5abafa', '#96cbf8', '#dae5e8'].map(near))];
   const names = [...new Set([...BACK_SPRITES, ...MID_SPRITES, ...FRONT_SPRITES, ...CLOUDS].map(s => s[0]))];   // MID / FRONT sway, drawn every frame
-  await Promise.all(names.map(async n => { const im = await loadImg(`sprites/${n}.png`); if (im) SPR[n] = toSprite(im); }));
+  await Promise.all(names.map(async n => { const [im, nm] = await Promise.all([loadImg(`sprites/${n}.png`), n.startsWith('cloud') ? null : loadImg(`normals/${n}_n.png`)]);
+    if (!im) return; SPR[n] = toSprite(im); if (nm && nm.width === im.width && nm.height === im.height) SPR[n].nrm = toNormals(nm); }));
   for (const n of Object.keys(SPR)) if (n.startsWith('cliffs')) markFalls(SPR[n]);
   bakeLayers();
   low = document.createElement('canvas'); low.width = LW; low.height = LH; lowCx = low.getContext('2d');
