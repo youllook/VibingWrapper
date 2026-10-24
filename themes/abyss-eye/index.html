@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>深淵之眼</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #010409;
+               user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+  canvas { display: block; width: 100vw; height: 100vh; pointer-events: none; }
+  #hud { position: fixed; left: 10px; bottom: 8px; font: 12px/1.5 Consolas, monospace; color: rgba(255,255,255,.85);
+         background: rgba(0,0,0,.4); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
+  body.debug #hud { display: block; }
+  #nogl { display: none; position: fixed; inset: 0; color: #dde; font: 14px sans-serif; padding: 24px; }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div id="nogl">這個主題需要 WebGL2。</div>
+<script type="module">
+/* =====================================================================================
+ * 深淵之眼 (abyss-eye) — a colossal squid's eye in the dark, lit only by an anglerfish's lure
+ * 2026-10-25 first version
+ *
+ * three.js r170 (vendored in vendor/, MIT) because the squid is a skinned mesh.
+ *  - Units are metres; the camera sits at the origin looking down -Z, 2000 m deep: no sun, no surface, no floor.
+ *  - A fixed 90 s performance loops regardless of Claude: dark → the photophores light up and the head drifts in
+ *    from the right → the eye holds still on the lure → the squid sinks back into the dark.
+ *  - What Claude changes is only the LIGHT: the lure's brightness (no session → a faint glint, idle → a little,
+ *    thinking / working → more, waiting for you → brightest). The lure is the only real light in the scene, so the
+ *    brighter it is, the more of the squid's skin, hooks and scars come out of the dark (DESIGN.md: 光量揭示細節).
+ *  - Models: assets/colossal_squid.glb (Tripo + Blender, 5.45 m, 84 bones, eyes and 14 photophores on the head bone)
+ *    and assets/anglerfish.glb (0.185 m, jaw bone, fins / rod / lure as separate nodes) — see docs/素材庫 READMEs.
+ *  - Infrastructure (state polling, wpPause, 30 fps cap, capped resolution, window.theme hooks) follows the other themes.
+ * ===================================================================================== */
+import * as THREE from 'three';
+import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+
+/* ------------------------------ config ------------------------------ */
+const FPS = 30;
+const QS = new URLSearchParams(location.search);
+const RES_OVERRIDE = +(QS.get('res') || 0);
+const MAX_PIXELS = 1920 * 1080 * 0.5;            // half-resolution budget, like the other themes
+function resScale(w, h) { return RES_OVERRIDE || Math.min(1, Math.sqrt(MAX_PIXELS / (w * h))); }
+const CONFIG = {
+  fullTransition: 4.0, polling: true, cycle: 90,  // seconds of the fixed performance
+  stage: new THREE.Vector3(0.62, 0.05, -1.95),    // where the left eye sits when the squid is fully in
+  away: new THREE.Vector3(2.6, -0.6, -5.5),       // how far it drifts back out (added to stage)
+  yaw: Math.PI - 0.5,                             // squid heading: side-on, arms trailing left into the dark
+  armAmp: 1,                                      // multiplier on the arm curl (0 = rest pose)
+  fishOrbit: new THREE.Vector3(-0.5, 0.2, 0.5),   // centre of the fish's figure-eight, relative to the eye
+  fishScale: 1.25, exposure: 1.35, fog: 0.13,
+  timeOverride: QS.has('t') ? +QS.get('t') : null,   // seconds into the cycle (?t=55), for screenshots / demo.html
+};
+const DEBOUNCE_MS = 300, POLL_MS = 1000;
+
+// the lure is the only real light: its candela per state (sessions all empty → 'none')
+const STATES = {
+  none:     { light: 0.05, snow: 0.35 },
+  clear:    { light: 0.55, snow: 0.55 },
+  clearing: { light: 0.55, snow: 0.55 },
+  overcast: { light: 1.30, snow: 0.75 },
+  storm:    { light: 1.60, snow: 0.85 },
+  waiting:  { light: 3.20, snow: 1.00 },
+};
+const PARAMS = { light: [0, 4], snow: [0, 1] };
+const KEYS = { '0': 'none', '1': 'clear', '2': 'overcast', '3': 'storm', '4': 'clearing', '5': 'waiting' };
+
+/* ------------------------------ state machine (same shape as the other themes) ------------------------------ */
+let stateName = 'none', pending = null, debounceT = 0;
+let from = { ...STATES.none }, to = { ...STATES.none }, current = { ...STATES.none }, tStart = 0, tDur = 0;
+const now = () => performance.now() / 1000;
+function applyState(name, t = now()) {
+  if (!STATES[name]) return;
+  from = { ...current }; to = { ...STATES[name] };
+  let dist = 0;
+  for (const p in PARAMS) { const [lo, hi] = PARAMS[p]; dist = Math.max(dist, Math.abs(to[p] - from[p]) / (hi - lo)); }
+  tStart = t; tDur = Math.max(0.5, CONFIG.fullTransition * dist); stateName = name;
+}
+function requestState(name) {
+  if (!STATES[name]) return;
+  pending = name;
+  clearTimeout(debounceT);
+  debounceT = setTimeout(() => { if (pending !== stateName) applyState(pending); pending = null; }, DEBOUNCE_MS);
+}
+function advanceState(t) {
+  const k = tDur > 0 ? Math.min(1, (t - tStart) / tDur) : 1, e = k * k * (3 - 2 * k);
+  for (const p in PARAMS) current[p] = from[p] + (to[p] - from[p]) * e;
+}
+
+/* ------------------------------ inputs ------------------------------ */
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
+addEventListener('keydown', e => {
+  if (KEYS[e.key]) requestState(KEYS[e.key]);
+  if (e.key === 'd') document.body.classList.toggle('debug');
+});
+let lastPolled = null, sessionsOverride = null;
+async function poll() {
+  if (!CONFIG.polling) return;
+  try {
+    const r = await fetch('state.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const sessions = sessionsOverride || (Array.isArray(j.sessions) ? j.sessions : []);
+    const s = sessions.some(x => x) ? j.state : 'none';     // nobody working → just a glint in the dark
+    if (STATES[s] && s !== lastPolled) { lastPolled = s; requestState(s); }
+  } catch { /* unreadable → keep the current state */ }
+}
+if (STATES[QS.get('state')]) { CONFIG.polling = false; applyState(QS.get('state'), -99); }   // ?state=waiting pins the light
+setInterval(poll, POLL_MS);
+poll();
+
+/* ------------------------------ renderer / scene ------------------------------ */
+const canvas = document.getElementById('c');
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' }); }
+catch { document.getElementById('nogl').style.display = 'block'; }
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x010409);
+scene.fog = new THREE.FogExp2(0x01060c, CONFIG.fog);
+const camera = new THREE.PerspectiveCamera(38, 16 / 9, 0.05, 60);
+if (renderer) {
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = CONFIG.exposure;
+}
+// a whisper of downwelling blue so a silhouette can exist; everything else comes from the lure
+const ambient = new THREE.HemisphereLight(0x0d2236, 0x000000, 0.04);
+scene.add(ambient);
+const lureLight = new THREE.PointLight(0xcff4ff, 0, 0, 2);
+
+/* ------------------------------ marine snow ------------------------------ */
+const SNOW_N = 2600, SNOW_BOX = [9, 6, 10];
+const snowGeo = new THREE.BufferGeometry();
+{
+  const p = new Float32Array(SNOW_N * 3), s = new Float32Array(SNOW_N);
+  for (let i = 0; i < SNOW_N; i++) {
+    p[i * 3] = (Math.random() - 0.5) * SNOW_BOX[0]; p[i * 3 + 1] = (Math.random() - 0.5) * SNOW_BOX[1];
+    p[i * 3 + 2] = -0.6 - Math.random() * SNOW_BOX[2]; s[i] = Math.random();
+  }
+  snowGeo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  snowGeo.setAttribute('seed', new THREE.BufferAttribute(s, 1));
+}
+const snowMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { uTime: { value: 0 }, uLure: { value: new THREE.Vector3() }, uLight: { value: 0 }, uBase: { value: 0.5 },
+              uPx: { value: 1 }, uBox: { value: new THREE.Vector3(...SNOW_BOX) } },
+  vertexShader: /* glsl */`
+    attribute float seed; uniform float uTime, uPx; uniform vec3 uBox, uLure; varying float vA; varying float vLit;
+    void main() {
+      vec3 p = position;
+      p.y = mod(p.y - uTime * (0.015 + 0.02 * seed) + uBox.y * 0.5, uBox.y) - uBox.y * 0.5;      // slow fall, wraps
+      p.x += sin(uTime * 0.11 + seed * 40.0) * 0.15;                                              // a little drift
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      float d = length(p - uLure);
+      vLit = 1.0 / (1.0 + d * d * 6.0);
+      vA = 0.35 + 0.65 * seed;
+      gl_PointSize = uPx * (1.2 + 2.2 * seed) * 3.0 / max(0.4, -mv.z);
+    }`,
+  fragmentShader: /* glsl */`
+    uniform float uLight, uBase; varying float vA; varying float vLit;
+    void main() {
+      vec2 c = gl_PointCoord - 0.5; float r = dot(c, c);
+      if (r > 0.25) discard;
+      float a = (1.0 - r * 4.0) * vA * (0.05 * uBase + vLit * uLight * 0.9);
+      gl_FragColor = vec4(vec3(0.75, 0.9, 1.0) * a, a);
+    }`,
+});
+const snow = new THREE.Points(snowGeo, snowMat);
+snow.frustumCulled = false;
+scene.add(snow);
+
+/* ------------------------------ models ------------------------------ */
+const squid = { root: new THREE.Group(), chains: [], spine: [], head: null, photo: null, eye: new THREE.Vector3(), ready: false };
+const fish = { root: new THREE.Group(), parts: {}, jaw: null, esca: null, escaMat: null, ready: false };
+scene.add(squid.root, fish.root);
+const loader = new GLTFLoader();
+const rest = new Map();                          // bone → rest quaternion
+const keep = o => rest.set(o, o.quaternion.clone());
+
+loader.load('assets/colossal_squid.glb', g => {
+  const m = g.scene;
+  squid.root.add(m);
+  squid.root.rotation.y = CONFIG.yaw;
+  m.traverse(o => {
+    if (o.isMesh) {
+      o.frustumCulled = false;                    // skinned bounds are unreliable
+      if (o.material.name === 'photophore') squid.photo = o.material;
+      else if (o.material.name === 'eye_dark') {
+        // a wet lens: black, with a clearcoat so the lure shows up as a sharp catchlight
+        o.material = squid.eyeMat ??= new THREE.MeshPhysicalMaterial({ color: 0x020305, roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.02, specularIntensity: 1 });
+      }
+      else if (o.material.name !== 'eye_dark' && o.material.isMeshStandardMaterial) { o.material.roughness = 0.42; o.material.metalness = 0; }
+    }
+    if (o.isBone && /Head_1$/.test(o.name)) squid.head = o;
+  });
+  // limbs: every bone chain hanging off the head (Tripo's 9 + the tentacle we added); spine: the rest of the tripo bones
+  for (const b of squid.head.children.filter(c => c.isBone && /^(bone_|tentacle_fix)/.test(c.name))) {
+    const chain = []; let x = b;
+    while (x) { chain.push(x); keep(x); x = x.children.find(c => c.isBone); }
+    squid.chains.push(chain);
+  }
+  m.traverse(o => { if (o.isBone && /^tripo/.test(o.name)) { squid.spine.push(o); keep(o); } });
+  // place it so the left eye lands on the stage point
+  squid.root.updateMatrixWorld(true);
+  const eye = m.getObjectByName('eye_L');
+  eye.getWorldPosition(squid.eye);
+  squid.offset = CONFIG.stage.clone().sub(squid.eye);
+  squid.ready = true;
+}, undefined, e => console.warn('squid not loaded:', e));
+
+loader.load('assets/anglerfish.glb', g => {
+  const m = g.scene;
+  fish.root.add(m);
+  fish.root.scale.setScalar(CONFIG.fishScale);
+  m.traverse(o => {
+    if (o.isMesh) { o.frustumCulled = false; fish.parts[o.name] = o; keep(o); }
+    if (o.isBone && o.name === 'jaw') { fish.jaw = o; keep(o); }
+  });
+  fish.esca = fish.parts.esca;
+  fish.escaMat = fish.esca.material;
+  fish.esca.add(lureLight);
+  keep(fish.parts.illicium);
+  fish.ready = true;
+}, undefined, e => console.warn('anglerfish not loaded:', e));
+
+/* ------------------------------ the fixed performance ------------------------------ */
+const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const qTmp = new THREE.Quaternion(), eTmp = new THREE.Euler();
+function wiggle(o, x, y, z) { eTmp.set(x, y, z); o.quaternion.copy(rest.get(o)).multiply(qTmp.setFromEuler(eTmp)); }
+
+let sceneTime = 0;
+const lurePos = new THREE.Vector3(), prevFish = new THREE.Vector3(), tmp = new THREE.Vector3();
+function animate(dt) {
+  sceneTime += dt;
+  const T = CONFIG.timeOverride ?? (sceneTime % CONFIG.cycle);
+  const t = sceneTime;
+  // appear: dark 0–18 s, drift in 18–40, hold to 70, sink back 70–88
+  const appear = ss(18, 40, T) * (1 - ss(70, 88, T));
+  const L = current.light;
+
+  if (squid.ready) {
+    const away = CONFIG.away.clone().multiplyScalar(1 - appear);
+    squid.root.position.copy(squid.offset).add(away);
+    squid.root.position.y += Math.sin(t * 0.21) * 0.04;               // slow hover
+    squid.root.rotation.y = CONFIG.yaw + (1 - appear) * 0.35 + Math.sin(t * 0.09) * 0.03;
+    // arms: a slow travelling curl down each chain, livelier once it has arrived
+    const amp = (0.022 + 0.035 * appear) * CONFIG.armAmp;
+    squid.chains.forEach((chain, c) => chain.forEach((b, i) => {
+      const ph = t * 0.55 - i * 0.6 + c * 1.7;
+      wiggle(b, amp * Math.sin(ph), amp * 0.6 * Math.cos(ph * 0.8 + c), amp * 0.5 * Math.sin(ph * 0.6));
+    }));
+    // mantle breathing: the spine sways a hair, slower than the arms
+    squid.spine.forEach((b, i) => wiggle(b, 0, Math.sin(t * 0.25 + i) * 0.012, Math.sin(t * 0.18 + i * 0.5) * 0.01));
+    if (squid.head) wiggle(squid.head, 0, Math.sin(t * 0.13) * 0.04 * appear, 0);
+    // photophores wake up as it arrives; a slow shimmer, brighter when the lure is brighter
+    if (squid.photo) squid.photo.emissiveIntensity = (0.15 + 2.2 * ss(14, 30, T) * (1 - ss(74, 86, T))) * (0.7 + 0.3 * Math.sin(t * 1.7)) * (0.6 + 0.2 * L);
+    squid.root.updateMatrixWorld(true);
+    squid.root.getObjectByName('eye_L').getWorldPosition(squid.eye);
+  }
+
+  if (fish.ready) {
+    // a lazy figure-eight between the camera and the eye; the fish keeps its lure in front of the eye
+    const c = (squid.ready ? squid.eye : CONFIG.stage).clone().add(CONFIG.fishOrbit);
+    const w = (2 * Math.PI) / 46;
+    prevFish.copy(fish.root.position);
+    fish.root.position.set(c.x + 0.42 * Math.sin(t * w), c.y + 0.08 * Math.sin(2 * t * w + 0.7), c.z + 0.16 * Math.sin(2 * t * w));
+    tmp.copy(fish.root.position).sub(prevFish);
+    if (tmp.lengthSq() > 1e-10) fish.root.lookAt(tmp.add(fish.root.position));
+    const p = fish.parts;
+    if (p.fin_tail) wiggle(p.fin_tail, 0, Math.sin(t * 3.1) * 0.35, 0);
+    if (p.fin_pectoral_L) wiggle(p.fin_pectoral_L, 0, 0, Math.sin(t * 2.3) * 0.45);
+    if (p.fin_pectoral_R) wiggle(p.fin_pectoral_R, 0, 0, -Math.sin(t * 2.3 + 0.4) * 0.45);
+    if (p.fin_dorsal) wiggle(p.fin_dorsal, 0, Math.sin(t * 1.6) * 0.12, 0);
+    if (p.fin_anal) wiggle(p.fin_anal, 0, Math.sin(t * 1.6 + 1) * 0.12, 0);
+    if (p.illicium) wiggle(p.illicium, Math.sin(t * 1.3) * 0.08, Math.sin(t * 0.9) * 0.05, 0);
+    if (fish.jaw) wiggle(fish.jaw, (0.5 + 0.5 * Math.sin(t * 0.45)) * 0.22, 0, 0);
+    // the lure: glow + the scene's only light
+    lureLight.intensity = L;
+    lureLight.distance = 0;
+    fish.escaMat.emissiveIntensity = 0.6 + 2.5 * Math.min(1, L / 2) + 0.15 * Math.sin(t * 2.9);
+    fish.esca.getWorldPosition(lurePos);
+  }
+  snowMat.uniforms.uTime.value = t;
+  snowMat.uniforms.uLure.value.copy(lurePos);
+  snowMat.uniforms.uLight.value = L;
+  snowMat.uniforms.uBase.value = current.snow;
+  return { T, appear };
+}
+
+/* ------------------------------ frame ------------------------------ */
+let raf = 0, lastT = now(), nextFrame = 0, fps = 0, fpsCount = 0, fpsT = now();
+const FRAME_MS = 1000 / FPS;
+function resize() {
+  if (!renderer) return;
+  const dpr = window.devicePixelRatio || 1;
+  const s = resScale(innerWidth * dpr, innerHeight * dpr);
+  renderer.setPixelRatio(dpr * s);
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  snowMat.uniforms.uPx.value = innerHeight * dpr * s / 600;
+}
+addEventListener('resize', resize);
+function render(dt) {
+  advanceState(now());
+  const a = animate(dt);
+  renderer.render(scene, camera);
+  return a;
+}
+function frame(ms) {
+  raf = requestAnimationFrame(frame);
+  if (ms < nextFrame) return;
+  nextFrame += FRAME_MS;
+  if (nextFrame < ms) nextFrame = ms + FRAME_MS;
+  const t = now(), dt = Math.min(0.1, t - lastT);
+  lastT = t;
+  const a = render(dt);
+  fpsCount++;
+  if (t - fpsT >= 1) { fps = fpsCount / (t - fpsT); fpsCount = 0; fpsT = t; }
+  if (document.body.classList.contains('debug')) {
+    const r = renderer.info.render;
+    document.getElementById('hud').textContent =
+      `state ${stateName}${pending ? ' (→' + pending + ')' : ''}  light ${current.light.toFixed(2)}  snow ${current.snow.toFixed(2)}\n` +
+      `show ${a.T.toFixed(1)}s / ${CONFIG.cycle}s  appear ${a.appear.toFixed(2)}\n` +
+      `fps ${fps.toFixed(1)}  res ${renderer.domElement.width}×${renderer.domElement.height}  tris ${r.triangles}  calls ${r.calls}`;
+  }
+}
+function start() { if (renderer && !raf) { lastT = now(); raf = requestAnimationFrame(frame); } }
+function stop() { cancelAnimationFrame(raf); raf = 0; }
+let hostPaused = false;
+document.addEventListener('visibilitychange', () => (document.hidden || hostPaused ? stop() : start()));
+// the host (tools/wallpaper.js) pauses us while a window covers the whole desktop
+window.wpPause = on => { hostPaused = !!on; if (hostPaused) stop(); else if (!document.hidden) start(); };
+if (renderer) { resize(); if (!document.hidden) start(); }
+
+// testing hooks (themes/demo.html looks for window.theme)
+window.theme = window.abyss = {
+  requestState, applyState, STATES, PARAMS, CONFIG, squid, fish, scene, camera, THREE,
+  setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; poll(); },
+  setTime(sec) { CONFIG.timeOverride = sec; },                       // freeze the performance at a moment (null = run)
+  frame(dt = 1 / FPS) { return render(dt); },
+  get ready() { return squid.ready && fish.ready; },
+  get current() { return { ...current }; }, get state() { return stateName; }, get sceneTime() { return sceneTime; },
+};
+</script>
+</body>
+</html>
