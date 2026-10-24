@@ -5,6 +5,7 @@
 
 - 2026-10-25 第一版（全身側拍）。
 - 同日依 Fable 審稿重做成「遭遇」構圖：只拍眼睛與眼周，巨物看不到邊才顯得大。
+- 同日再把整隻魷魚換成專用頭模 `abyss_head.glb`：從目標圖裁出眼區丟 Tripo（H3.1 → 重拓撲 2 萬三角 → 去光貼圖），眼窩肉環與疤痕是真的雕在模型和貼圖裡；Blender 腳本加上給 shader 用的眼球和 7 顆發光器（`E:	mp\colossal-squid\socketuild_head.py`）。
 - 設計稿與規格在 `docs/素材庫/colossal-squid/DESIGN.md`、`SPECS.md`（素材庫不進 git，在作者本機）；目標圖在 `E:\tmp\colossal-squid\angler\target.png`。
 
 ## 狀態對照（只改餌燈亮度與海雪）
@@ -52,6 +53,9 @@
 
 ## 皮膚（`skinMaterial()`，注入 Tripo 的標準材質）
 
+頭模本身已有雕出的眼窩肉環與疤痕貼圖，shader 只補便宜的東西（下列疤痕與毛孔已拿掉）；材質改成單面（Tripo 導出是雙面，背面會多一整層全螢幕成本）。
+
+
 - 底色壓成暗赭紅，加世界座標噪聲做的斑駁和淡色小點。
 - 眼周同心皺褶：依「到眼心距離」做放射狀正弦，擾動法線。
 - 三個圓形舊疤（抹香鯨的吸盤痕）。
@@ -72,9 +76,9 @@
 ## 技術
 
 - three.js r170，放在 `vendor/`（MIT，`vendor/LICENSE-three.txt`）。
-- 模型：`assets/colossal_squid.glb`（5.45 m、84 根骨頭，眼球與 14 顆發光器掛在頭骨）、`assets/anglerfish.glb`（0.185 m）。兩者都是 Tripo 專業版產出再經 Blender 腳本處理，說明見素材庫 README。
+- 模型：`assets/abyss_head.glb`（魷魚頭，約 1.1 m、18,941 三角、2k 貼圖；`eye_L` 眼球、`photophore_L_01..07`）、`assets/anglerfish.glb`（0.185 m）。都是 Tripo 專業版產出再經 Blender 腳本處理。整隻魷魚 `colossal_squid.glb` 已從主題移除（留在素材庫）。
 - 30 fps 上限、像素預算 1920×1080 的一半。
-- 實測每格約 9.4 ms（1357×763，內建瀏覽器，含 GPU 同步）；第一版約 5.5 ms。
+- 實測每格約 11.2 ms（1357×763，內建瀏覽器，含 GPU 同步）；第一版約 5.5 ms。
 - 測試網址參數：`?t=55` 固定在演出第 55 秒、`?state=waiting` 固定狀態（不讀 state.json）。
 - `window.theme`：`requestState`、`applyState`、`setTime(秒|null)`、`setSessions([...])`、`frame()`、`place()`、`CONFIG`、`squid`、`fish`、`renderer`。
 

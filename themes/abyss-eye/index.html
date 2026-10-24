@@ -41,7 +41,8 @@
  *  - What Claude changes is only the LIGHT: the lure's brightness (no session → a faint glint, idle → a little,
  *    thinking / working → more, waiting for you → brightest). The lure is the only real light in the scene, so the
  *    brighter it is, the more of the squid's skin, hooks and scars come out of the dark (DESIGN.md: 光量揭示細節).
- *  - Models: assets/colossal_squid.glb (Tripo + Blender, 5.45 m, 84 bones, eyes and 14 photophores on the head bone)
+ *  - Models: assets/abyss_head.glb (Tripo, made from the eye crop of the concept art: a squid head with a sculpted
+ *    socket; Blender added the 'eye_L' sphere for the lens shader and 7 photophores)
  *    and assets/anglerfish.glb (0.185 m, jaw bone, fins / rod / lure as separate nodes) — see docs/素材庫 READMEs.
  *  - Infrastructure (state polling, wpPause, 30 fps cap, capped resolution, window.theme hooks) follows the other themes.
  * ===================================================================================== */
@@ -61,7 +62,8 @@ const CONFIG = {
   fov: 30,
   eyeScreen: [0.72, 0.45],                        // where the left eye's centre sits on screen (0..1 from top-left)
   eyeDist: 1.15,                                  // camera → eye, metres (eye ≈ 37 % of the screen height)
-  yaw: Math.PI - 0.4, pitch: -0.6, roll: -0.6,      // squid turned so the eye looks at the camera, mantle off right-back
+  yaw: -0.6, pitch: 0.1, roll: 0.1,              // the head turned so the eye looks at the camera, the skull off right
+  eyeFwd: [0.105, -0.017, 0.994],                 // the socket's axis in the eyeball's own space (from the Blender fit)
   away: new THREE.Vector3(0.35, -0.1, -1.6),      // how far it drifts back out (added to the stage point)
   armAmp: 1,                                      // multiplier on the arm curl (0 = rest pose)
   fishOrbit: new THREE.Vector3(-0.34, -0.03, 0.2),// centre of the fish's small loop, relative to the eye
@@ -164,7 +166,7 @@ const photoGlow = Array.from({ length: 14 }, () => {
     blending: THREE.AdditiveBlending, fog: false, opacity: 0 }));
   sp.scale.setScalar(0.07); scene.add(sp); return sp;
 });
-const halo = [0.06, 1.0].map(size => {
+const halo = [0.06, 0.6].map(size => {
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xcff4ff, transparent: true, depthWrite: false,
     depthTest: size < 0.1, blending: THREE.AdditiveBlending, fog: false }));
   sp.userData.size = size; scene.add(sp); return sp;
@@ -263,11 +265,12 @@ function eyeMaterial() {
   });
 }
 /* ------------------------------ the skin ------------------------------
- * Tripo's 2k texture goes soft and too pink this close, so the standard material gets extra detail injected:
- * a darker oxblood albedo with world-space mottling, concentric folds around the eye (a normal ripple by the
- * distance from the eye centre in the camera plane — the camera never rotates, so world xy = view xy), a few round
- * old scars (sucker marks of a sperm whale), blotchy roughness, and a red glow of light passing under the skin near
- * the lure (fake subsurface). All of it is lit only by the lure, so it comes out of the dark as the lure brightens. */
+ * The head (Tripo, from the concept art's eye crop) already has sculpted socket folds and scars in its mesh and
+ * texture, so only cheap extras are injected into its standard material: a tint from Tripo's purple toward oxblood
+ * with world-space mottling, blotchy roughness, a faint concentric fold sheen around the eye (a normal ripple by the
+ * distance from the eye centre in the camera plane — the camera never rotates, so world xy = view xy), and a red
+ * glow of light passing under the skin near the lure (fake subsurface). Front faces only (Tripo exports double-sided).
+ * All of it is lit only by the lure, so it comes out of the dark as the lure brightens. */
 const skinU = { uEye: { value: new THREE.Vector3() }, uEyeR: { value: 0.115 }, uLure: { value: new THREE.Vector3() }, uL: { value: 0 } };
 const NOISE_GLSL = /* glsl */`
   float h3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -277,6 +280,7 @@ const NOISE_GLSL = /* glsl */`
   float fbm3(vec3 p) { return 0.67 * n3(p) + 0.33 * n3(p * 2.03); }   // two octaves: the skin fills the screen`;
 function skinMaterial(mat) {
   mat.metalness = 0; mat.roughness = 0.5;
+  mat.side = THREE.FrontSide;            // Tripo exports double-sided: the back faces cost a second full-screen skin pass
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, skinU);
     sh.vertexShader = sh.vertexShader
@@ -286,30 +290,20 @@ function skinMaterial(mat) {
       .replace('#include <common>', `#include <common>
         varying vec3 vWPos; uniform vec3 uEye, uLure; uniform float uEyeR, uL;
         ${NOISE_GLSL}
-        // three old round scars around the eye: (angle, distance in eye radii, size in eye radii)
-        const vec3 SCARS[3] = vec3[3](vec3(2.3, 2.1, 0.22), vec3(4.1, 2.6, 0.30), vec3(5.4, 1.9, 0.16));`)
+`)
       .replace('#include <map_fragment>', `#include <map_fragment>
+        // the Tripo head carries its own sculpted folds and scars; only a cheap tint, mottling and fold sheen are added
         vec2 rel = (vWPos.xy - uEye.xy) / uEyeR; float dEye = length(rel);
-        float mott = fbm3(vWPos * 9.0);
-        diffuseColor.rgb *= vec3(0.62, 0.36, 0.33) * (0.75 + 0.5 * mott);                     // oxblood, blotchy
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.36, 0.40), smoothstep(0.84, 0.94, n3(vWPos * 55.0)) * 0.3);  // pale specks
-        float scar = 0.0, scarN = 0.6 + 0.8 * n3(vWPos * 70.0);
-        for (int i = 0; i < 3; i++) {
-          vec2 c = vec2(cos(SCARS[i].x), sin(SCARS[i].x)) * SCARS[i].y;
-          float r = length(rel - c) / SCARS[i].z;
-          scar = max(scar, (smoothstep(0.6, 1.0, r) * smoothstep(1.35, 1.0, r) * 0.6 + smoothstep(0.9, 0.0, r) * 0.45) * scarN);
-        }
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.46, 0.40, 0.43), scar * 0.5);`)
+        float mott = n3(vWPos * 9.0);
+        diffuseColor.rgb *= vec3(1.0, 0.78, 0.82) * (0.8 + 0.4 * mott);                       // nudge the purple toward oxblood`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = clamp(roughnessFactor * (0.55 + 0.9 * fbm3(vWPos * 14.0 + 3.0)) + scar * 0.25, 0.12, 1.0);`)
+        roughnessFactor = clamp(roughnessFactor * (0.6 + 0.8 * mott), 0.12, 1.0);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         {
-          // concentric folds: a radial sine that fades out 3 eye radii from the centre, plus fine pores
           float k = 7.0, band = smoothstep(1.02, 1.25, dEye) * smoothstep(3.6, 1.7, dEye);
-          float slope = cos(dEye * k + mott * 2.0) * band * 1.3;
+          float slope = cos(dEye * k + mott * 2.0) * band * 0.45;
           vec2 dir = dEye > 1e-3 ? rel / dEye : vec2(0.0);
-          float pn = n3(vWPos * 140.0); vec3 pores = vec3(pn - 0.5, fract(pn * 7.31) - 0.5, 0.0) * 0.07;
-          normal = normalize(normal + vec3(dir * slope, 0.0) + pores);
+          normal = normalize(normal + vec3(dir * slope, 0.0));
         }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         { float d = length(vWPos - uLure); totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.25, 0.2) * uL / (d * d) * 0.05; }`);
@@ -319,14 +313,9 @@ function skinMaterial(mat) {
 
 const eyes = [];
 function initEyes(m) {
-  const L = m.getObjectByName('eye_L'), R = m.getObjectByName('eye_R');
-  const pL = L.getWorldPosition(new THREE.Vector3()), pR = R.getWorldPosition(new THREE.Vector3());
-  const mid = pL.clone().add(pR).multiplyScalar(0.5);
-  for (const node of [L, R]) {
+  for (const node of ['eye_L', 'eye_R'].map(n => m.getObjectByName(n)).filter(Boolean)) {
     node.geometry.computeBoundingSphere();
-    const p = node.getWorldPosition(new THREE.Vector3());
-    // the eye's outward axis in its own space: away from the middle of the head
-    const fwd = node.worldToLocal(p.clone().add(p.clone().sub(mid))).normalize();
+    const fwd = new THREE.Vector3(...CONFIG.eyeFwd).normalize();   // the socket's axis: the iris is centred on it
     node.material.uniforms.uFwd.value.copy(fwd);
     node.material.uniforms.uR.value = node.geometry.boundingSphere.radius;
     node.material.uniforms.uWS.value = node.getWorldScale(new THREE.Vector3()).x;
@@ -360,7 +349,7 @@ function lookAtLure(dt, t, L) {
     target.multiply(e.sacc).multiply(drift);
     e.node.quaternion.slerp(target, 1 - Math.exp(-dt / (GAZE.lag / (1 + L * 2))));   // brighter → keener
     // pupil follows the light, slowly
-    e.pupil += (THREE.MathUtils.lerp(0.82, 0.71, THREE.MathUtils.smoothstep(L, 0, 0.4)) - e.pupil) * (1 - Math.exp(-dt / 1.5));
+    e.pupil += (THREE.MathUtils.lerp(0.88, 0.8, THREE.MathUtils.smoothstep(L, 0, 0.4)) - e.pupil) * (1 - Math.exp(-dt / 1.5));
     const u = e.mat.uniforms;
     u.uPupil.value = e.pupil; u.uLight.value = L;
     e.node.updateMatrixWorld();
@@ -377,7 +366,7 @@ const loader = new GLTFLoader();
 const rest = new Map();                          // bone → rest quaternion
 const keep = o => rest.set(o, o.quaternion.clone());
 
-loader.load('assets/colossal_squid.glb', g => {
+loader.load('assets/abyss_head.glb', g => {
   const m = g.scene;
   squid.root.add(m);
   m.traverse(o => {
@@ -394,7 +383,7 @@ loader.load('assets/colossal_squid.glb', g => {
     if (o.isBone && /Head_1$/.test(o.name)) squid.head = o;
   });
   // limbs: every bone chain hanging off the head (Tripo's 9 + the tentacle we added); spine: the rest of the tripo bones
-  for (const b of squid.head.children.filter(c => c.isBone && /^(bone_|tentacle_fix)/.test(c.name))) {
+  for (const b of (squid.head?.children ?? []).filter(c => c.isBone && /^(bone_|tentacle_fix)/.test(c.name))) {
     const chain = []; let x = b;
     while (x) { chain.push(x); keep(x); x = x.children.find(c => c.isBone); }
     squid.chains.push(chain);
@@ -493,8 +482,8 @@ function animate(dt) {
     if (p.illicium) wiggle(p.illicium, Math.sin(t * 1.3) * 0.08, Math.sin(t * 0.9) * 0.05, 0);
     if (fish.jaw) wiggle(fish.jaw, (0.5 + 0.5 * Math.sin(t * 0.45)) * 0.22, 0, 0);
     // the lure: glow + the scene's only light
-    lureLight.intensity = L * 0.8;
-    lureFill.intensity = L * 0.6;
+    lureLight.intensity = L * 1.3;
+    lureFill.intensity = L * 0.9;
     fish.escaMat.emissiveIntensity = 0.6 + 2.5 * Math.min(1, L / 0.25) + 0.15 * Math.sin(t * 2.9);
     fish.esca.getWorldPosition(lurePos);
   }
@@ -504,7 +493,7 @@ function animate(dt) {
   for (const sp of halo) {
     sp.position.copy(lurePos);
     sp.scale.setScalar(sp.userData.size * (0.55 + 0.8 * hk));
-    sp.material.opacity = sp.userData.size < 0.1 ? 0.5 + 0.5 * hk : 0.10 + 0.45 * hk;
+    sp.material.opacity = sp.userData.size < 0.1 ? 0.5 + 0.5 * hk : 0.08 + 0.3 * hk;
   }
   snowMat.uniforms.uTime.value = t;
   snowMat.uniforms.uLure.value.copy(lurePos);
