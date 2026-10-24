@@ -31,13 +31,14 @@
  *
  * Input: state.json next to this file ({"state":"storm"}) polled every second; keys 1–5 (5 = waiting).
  * Budget: 30 fps cap, 0.5× resolution, no rendering while document.hidden, fbm ≤ 5 octaves,
- * no post-processing passes.
+ * no post-processing passes — except the rain-on-glass pass, only while the window is wet (2026-10-23).
  * ===================================================================================== */
 
 /* ------------------------------ config ------------------------------ */
 const FPS = 30;
 const RES_SCALE = 0.5;
-const CONFIG = { fullTransition: 4.0, polling: true, clockHours: /[?&]day=1/.test(location.search) ? 10.5 : /[?&]night=1/.test(location.search) ? 22 : null, sea: /[?&]sea=1/.test(location.search) };   // sea: distant sea in the lower part (?sea=1)
+const CONFIG = { fullTransition: 4.0, polling: true, clockHours: /[?&]day=1/.test(location.search) ? 10.5 : /[?&]night=1/.test(location.search) ? 22 : null, sea: /[?&]sea=1/.test(location.search),
+                 glass: !/[?&]glass=0/.test(location.search) };   // sea: distant sea in the lower part (?sea=1); glass: rain-on-window layer (?glass=0 turns it off)
 const SEA_LINE = 0.28;                                   // horizon height (screen fraction) when the sea is on   // clockHours: demo override (0–24), null = real time   // seconds for a full-range change; demo.html can change both
 const DEBOUNCE_MS = 300;
 const POLL_MS = 1000;
@@ -216,7 +217,11 @@ function flashLevel(t) {
 
 /* ------------------------------ WebGL ------------------------------ */
 const canvas = document.getElementById('c');
-const gl = canvas.getContext('webgl', { antialias: false, alpha: false, preserveDrawingBuffer: false, powerPreference: 'low-power' });
+// WebGL2 when available: the rain-on-glass layer blurs with mipmaps of a screen-sized (non-power-of-two) texture.
+// The sky shader stays GLSL ES 1.00, which WebGL2 still runs; on WebGL1 the glass layer is simply off.
+const GL_OPTS = { antialias: false, alpha: false, preserveDrawingBuffer: false, powerPreference: 'low-power' };
+const gl = canvas.getContext('webgl2', GL_OPTS) || canvas.getContext('webgl', GL_OPTS);
+const GL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
 
 const VS = `attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
 const FS = `
@@ -851,8 +856,192 @@ for (const n of ['uRes', 'uTime', 'uDensity', 'uDark', 'uRain', 'uBright', 'uFla
 
 function resize() {
   const w = Math.max(1, Math.round(innerWidth * RES_SCALE)), h = Math.max(1, Math.round(innerHeight * RES_SCALE));
-  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); }
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); glassTarget.w = 0; }
 }
+
+/* ------------------------------ rain on the window glass (2026-10-23) ------------------------------ */
+// The sky is rendered into a texture, then seen through a pane of glass. Physics, not a port of anyone's shader:
+//   · a drop is a spherical cap = a tiny convex lens: it shows the scene minified and upside down, sharp
+//   · fogged glass scatters light = the scene blurred (mip levels) and a little washed out
+//   · a running drop wipes the fog off along its path; the wiped streak fogs over again behind it
+//   · water beads up in small drops that slowly grow and evaporate; big drops stick, then lurch downward
+//   rain    → how many running drops (= current.rainAmount, so the shower's strength carries through)
+//   fog     → 1: focused on the glass (outside blurred) … 0: focused on the sky. Fogs up over ~8 s while it
+//             rains; when the rain stops one 4.5 s focus pull clears it, with a slight zoom on the same curve
+//   wet     → water on the glass; gone by the end of the focus pull (no drops left after the rain)
+// Only drawn while there is fog or water on the glass; a dry window costs nothing (sky drawn straight to the screen).
+const GLASS = { fogUp: 8, pull: 4.5, zoom: 0.05, rainOn: 0.25, rainOff: 0.2 };
+const glass = { raining: false, fog: 0, wet: 0, drops: 0, pull: null };
+const glassTarget = { w: 0, h: 0, tex: null, fb: null };
+let glassProg = null;
+const GU = {};
+const GLASS_VS = `#version 300 es
+in vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
+const GLASS_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform vec2  uRes;
+uniform float uTime, uRain, uWet, uFog, uZoom, uNight;
+out vec4 outColor;
+
+// integer hash (lowbias32, Chris Wellons, public domain) → uniform floats per cell
+uint hash(uint x) { x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16; return x; }
+uint cellSeed(ivec2 c, uint salt) { return hash(uint(c.x) * 0x9E3779B1U ^ hash(uint(c.y) + salt * 0x85EBCA6BU)); }
+float rnd(uint h, uint k) { return float(hash(h + k * 0x27D4EB2FU)) * (1.0 / 4294967295.0); }
+
+// what the glass does at this pixel (all lengths in screen heights)
+struct Glass {
+  vec2  lens;    // where the lens makes us look instead (offset)
+  float body;    // 0..1 inside a drop (sharp through it, whatever the fog)
+  float rim;     // dark ring at a drop's edge (light bent away from the eye)
+  float wipe;    // 0..1 fog wiped off by a drop that ran here
+};
+
+// a drop centred at c with radii r (x, y): a spherical cap in drop-local units. A convex drop shows a
+// minified, inverted image, so we look the other way from its centre, more strongly toward the edge.
+void addDrop(inout Glass g, vec2 p, vec2 c, vec2 r, float power) {
+  vec2 d = (p - c) / r;
+  float q = dot(d, d);
+  if (q >= 1.0) return;
+  float h = sqrt(1.0 - q);                               // cap height (1 at the centre, 0 at the edge)
+  float edge = smoothstep(1.0, 0.82, q);                 // antialiased outline
+  g.lens += -d * r * power * (1.4 + 1.6 * (1.0 - h)) * edge;
+  g.body = max(g.body, edge);
+  g.rim = max(g.rim, smoothstep(0.55, 0.95, q) * edge);
+}
+
+// beads: one possible drop per cell, growing in, holding, then evaporating on its own clock
+void beads(inout Glass g, vec2 p, float cell, uint salt, float amount, float t) {
+  ivec2 c = ivec2(floor(p / cell));
+  vec2 f = fract(p / cell);
+  uint s = cellSeed(c, salt);
+  if (rnd(s, 0U) > amount) return;
+  float life = fract(t * mix(0.03, 0.09, rnd(s, 1U)) + rnd(s, 2U));
+  float grow = smoothstep(0.0, 0.15, life) * (1.0 - smoothstep(0.7, 1.0, life));
+  float r = mix(0.10, 0.30, rnd(s, 3U) * rnd(s, 3U)) * grow;   // mostly small, a few fat ones
+  if (r < 0.02) return;
+  vec2 ctr = vec2(0.32) + 0.36 * vec2(rnd(s, 4U), rnd(s, 5U)); // stays inside its cell
+  addDrop(g, p, (vec2(c) + ctr) * cell, vec2(r * cell, r * cell * 0.92), 1.0);
+}
+
+// running drops: one per column per run. A run sticks, gathers, then lurches down a wobbly path that only
+// depends on height, so the trail it leaves lies exactly on the path; small beads stay behind along the trail.
+void runners(inout Glass g, vec2 p, float colW, uint salt, float amount, float t) {
+  int ci = int(floor(p.x / colW));
+  uint cs = cellSeed(ivec2(ci, 0), salt);
+  float span = 1.6;                                      // the run starts a bit above the screen and ends below it
+  float rate = mix(0.25, 0.6, rnd(cs, 1U));
+  float u = t * rate + rnd(cs, 2U) * 9.0;
+  // stick–slip: three quarters of each step stuck, then a quick slide of one step length
+  float steps = floor(u) + smoothstep(0.72, 1.0, fract(u));
+  float travel = steps * 0.11;
+  float run = floor(travel / span);                      // each run is a different drop
+  uint rs = hash(cs + uint(run) * 0x165667B1U);
+  if (rnd(rs, 0U) > amount) return;
+  float headY = 1.25 - (travel - run * span);
+  float x0 = (float(ci) + 0.5) * colW;
+  float a1 = colW * 0.18 * rnd(rs, 1U), a2 = colW * 0.07;
+  float ph = rnd(rs, 2U) * 6.283;
+  #define PATH_X(y) (x0 + a1 * sin((y) * 6.0 + ph) + a2 * sin((y) * 23.0 + ph * 2.0))
+  float size = colW * mix(0.16, 0.26, rnd(rs, 3U));
+
+  // the head: a little taller than wide, heavier at the bottom
+  addDrop(g, p, vec2(PATH_X(headY), headY), vec2(size, size * 1.25), 1.2);
+
+  // the trail above the head: fog wiped clean, narrowing and fogging over again with age
+  float above = p.y - headY;
+  if (above > 0.0 && p.y < 1.25) {
+    float age = above / (0.11 * rate);                   // ≈ seconds since the head passed (mean speed: one step per 1/rate s)
+    float w = size * mix(0.55, 0.15, clamp(age / 8.0, 0.0, 1.0));
+    float dx = abs(p.x - PATH_X(p.y));
+    g.wipe = max(g.wipe, smoothstep(w, w * 0.4, dx) * exp(-age * 0.12));
+    // beads left behind, every so often along the path
+    float sp = size * 2.6;
+    float k = floor(p.y / sp);
+    uint bs = hash(rs + uint(int(k)) * 0x9E3779B9U);
+    float by = (k + 0.5) * sp;
+    if (by > headY + size && rnd(bs, 0U) < 0.55)
+      addDrop(g, p, vec2(PATH_X(by), by), vec2(size * mix(0.25, 0.45, rnd(bs, 1U))), 0.9);
+  }
+  #undef PATH_X
+}
+
+void main() {
+  vec2 fc = gl_FragCoord.xy;
+  vec2 p = fc / uRes.y;                                  // screen heights: drops stay round at any aspect
+  vec2 UV = (fc / uRes - 0.5) * uZoom + 0.5;
+  float t = uTime;
+
+  Glass g = Glass(vec2(0.0), 0.0, 0.0, 0.0);
+  beads(g, p, 0.028, 1U, 0.55 * uWet, t);                          // fine beads: wet glass
+  beads(g, p + 0.37, 0.061, 2U, 0.30 * uWet, t);                   // fewer, larger
+  runners(g, p, 0.085, 3U, smoothstep(0.15, 0.8, uRain), t);       // big runs: steady rain
+  runners(g, p + vec2(0.031, 0.0), 0.052, 4U, smoothstep(0.0, 0.5, uRain) * 0.8, t * 1.3);
+
+  float soft = mix(0.45, 1.0, uFog);                    // focused on the sky: the drops are out of focus
+  vec2 look = UV + g.lens * soft * vec2(uRes.y / uRes.x, 1.0);
+  // fogged glass blurs everything except what you see through a drop or a fresh wipe
+  float clear = max(g.body, g.wipe * 0.9);
+  float lod = uFog * mix(3.0, 5.5, uRain) * (1.0 - clear);
+  vec3 col = textureLod(uScene, look, lod).rgb;
+  // condensation scatters light: washed out and slightly lifted where the glass is fogged
+  float haze = uFog * (1.0 - clear);
+  col = mix(col, vec3(dot(col, vec3(0.3, 0.59, 0.11))) * 1.04 + 0.025, 0.22 * haze);
+  // at night lamps and lightning bloom through the fog
+  col += max(textureLod(uScene, look, lod + 1.5).rgb - 0.4, 0.0) * 0.6 * haze * uNight;
+  col *= 1.0 - 0.35 * g.rim * soft;
+  vec2 v = fc / uRes - 0.5;
+  col *= 1.0 - dot(v, v) * 0.8 * uFog;                 // the pane darkens toward its edges while fogged
+  outColor = vec4(col, 1.0);
+}`;
+
+if (GL2 && CONFIG.glass) {
+  try {
+    glassProg = gl.createProgram();
+    gl.attachShader(glassProg, shader(gl.VERTEX_SHADER, GLASS_VS));
+    gl.attachShader(glassProg, shader(gl.FRAGMENT_SHADER, GLASS_FS));
+    gl.bindAttribLocation(glassProg, loc, 'p');            // same buffer / attribute slot as the sky
+    gl.linkProgram(glassProg);
+    if (!gl.getProgramParameter(glassProg, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(glassProg));
+    for (const n of ['uScene', 'uRes', 'uTime', 'uRain', 'uWet', 'uFog', 'uZoom', 'uNight']) GU[n] = gl.getUniformLocation(glassProg, n);
+  } catch (e) { console.warn('[weather] glass layer off:', e.message); glassProg = null; }
+}
+
+function ensureGlassTarget() {
+  if (glassTarget.w === canvas.width && glassTarget.h === canvas.height) return;
+  if (!glassTarget.tex) { glassTarget.tex = gl.createTexture(); glassTarget.fb = gl.createFramebuffer(); }
+  glassTarget.w = canvas.width; glassTarget.h = canvas.height;
+  gl.bindTexture(gl.TEXTURE_2D, glassTarget.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, glassTarget.w, glassTarget.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, glassTarget.fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, glassTarget.tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+const glassEase = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const approach = (v, target, seconds, dt) => v + (target - v) * (1 - Math.exp(-dt / seconds));
+// advance the glass from the sky's rain; returns true while the layer has anything to show
+function updateGlass(t, dt) {
+  const rain = current.rainAmount;
+  if (!glass.raining && rain > GLASS.rainOn) { glass.raining = true; glass.pull = null; }
+  if (glass.raining && rain < GLASS.rainOff) { glass.raining = false; glass.pull = { from: glass.fog, wet: glass.wet, t0: t }; }   // 轉晴: pull focus to the street
+  if (glass.raining) {
+    glass.wet = approach(glass.wet, 1, 1.5, dt);
+    glass.fog = approach(glass.fog, 1, GLASS.fogUp, dt);
+  } else {
+    // 放晴: fog and water go together on the focus-pull curve; nothing is left on the glass (user, 2026-10-23)
+    const k = glass.pull ? 1 - glassEase(Math.min(1, (t - glass.pull.t0) / GLASS.pull)) : 0;
+    glass.fog = glass.pull ? glass.pull.from * k : 0;
+    glass.wet = glass.pull ? glass.pull.wet * k : 0;
+  }
+  glass.drops = glass.raining ? rain : rain * glass.wet;   // the clearing sky's light rain does not land on the glass
+  return glass.fog > 0.001 || glass.wet > 0.001;
+}
+
 addEventListener('resize', resize);
 resize();
 
@@ -976,7 +1165,10 @@ function frame(ms) {
   const [flash, fpos, bseed, showBolt] = flashLevel(t);
   const sk = sky();
   if (CONFIG.sea) { updateFleet(dt, t); packFleet(sk); }   // no sea → no fleet, no cost
+  const glassOn = glassProg && updateGlass(t, dt);
+  if (glassOn) { ensureGlassTarget(); gl.bindFramebuffer(gl.FRAMEBUFFER, glassTarget.fb); }   // sky → texture, then the glass
 
+  gl.useProgram(prog);
   gl.uniform2f(U.uRes, canvas.width, canvas.height);
   gl.uniform1f(U.uTime, sceneTime);
   gl.uniform1f(U.uDensity, current.cloudDensity);
@@ -1001,11 +1193,29 @@ function frame(ms) {
   if (CONFIG.sea) { gl.uniform4fv(U.uBoatA, boatA); gl.uniform4fv(U.uBoatB, boatB); gl.uniform4fv(U.uBoatC, boatC); }
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 
+  if (glassOn) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, glassTarget.tex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.useProgram(glassProg);
+    gl.uniform1i(GU.uScene, 0);
+    gl.uniform2f(GU.uRes, canvas.width, canvas.height);
+    gl.uniform1f(GU.uTime, sceneTime);
+    gl.uniform1f(GU.uRain, glass.drops);
+    gl.uniform1f(GU.uWet, glass.wet);
+    gl.uniform1f(GU.uFog, glass.fog);
+    gl.uniform1f(GU.uZoom, 1 - GLASS.zoom * glass.fog);   // fogged: a touch closer; the focus pull eases it back
+    gl.uniform1f(GU.uNight, sk.night);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
   if (document.body.classList.contains('debug')) {
     document.getElementById('hud').textContent =
       `state ${stateName}${pending ? ' (→' + pending + ')' : ''}\n` +
       Object.keys(PARAMS).map(p => `${p.padEnd(14)} ${current[p].toFixed(2)}`).join('\n') +
       `\nflash ${flash.toFixed(2)}  res ${canvas.width}×${canvas.height}` +
+      `\nglass ${glassProg ? (glassOn ? 'on' : 'dry') : 'off'}  fog ${glass.fog.toFixed(2)}  wet ${glass.wet.toFixed(2)}` +
       `\nrain ×${rainMood.scale.toFixed(2)}  wind ${windCur.toFixed(2)}→${rainMood.wind.toFixed(2)}\nsun ${sk.alt.toFixed(1)}°  night ${sk.night.toFixed(2)}  twilight ${sk.twilight.toFixed(2)}` +
       (CONFIG.sea ? `\nboats ${effectiveSlots().map(s => s || '-').join(' ')}${sessionsOverride ? ' (override)' : sessionsFile ? '' : ' (ambient)'}  ` + boats.filter(b => b.alpha > 0).map(b => `#${b.slot} ${b.state} ${(b.alpha * 100) | 0}%`).join(' ') : '');
   }
@@ -1027,6 +1237,7 @@ window.weather = {
   setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; },
   get sessions() { return effectiveSlots(); }, boats, BOAT, HOMES, BOAT_STATES, DESIGNS,
   get current() { return { ...current }; }, get state() { return stateName; },
+  GLASS, get glass() { return { ...glass, on: !!glassProg }; },
 };
 </script>
 </body>
