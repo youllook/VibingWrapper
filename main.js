@@ -160,7 +160,7 @@ function buildTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '範圍截圖' + (capture.status['Control+Alt+S'] ? '\tCtrl+Alt+S' : '（Ctrl+Alt+S 被占用）'), click: () => capture.start('region') },
     { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), click: () => desktopIcons.toggle() },
-    { label: (bossKey.status().hidden ? '取消隱藏' : '老闆鍵') + (bossKey.status().registered ? '\t' : '（') + bossKey.pretty(bossKey.status().key) + (bossKey.status().registered ? '' : ' 被占用）'), click: () => bossKey.toggle() },
+    { label: (bossKey.status().hidden ? '取消隱藏' : '還原桌面') + (bossKey.status().registered ? '\t' : '（') + bossKey.pretty(bossKey.status().key) + (bossKey.status().registered ? '' : ' 被占用）'), click: () => bossKey.toggle() },
     { type: 'separator' },
     {
       label: '動態桌布', type: 'checkbox', checked: settings.weatherWallpaper,
