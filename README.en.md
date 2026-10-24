@@ -36,18 +36,13 @@ Gear menu → 桌布 (wallpaper) cycles through them. Each one acts out the same
 | **Weather (天氣)** | Sky only: clouds, rain, lightning, crepuscular rays, following the real sunrise and sunset in Taipei | Clouds over, then a thunderstorm |
 | **Weather + sea (天氣＋海)** | A distant sea mirroring the same sky; one boat per session | Storm; boats get underway with a wake |
 | **Sea (海)** | A 3D ocean seen from just above the water: crests, foam, moonlight, the fleet riding the swell | Storm and whitecaps |
-| **Snow peaks (雪山雲海)** | A sea of clouds seen from a Taiwanese high ridge; one mountaineering tent per session | The sky stays clear (real cloud seas happen in fair weather); the cloud sea rises, pours over the saddle, and spindrift blows off the ridge |
 | **Paddy (稻田)** | Rice paddies in rural Pingtung, blue hills, a cabin, blazing sun | Stronger wind, bigger waves in the rice, more chimney smoke |
 | **Meadow (寫實草原)** | Hundreds of thousands of grass blades bending in the wind; one cabin per session | Gusts sweep across the grass like waves, kicking up dry leaves |
 | **Level crossing (平交道)** | A Taiwan Railway level crossing in the countryside (Godot 4) | Bells ring and the barriers drop while it thinks; the train keeps passing for as long as it works |
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/snowpeak-dawn.jpg" alt="Snow peaks: morning"><br>Snow peaks · morning</td>
-<td width="50%"><img src="docs/screenshots/snowpeak-night.jpg" alt="Snow peaks: churning cloud sea at night"><br>Snow peaks · working at night, the cloud sea churns</td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/crossing-day.jpg" alt="Level crossing: a train passing"><br>Level crossing · working, the train rolls by car after car</td>
+<td width="50%"><img src="docs/screenshots/crossing-day.jpg" alt="Level crossing: a train passing"><br>Level crossing · working, the train rolls by car after car</td>
 <td><img src="docs/screenshots/crossing-night.jpg" alt="Level crossing: alarm at night"><br>Level crossing · alarm at night</td>
 </tr>
 <tr>
@@ -166,7 +161,7 @@ Received events are logged by name and the first 8 characters of the session ID 
 | `tools/claude-bridge.js` | Hook events → per-session state → combined weather → `%APPDATA%\vibing-wrapper\state.json`; also serves the `themes/` pages and the theme list |
 | `tools/claude-hooks.js` | Gear menu "Claude 連動": adds the hooks to `~/.claude/settings.json` |
 | `tools/wallpaper.js`, `attach-wallpaper.ps1` | Parents the wallpaper window behind the desktop icons (WorkerW) |
-| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `snowpeak`, `paddy`, `crossing` |
+| `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `paddy`, `crossing` |
 | `godot/crossing/` | Godot 4 source for the level crossing (the scene is built in code; `shell.html` is the web shell) |
 | `themes/demo.html` | Tuning page: pick a theme, switch states, scrub the clock through day and night |
 | `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, region screenshot |
