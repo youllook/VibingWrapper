@@ -64,10 +64,10 @@ const CONFIG = {
   eyeDist: 1.15,                                  // camera → eye, metres (eye ≈ 37 % of the screen height)
   yaw: -0.6, pitch: 0.1, roll: 0.1,              // the head turned so the eye looks at the camera, the skull off right
   eyeFwd: [0.105, -0.017, 0.994],                 // the socket's axis in the eyeball's own space (from the Blender fit)
-  away: new THREE.Vector3(0.35, -0.1, -1.6),      // how far it drifts back out (added to the stage point)
+  away: new THREE.Vector3(0.35, -0.1, -2.6),      // how far it drifts back out (added to the stage point)
   armAmp: 1,                                      // multiplier on the arm curl (0 = rest pose)
   fishOrbit: new THREE.Vector3(-0.34, -0.03, 0.2),// centre of the fish's small loop, relative to the eye
-  fishScale: 0.9, exposure: 0.7, fog: 0.4, bg: 0x040a16,
+  fishScale: 0.9, exposure: 0.7, fog: 0.4, bg: 0x02060e,
   timeOverride: QS.has('t') ? +QS.get('t') : null,   // seconds into the cycle (?t=55), for screenshots / demo.html
 };
 const DEBOUNCE_MS = 300, POLL_MS = 1000;
@@ -148,9 +148,10 @@ scene.add(ambient);
 const rim = new THREE.DirectionalLight(0x4f86c6, 0.35);
 rim.position.set(1.5, 1.2, -2.5);
 scene.add(rim);
-// The lure light falls off slower than physics (decay 1.3) and a cold fill rides along with an even flatter falloff:
+// The lure light falls off a bit slower than physics (decay 1.7) and a cold fill rides along with a much flatter falloff:
 // in the concept art the lure washes the whole face in blue-white, which is wrong optically but right for the mood.
-const lureLight = new THREE.PointLight(0xcff4ff, 0, 0, 1.3);
+// 1.7 rather than 1.3 so the far side of the skull sinks back into the dark (depth), with more intensity to compensate.
+const lureLight = new THREE.PointLight(0xcff4ff, 0, 0, 1.7);
 const lureFill = new THREE.PointLight(0x7fa6e8, 0, 0, 0.6);
 // The fish stays as visible as in the concept art whatever Claude is doing: a small lamp of its own, constant, that
 // dies out within 0.3 m so it never reaches the squid (only the squid's reveal follows the state).
@@ -169,55 +170,64 @@ const photoGlow = Array.from({ length: 14 }, () => {
     blending: THREE.AdditiveBlending, fog: false, opacity: 0 }));
   sp.scale.setScalar(0.07); scene.add(sp); return sp;
 });
+// the water around the fish is faintly lit: a huge, very faint blue sprite behind it washes the left half of the frame
+const wash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x3d78c8, transparent: true, depthWrite: false,
+  blending: THREE.AdditiveBlending, fog: false, opacity: 0.05 }));
+wash.scale.setScalar(1.5); scene.add(wash);
 const halo = [0.06, 0.6].map(size => {
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xcff4ff, transparent: true, depthWrite: false,
     depthTest: size < 0.1, blending: THREE.AdditiveBlending, fog: false }));
   sp.userData.size = size; scene.add(sp); return sp;
 });
 
-/* ------------------------------ marine snow ------------------------------ */
-const SNOW_N = 2600, SNOW_BOX = [9, 6, 10];
-const snowGeo = new THREE.BufferGeometry();
-{
-  const p = new Float32Array(SNOW_N * 3), s = new Float32Array(SNOW_N);
-  for (let i = 0; i < SNOW_N; i++) {
-    p[i * 3] = (Math.random() - 0.5) * SNOW_BOX[0]; p[i * 3 + 1] = (Math.random() - 0.5) * SNOW_BOX[1];
-    p[i * 3 + 2] = -0.6 - Math.random() * SNOW_BOX[2]; s[i] = Math.random();
+/* ------------------------------ marine snow ------------------------------
+ * Two clouds, one shader: the far field (2,600 flakes through 10 m of water) and ~400 near flakes floating between
+ * the camera and the eye (z −0.3 … −1.5). The near ones are well out of focus, so they read as big soft bokeh discs. */
+function makeSnow(n, box, z0, big, gain) {
+  const geo = new THREE.BufferGeometry();
+  const p = new Float32Array(n * 3), s = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    p[i * 3] = (Math.random() - 0.5) * box[0]; p[i * 3 + 1] = (Math.random() - 0.5) * box[1];
+    p[i * 3 + 2] = z0 - Math.random() * box[2]; s[i] = Math.random();
   }
-  snowGeo.setAttribute('position', new THREE.BufferAttribute(p, 3));
-  snowGeo.setAttribute('seed', new THREE.BufferAttribute(s, 1));
+  geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  geo.setAttribute('seed', new THREE.BufferAttribute(s, 1));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uLure: { value: new THREE.Vector3() }, uLight: { value: 0 }, uBase: { value: 0.5 },
+                uPx: { value: 1 }, uFocus: { value: CONFIG.eyeDist }, uBox: { value: new THREE.Vector3(...box) }, uBig: { value: big }, uGain: { value: gain } },
+    vertexShader: /* glsl */`
+      attribute float seed; uniform float uTime, uPx, uFocus, uBig; uniform vec3 uBox, uLure; varying float vA, vLit, vSoft;
+      void main() {
+        vec3 p = position;
+        p.y = mod(p.y - uTime * (0.015 + 0.02 * seed) + uBox.y * 0.5, uBox.y) - uBox.y * 0.5;      // slow fall, wraps
+        p.x += sin(uTime * 0.11 + seed * 40.0) * 0.15 * min(1.0, uBox.x / 4.0);                    // a little drift
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float d = length(p - uLure);
+        vLit = 1.0 / (1.0 + d * d * 6.0);
+        vA = 0.35 + 0.65 * seed;
+        float dz = -mv.z - uFocus, blur = dz > 0.0 ? dz * 0.12 : -dz;      // out of focus → a bigger, fainter disc (far side kept crisper: mood over optics)
+        gl_PointSize = min(96.0, uPx * uBig * ((1.2 + 2.2 * seed) * 3.0 / max(0.3, -mv.z) + blur * 9.0));
+        vA /= 1.0 + blur * blur * 1.5;
+        vSoft = clamp(-dz * 1.5 - 0.3, 0.0, 1.0);                          // bokeh in front of the eye: soft-edged, flatter
+      }`,
+    fragmentShader: /* glsl */`
+      uniform float uLight, uBase, uGain; varying float vA, vLit, vSoft;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5; float r = dot(c, c);
+        if (r > 0.25) discard;
+        float shape = mix(smoothstep(0.25, 0.12, r), smoothstep(0.25, 0.02, r) * 0.6, vSoft);
+        float a = shape * vA * uGain * (0.4 * uBase + min(0.6, vLit * uLight * 0.9));
+        gl_FragColor = vec4(vec3(0.75, 0.9, 1.0) * a, a);
+      }`,
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  scene.add(pts);
+  return mat;
 }
-const snowMat = new THREE.ShaderMaterial({
-  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-  uniforms: { uTime: { value: 0 }, uLure: { value: new THREE.Vector3() }, uLight: { value: 0 }, uBase: { value: 0.5 },
-              uPx: { value: 1 }, uFocus: { value: CONFIG.eyeDist }, uBox: { value: new THREE.Vector3(...SNOW_BOX) } },
-  vertexShader: /* glsl */`
-    attribute float seed; uniform float uTime, uPx, uFocus; uniform vec3 uBox, uLure; varying float vA; varying float vLit;
-    void main() {
-      vec3 p = position;
-      p.y = mod(p.y - uTime * (0.015 + 0.02 * seed) + uBox.y * 0.5, uBox.y) - uBox.y * 0.5;      // slow fall, wraps
-      p.x += sin(uTime * 0.11 + seed * 40.0) * 0.15;                                              // a little drift
-      vec4 mv = modelViewMatrix * vec4(p, 1.0);
-      gl_Position = projectionMatrix * mv;
-      float d = length(p - uLure);
-      vLit = 1.0 / (1.0 + d * d * 6.0);
-      vA = 0.35 + 0.65 * seed;
-      float blur = abs(-mv.z - uFocus);                                   // out of focus → a bigger, fainter disc
-      gl_PointSize = uPx * ((1.2 + 2.2 * seed) * 3.0 / max(0.4, -mv.z) + blur * 9.0);
-      vA /= 1.0 + blur * blur * 10.0;
-    }`,
-  fragmentShader: /* glsl */`
-    uniform float uLight, uBase; varying float vA; varying float vLit;
-    void main() {
-      vec2 c = gl_PointCoord - 0.5; float r = dot(c, c);
-      if (r > 0.25) discard;
-      float a = smoothstep(0.25, 0.12, r) * vA * (0.13 * uBase + vLit * uLight * 0.9);
-      gl_FragColor = vec4(vec3(0.75, 0.9, 1.0) * a, a);
-    }`,
-});
-const snow = new THREE.Points(snowGeo, snowMat);
-snow.frustumCulled = false;
-scene.add(snow);
+const snowMats = [makeSnow(2600, [9, 6, 10], -0.6, 1.0, 1.5), makeSnow(400, [1.5, 0.85, 1.2], -0.3, 1.6, 0.35)];
 
 /* ------------------------------ the eye ------------------------------
  * The eyeball is a plain sphere; all the depth is faked in its fragment shader (no extra render pass):
@@ -244,6 +254,7 @@ function eyeMaterial() {
         vec3 toL = uLure - vP; float dL = length(toL); vec3 l = toL / dL;
         float dW = dL * uWS; float lit = uLight / (dW * dW);          // the lure's irradiance here (inverse square, metres)
         // inside: refract, hit the iris plane (sunk 0.35 R below the cornea's apex)
+        float axial = smoothstep(0.25, 0.6, dot(n, uFwd));
         vec3 rr = refract(rd, n, 1.0 / 1.38);
         float depth = 0.62 * uR;
         float s = (depth - dot(vP, uFwd)) / min(dot(rr, uFwd), -1e-3);
@@ -251,15 +262,20 @@ function eyeMaterial() {
         vec3 qp = q - uFwd * dot(q, uFwd);                            // position on the iris plane
         float rho = length(qp) / uR, ang = atan(qp.y, qp.x + 1e-5);
         float striae = 0.55 + 0.45 * noise1(ang * 28.0 + rho * 6.0) * noise1(ang * 9.0 - rho * 3.0);
-        vec3 iris = mix(vec3(0.10, 0.16, 0.22), vec3(0.42, 0.50, 0.55), smoothstep(uPupil, 0.95, rho)) * striae;
+        vec3 iris = mix(vec3(0.008, 0.009, 0.011), vec3(0.03, 0.026, 0.024), smoothstep(uPupil, 0.95, rho)) * striae;   // dark, warm grey
         iris *= smoothstep(0.98, 0.85, rho);                          // dark limbal ring
         float pupil = smoothstep(uPupil + 0.02, uPupil - 0.02, rho);
-        vec3 inside = mix(iris, vec3(0.0), pupil) * (0.012 + lit * 0.035) * uLureCol;
-        inside += vec3(0.010, 0.016, 0.026) * (1.0 - pupil);         // a hint of the iris even unlit
+        vec3 inside = mix(iris, vec3(0.0), pupil) * (0.036 + lit * 0.105) * uLureCol;   // iris ×3: it has to read as a ring
+        inside += vec3(0.010, 0.016, 0.026) * (1.0 - pupil) * smoothstep(1.0, 0.85, rho);   // a hint of the iris even unlit
+        inside *= axial;                                              // nothing of the iris outside the socket
         // the cornea: fresnel reflection of the dark water, plus the lure as a sharp highlight
         vec3 v = -rd, h = normalize(l + v);
         float fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-        float spec = pow(max(dot(n, h), 0.0), 900.0) * 6.0 + pow(max(dot(n, h), 0.0), 80.0) * 0.08;
+        // the ball pokes out of the socket on the far side; its grazing fresnel drew a grey crescent there, so the
+        // reflection fades out away from the socket's axis
+        fres *= axial;
+        // a sharp catchlight plus a broad soft sheen across the wet cornea
+        float spec = pow(max(dot(n, h), 0.0), 900.0) * 6.0 + pow(max(dot(n, h), 0.0), 160.0) * 0.5 * axial;
         vec3 col = inside * (1.0 - fres) + vec3(0.012, 0.022, 0.04) * fres + uLureCol * spec * (0.2 + lit * 0.8);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
@@ -274,7 +290,8 @@ function eyeMaterial() {
  * distance from the eye centre in the camera plane — the camera never rotates, so world xy = view xy), and a red
  * glow of light passing under the skin near the lure (fake subsurface). Front faces only (Tripo exports double-sided).
  * All of it is lit only by the lure, so it comes out of the dark as the lure brightens. */
-const skinU = { uEye: { value: new THREE.Vector3() }, uEyeR: { value: 0.115 }, uLure: { value: new THREE.Vector3() }, uL: { value: 0 } };
+const skinU = { uEye: { value: new THREE.Vector3() }, uEyeR: { value: 0.115 }, uLure: { value: new THREE.Vector3() }, uL: { value: 0 },
+                uPh: { value: Array.from({ length: 7 }, () => new THREE.Vector3(0, 0, 99)) }, uPhK: { value: 0 } };
 const NOISE_GLSL = /* glsl */`
   float h3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
   float n3(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -291,16 +308,18 @@ function skinMaterial(mat) {
       .replace('#include <skinning_vertex>', '#include <skinning_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vWPos; uniform vec3 uEye, uLure; uniform float uEyeR, uL;
+        varying vec3 vWPos; uniform vec3 uEye, uLure, uPh[7]; uniform float uEyeR, uL, uPhK;
         ${NOISE_GLSL}
 `)
       .replace('#include <map_fragment>', `#include <map_fragment>
         // the Tripo head carries its own sculpted folds and scars; only a cheap tint, mottling and fold sheen are added
         vec2 rel = (vWPos.xy - uEye.xy) / uEyeR; float dEye = length(rel);
         float mott = n3(vWPos * 9.0);
-        diffuseColor.rgb *= vec3(1.0, 0.78, 0.82) * (0.8 + 0.4 * mott);                       // nudge the purple toward oxblood`)
+        float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+        // Tripo's texture is magenta: drop its hue, re-tint to dark ochre-red, let the pale blotches stay greyish-pale
+        diffuseColor.rgb = mix(lum * vec3(0.55, 0.22, 0.2) * 3.2, vec3(lum * 0.8), smoothstep(0.4, 0.7, lum) * 0.6) * (0.8 + 0.4 * mott);`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = clamp(roughnessFactor * (0.6 + 0.8 * mott), 0.12, 1.0);`)
+        roughnessFactor = clamp(roughnessFactor * (0.6 + 0.8 * mott), 0.4, 1.0);   // ≥ 0.4: no blue plastic sheen on the skull`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         {
           float k = 7.0, band = smoothstep(1.02, 1.25, dEye) * smoothstep(3.6, 1.7, dEye);
@@ -309,7 +328,11 @@ function skinMaterial(mat) {
           normal = normalize(normal + vec3(dir * slope, 0.0));
         }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        { float d = length(vWPos - uLure); totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.25, 0.2) * uL / (d * d) * 0.05; }`);
+        { float d = length(vWPos - uLure); totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.25, 0.2) * uL / (d * d) * 0.05; }
+        // the photophores glow from inside the flesh: a cyan Σ1/d² bleed around each, so they grow out of the skin
+        { float g = 0.0;
+          for (int i = 0; i < 7; i++) { vec3 e = vWPos - uPh[i]; g += 1.0 / (1.0 + dot(e, e) * 2500.0); }
+          totalEmissiveRadiance += vec3(0.03, 0.32, 0.45) * g * uPhK; }`);
   };
   mat.needsUpdate = true;
 }
@@ -322,7 +345,7 @@ function initEyes(m) {
     node.material.uniforms.uFwd.value.copy(fwd);
     node.material.uniforms.uR.value = node.geometry.boundingSphere.radius;
     node.material.uniforms.uWS.value = node.getWorldScale(new THREE.Vector3()).x;
-    eyes.push({ node, mat: node.material, fwd, rest: node.quaternion.clone(), sacc: new THREE.Quaternion(), saccTo: new THREE.Quaternion(), nextSacc: 2, pupil: 0.78 });
+    eyes.push({ node, mat: node.material, fwd, rest: node.quaternion.clone(), sacc: new THREE.Quaternion(), saccTo: new THREE.Quaternion(), nextSacc: 2, pupil: 0.6 });
   }
 }
 const GAZE = { maxDeg: 25, lag: 0.35, saccEvery: [2, 5], saccDeg: 1.6, saccTime: 0.08, driftDeg: 0.3 };
@@ -352,7 +375,7 @@ function lookAtLure(dt, t, L) {
     target.multiply(e.sacc).multiply(drift);
     e.node.quaternion.slerp(target, 1 - Math.exp(-dt / (GAZE.lag / (1 + L * 2))));   // brighter → keener
     // pupil follows the light, slowly
-    e.pupil += (THREE.MathUtils.lerp(0.88, 0.8, THREE.MathUtils.smoothstep(L, 0, 0.4)) - e.pupil) * (1 - Math.exp(-dt / 1.5));
+    e.pupil += (THREE.MathUtils.lerp(0.65, 0.55, THREE.MathUtils.smoothstep(L, 0, 0.4)) - e.pupil) * (1 - Math.exp(-dt / 1.5));
     const u = e.mat.uniforms;
     u.uPupil.value = e.pupil; u.uLight.value = L;
     e.node.updateMatrixWorld();
@@ -419,7 +442,11 @@ loader.load('assets/anglerfish.glb', g => {
   fish.esca = fish.parts.esca;
   fish.escaMat = fish.esca.material;
   fish.esca.add(lureLight, lureFill, fishLamp);
-  m.traverse(o => { if (o.isMesh && o.material.isMeshStandardMaterial && o !== fish.esca) fishRim(o.material); });
+  m.traverse(o => {
+    if (!o.isMesh || !o.material.isMeshStandardMaterial || o === fish.esca) return;
+    o.material.metalness = 0; o.material.roughness = Math.max(o.material.roughness, 0.7);   // it read as metal
+    fishRim(o.material);
+  });
   keep(fish.parts.illicium);
   fish.ready = true;
 }, undefined, e => console.warn('anglerfish not loaded:', e));
@@ -469,10 +496,14 @@ function animate(dt) {
     if (squid.head) wiggle(squid.head, 0, Math.sin(t * 2 * Math.PI / 40) * 0.02 * appear, 0);
     // photophores wake up as it arrives; a slow shimmer, brighter when the lure is brighter
     const ph = (0.05 + 0.95 * ss(14, 30, T) * (1 - ss(74, 86, T))) * (0.75 + 0.25 * Math.sin(t * 1.7));
-    if (squid.photo) squid.photo.emissiveIntensity = ph * 1.4;
+    // ...but in the dark they are only embers: they must not outshine the lure (Fable: "jewels floating on the skin")
+    const ember = 0.15 + 0.85 * Math.min(1, L / 0.2);
+    if (squid.photo) squid.photo.emissiveIntensity = ph * 1.4 * ember;
+    skinU.uPhK.value = ph * ember * 0.35;
     squid.photoNodes?.forEach((o, i) => {                              // each photophore gets a small soft glow
       const sp = photoGlow[i]; o.getWorldPosition(sp.position);
-      sp.material.opacity = ph * (0.55 + 0.15 * Math.sin(t * 2.3 + i));
+      if (i < 7) skinU.uPh.value[i].copy(sp.position);
+      sp.material.opacity = ph * ember * (0.55 + 0.15 * Math.sin(t * 2.3 + i));
     });
     squid.root.updateMatrixWorld(true);
     squid.eyeNode.getWorldPosition(squid.eye);
@@ -496,11 +527,14 @@ function animate(dt) {
     if (p.illicium) wiggle(p.illicium, Math.sin(t * 1.3) * 0.08, Math.sin(t * 0.9) * 0.05, 0);
     if (fish.jaw) wiggle(fish.jaw, (0.5 + 0.5 * Math.sin(t * 0.45)) * 0.22, 0, 0);
     // the lure: glow + the scene's only light
-    lureLight.intensity = L * 1.3;
+    lureLight.intensity = L * 1.6;
     lureFill.intensity = L * 0.9;
     fish.escaMat.emissiveIntensity = 2.0 + 1.5 * Math.min(1, L / 0.25) + 0.15 * Math.sin(t * 2.9);   // never dim: it is the fish's own light
     fish.esca.getWorldPosition(lurePos);
+    wash.position.copy(c).add(tmp.set(-0.15, 0, -0.4));
   }
+  // the cold rim only comes up once it starts to approach: the first 12 s are truly dark
+  rim.intensity = 0.35 * ss(12, 24, T) * (1 - ss(80, 89, T));
   if (squid.ready && fish.ready) lookAtLure(dt, t, L);
   skinU.uEye.value.copy(squid.eye); skinU.uLure.value.copy(lurePos); skinU.uL.value = L;
   const hk = Math.min(1, L / 0.4);
@@ -509,10 +543,12 @@ function animate(dt) {
     sp.scale.setScalar(sp.userData.size * (0.55 + 0.8 * hk));
     sp.material.opacity = sp.userData.size < 0.1 ? 0.75 + 0.25 * hk : 0.14 + 0.24 * hk;
   }
-  snowMat.uniforms.uTime.value = t;
-  snowMat.uniforms.uLure.value.copy(lurePos);
-  snowMat.uniforms.uLight.value = L * 8;           // snow brightness was tuned for the old 0–3.2 range
-  snowMat.uniforms.uBase.value = current.snow;
+  for (const m of snowMats) {
+    m.uniforms.uTime.value = t;
+    m.uniforms.uLure.value.copy(lurePos);
+    m.uniforms.uLight.value = L * 8;               // snow brightness was tuned for the old 0–3.2 range
+    m.uniforms.uBase.value = current.snow;
+  }
   return { T, appear };
 }
 
@@ -527,7 +563,7 @@ function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   place();                                        // the stage point depends on the aspect ratio
-  snowMat.uniforms.uPx.value = innerHeight * dpr * s / 600;
+  for (const m of snowMats) m.uniforms.uPx.value = innerHeight * dpr * s / 600;
 }
 addEventListener('resize', resize);
 function render(dt) {
