@@ -45,6 +45,7 @@
       ],
       "icon": "assets/icon.ico"
     },
+    "extraFiles": [{ "from": "scripts/debug-start.cmd", "to": "除錯啟動.cmd" }],
     "artifactName": "${productName}-${version}-win-x64.${ext}"
   }
 }
