@@ -64,7 +64,8 @@ const CONFIG = {
   eyeDist: 1.15,                                  // camera → eye, metres (eye ≈ 37 % of the screen height)
   yaw: -0.6, pitch: 0.1, roll: 0.1,              // the head turned so the eye looks at the camera, the skull off right
   eyeFwd: [0.105, -0.017, 0.994],                 // the socket's axis in the eyeball's own space (from the Blender fit)
-  away: new THREE.Vector3(0.35, -0.1, -2.6),      // how far it drifts back out (added to the stage point)
+  away: new THREE.Vector3(0.12, -0.04, -0.7),     // how far it drifts back out (added to the stage point): close — the murk hides it, not distance
+  murk: 1.4,                                      // fog density while it is hidden; thins to CONFIG.fog as it arrives
   armAmp: 1,                                      // multiplier on the arm curl (0 = rest pose)
   fishOrbit: new THREE.Vector3(-0.34, -0.03, 0.2),// centre of the fish's small loop, relative to the eye
   fishScale: 0.9, exposure: 0.7, fog: 0.4, bg: 0x02060e,
@@ -238,15 +239,20 @@ const snowMats = [makeSnow(2600, [9, 6, 10], -0.6, 1.0, 1.5), makeSnow(400, [1.5
 function eyeMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
+      ...THREE.UniformsLib.fog,
       uCam: { value: new THREE.Vector3() }, uLure: { value: new THREE.Vector3() }, uFwd: { value: new THREE.Vector3(0, 0, 1) },
       uR: { value: 1 }, uWS: { value: 1 }, uPupil: { value: 0.75 }, uLight: { value: 0 }, uLureCol: { value: new THREE.Color(0xcff4ff) },
     },
     vertexShader: /* glsl */`
       varying vec3 vP;
-      void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      #include <fog_pars_vertex>
+      void main() { vP = position; vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
+      }`,
     fragmentShader: /* glsl */`
       uniform vec3 uCam, uLure, uFwd, uLureCol; uniform float uR, uWS, uPupil, uLight;
       varying vec3 vP;
+      #include <fog_pars_fragment>
       float hash(float n) { return fract(sin(n) * 43758.5453); }
       float noise1(float x) { float i = floor(x), f = fract(x); return mix(hash(i), hash(i + 1.0), f * f * (3.0 - 2.0 * f)); }
       void main() {
@@ -280,7 +286,9 @@ function eyeMaterial() {
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
+        #include <fog_fragment>
       }`,
+    fog: true,                                                        // it has to sink into the murk with the skin
   });
 }
 /* ------------------------------ the skin ------------------------------
@@ -441,10 +449,12 @@ loader.load('assets/anglerfish.glb', g => {
   });
   fish.esca = fish.parts.esca;
   fish.escaMat = fish.esca.material;
+  fish.escaMat.fog = false;
   fish.esca.add(lureLight, lureFill, fishLamp);
   m.traverse(o => {
     if (!o.isMesh || !o.material.isMeshStandardMaterial || o === fish.esca) return;
     o.material.metalness = 0; o.material.roughness = Math.max(o.material.roughness, 0.7);   // it read as metal
+    o.material.fog = false;                       // the fish is always as clear as in the concept art
     fishRim(o.material);
   });
   keep(fish.parts.illicium);
@@ -477,6 +487,10 @@ function animate(dt) {
   const t = sceneTime;
   // appear: dark 0–12 s, a long slow approach 12–48, hold to 74, sink back 74–89 (big things move little and slowly)
   const appear = ss(12, 48, T) * (1 - ss(74, 89, T));
+  // murky water: low visibility. It is not far away at the start, it is hidden: the fog thins as it comes in, so
+  // it surfaces out of the murk already huge (the fish has fog off and stays clear)
+  // (faster than the approach: a shape from ~24 s, clear by ~42 s)
+  scene.fog.density = THREE.MathUtils.lerp(CONFIG.murk, CONFIG.fog, ss(14, 42, T) * (1 - ss(74, 89, T)));
   const L = current.light;
 
   if (squid.ready) {
@@ -503,7 +517,8 @@ function animate(dt) {
     squid.photoNodes?.forEach((o, i) => {                              // each photophore gets a small soft glow
       const sp = photoGlow[i]; o.getWorldPosition(sp.position);
       if (i < 7) skinU.uPh.value[i].copy(sp.position);
-      sp.material.opacity = ph * ember * (0.55 + 0.15 * Math.sin(t * 2.3 + i));
+      const fd = scene.fog.density * sp.position.length();                // the glow sprites skip fog: fade them by hand
+      sp.material.opacity = ph * ember * (0.55 + 0.15 * Math.sin(t * 2.3 + i)) * Math.exp(-fd * fd);
     });
     squid.root.updateMatrixWorld(true);
     squid.eyeNode.getWorldPosition(squid.eye);
