@@ -190,8 +190,11 @@ function themes() {
       if (!t || t.enabled === false) continue;
       seen.add(d.name);
       const entry = typeof t.entry === 'string' && t.entry ? t.entry : 'index.html';
+      // 主題庫 (2026-10-24): tags for its filter, and a preview image (theme.json "preview", default preview.jpg) if there is one
+      const pv = typeof t.preview === 'string' && /^[\w.-]+\.(jpe?g|png|webp)$/i.test(t.preview) ? t.preview : 'preview.jpg';
+      const preview = fs.existsSync(path.join(root, d.name, pv)) ? BASE + d.name + '/' + pv : null;
       list.push({ id: d.name, name: String(t.name || d.name), order: (Number.isFinite(+t.order) ? +t.order : 99), description: t.description || '', url: BASE + d.name + '/' + entry,
-        builtin: root === THEMES_DIR, bundled: t.bundled !== false });
+        builtin: root === THEMES_DIR, bundled: t.bundled !== false, tags: Array.isArray(t.tags) ? t.tags.map(String).slice(0, 6) : [], preview });
     }
   }
   return list.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));

@@ -1,101 +1,157 @@
 <!doctype html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><title>下載主題 · VibingWrapper</title>
-<!-- 下載主題 (2026-10-21): one card per theme pack — size, what it is, then 下載 → confirm → progress bar →
-     解壓 → 已安裝 (使用 / 移除). Data and actions come from main through tools/store-preload.js. -->
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>主題庫 · VibingWrapper</title>
+<!-- 主題庫 (2026-10-24; was 下載主題, 2026-10-21): every theme — installed or not — as a card with its preview,
+     tags, size and status. Filter (全部 / 已安裝 / 可下載 / 有更新), tag chips and a search narrow it down,
+     so it keeps working with many themes. Click a card: installed → use it; not yet → download (with a confirm),
+     then use it. Removing sits in the card's ⋯ so it is not hit by accident. Data and actions come from main
+     through tools/store-preload.js. -->
 <style>
   :root { --bg: #eef3f8; --card: #fff; --ink: #17324d; --sub: #5a7590; --line: rgba(23,50,77,.12); --acc: #2f6fae; --bad: #c0392b; --ok: #2e8b57; }
   html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px "Microsoft JhengHei UI", "Segoe UI", sans-serif; user-select: none; }
-  header { position: sticky; top: 0; z-index: 2; padding: 14px 18px 10px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  header { position: sticky; top: 0; z-index: 2; padding: 12px 16px 10px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .top { display: flex; align-items: center; gap: 10px; }
   h1 { margin: 0; font-size: 17px; letter-spacing: .05em; }
-  .meta { margin-top: 4px; color: var(--sub); font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
-  .meta button { border: 0; background: none; color: var(--acc); cursor: pointer; font: inherit; padding: 0; }
-  main { padding: 12px 14px 18px; display: grid; gap: 10px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; transition: box-shadow .3s; }
+  #q { flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid rgba(23,50,77,.18); border-radius: 7px; font: inherit; font-size: 13px; background: #fff; color: inherit; }
+  .link { border: 0; background: none; color: var(--acc); cursor: pointer; font: inherit; font-size: 12.5px; padding: 0; white-space: nowrap; }
+  .bar2 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+  .seg { display: inline-flex; border: 1px solid rgba(23,50,77,.18); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; background: #fff; color: var(--ink); font: inherit; font-size: 12.5px; padding: 4px 10px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid rgba(23,50,77,.12); }
+  .seg button.on { background: var(--acc); color: #fff; }
+  .tag { border: 1px solid rgba(47,111,174,.35); background: transparent; color: var(--acc); border-radius: 11px; padding: 2px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+  .tag.on { background: var(--acc); color: #fff; }
+  .meta { margin-top: 6px; color: var(--sub); font-size: 12px; }
+  .meta.bad { color: var(--bad); }
+  main { padding: 12px 14px 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .card { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer;
+    display: flex; flex-direction: column; transition: box-shadow .2s, transform .2s; }
+  .card:hover { box-shadow: 0 4px 14px rgba(10,30,60,.14); transform: translateY(-1px); }
   .card.focus { box-shadow: 0 0 0 2px var(--acc); }
-  .top { display: flex; align-items: baseline; gap: 8px; }
-  .name { font-weight: 600; font-size: 15px; }
-  .size { margin-left: auto; color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .chip { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: rgba(47,111,174,.12); color: var(--acc); white-space: nowrap; }
-  .chip.on { background: rgba(46,139,87,.14); color: var(--ok); }
-  .desc { margin: 6px 0 10px; color: var(--sub); font-size: 12.5px; line-height: 1.5; }
-  .row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
-  .row .msg { font-size: 12.5px; color: var(--sub); }
-  .row .msg.bad { color: var(--bad); }
-  button.b { border: 1px solid var(--acc); background: var(--acc); color: #fff; border-radius: 7px; padding: 5px 14px; font: inherit; font-size: 13px; cursor: pointer; }
-  button.b.ghost { background: transparent; color: var(--acc); }
-  button.b.warn { border-color: var(--bad); color: var(--bad); background: transparent; }
-  button.b:disabled { opacity: .5; cursor: default; }
-  .bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(23,50,77,.1); overflow: hidden; }
-  .bar i { display: block; height: 100%; width: 0; background: var(--acc); border-radius: 4px; transition: width .15s; }
-  .bar.busy i { width: 100% !important; background: repeating-linear-gradient(90deg, var(--acc) 0 12px, #6c9fd2 12px 24px); animation: slide .8s linear infinite; background-size: 24px 100%; }
+  .card.current { box-shadow: 0 0 0 2px var(--ok); }
+  .thumb { aspect-ratio: 16 / 9; background: linear-gradient(135deg, #dfe8f1, #c9d8e7); display: grid; place-items: center; color: #8aa2b8; font-size: 12px; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .body { padding: 9px 11px 10px; display: flex; flex-direction: column; gap: 5px; flex: 1; }
+  .row1 { display: flex; align-items: baseline; gap: 6px; }
+  .name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .size { margin-left: auto; color: var(--sub); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .desc { color: var(--sub); font-size: 12px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; padding-top: 2px; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: rgba(23,50,77,.06); color: var(--sub); white-space: nowrap; }
+  .badge { position: absolute; top: 8px; left: 8px; font-size: 11px; padding: 2px 8px; border-radius: 9px; background: rgba(255,255,255,.92); color: var(--acc); }
+  .badge.on { background: var(--ok); color: #fff; }
+  .badge.up { background: #e0533c; color: #fff; }
+  .more { position: absolute; top: 6px; right: 6px; width: 26px; height: 22px; border: 0; border-radius: 6px; background: rgba(255,255,255,.88); color: var(--ink); cursor: pointer; font-size: 14px; line-height: 1; }
+  .pop { position: absolute; top: 30px; right: 6px; z-index: 3; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 16px rgba(10,30,60,.18); padding: 4px; }
+  .pop button { display: block; width: 100%; border: 0; background: none; padding: 6px 12px; text-align: left; font: inherit; font-size: 13px; color: var(--bad); cursor: pointer; border-radius: 5px; white-space: nowrap; }
+  .pop button:hover { background: rgba(192,57,43,.08); }
+  .act { display: flex; align-items: center; gap: 6px; min-height: 26px; font-size: 12px; color: var(--sub); }
+  .act .msg.bad { color: var(--bad); }
+  .act button { border: 1px solid var(--acc); background: var(--acc); color: #fff; border-radius: 6px; padding: 3px 11px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .act button.ghost { background: transparent; color: var(--acc); }
+  .pbar { flex: 1; height: 6px; border-radius: 3px; background: rgba(23,50,77,.1); overflow: hidden; }
+  .pbar i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .15s; }
+  .pbar.busy i { width: 100% !important; background: repeating-linear-gradient(90deg, var(--acc) 0 12px, #6c9fd2 12px 24px); background-size: 24px 100%; animation: slide .8s linear infinite; }
   @keyframes slide { to { background-position: 24px 0; } }
-  .nums { font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 112px; text-align: right; }
-  .empty { padding: 30px 10px; text-align: center; color: var(--sub); }
+  .empty { grid-column: 1 / -1; padding: 40px 10px; text-align: center; color: var(--sub); }
 </style></head>
 <body>
 <header>
-  <h1>下載主題</h1>
-  <div class="meta"><span id="src">讀取中…</span><button id="refresh">重新整理</button></div>
+  <div class="top"><h1>主題庫</h1><input id="q" placeholder="搜尋名稱、說明…" autofocus><button class="link" id="refresh">重新整理</button></div>
+  <div class="bar2">
+    <span class="seg" id="filter"></span>
+    <span id="tags" style="display:contents"></span>
+  </div>
+  <div class="meta" id="src">讀取中…</div>
 </header>
 <main id="list"><div class="empty">讀取中…</div></main>
 <script>
 const api = window.storeAPI;
-const mb = n => !n ? '—' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB';
-let items = [], current = null, focusId = null;
+const mb = n => !n ? '' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB';
+const FILTERS = [['all', '全部'], ['installed', '已安裝'], ['available', '可下載'], ['update', '有更新']];
+const isHere = t => t.installed || t.status === 'builtin' || t.status === 'installed' || t.status === 'update';
+const MATCH = { all: () => true, installed: isHere, available: t => !isHere(t), update: t => t.status === 'update' };
+let items = [], current = null, focusId = null, filter = 'all', tag = null, query = '', popId = null;
 const ui = {};                                   // id → { confirm, msg, bad }
-const listEl = document.getElementById('list');
+const listEl = document.getElementById('list'), qEl = document.getElementById('q');
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const btn = (text, cls, fn) => { const b = el('button', cls || '', text); b.addEventListener('click', e => { e.stopPropagation(); fn(); }); return b; };
 
 async function load(fresh) {
   const r = await api.catalog(fresh);
-  document.getElementById('src').textContent = r.error ? '讀不到主題清單' : `來源：${r.source} · ${r.items.length} 個主題，可下載共 ${mb(r.items.filter(t => t.status === 'available' || t.status === 'update').reduce((s, t) => s + t.size, 0))}`;
-  current = r.current;
-  items = r.error ? [] : r.items;
-  if (r.error) { listEl.innerHTML = ''; const d = document.createElement('div'); d.className = 'empty'; d.textContent = r.error; listEl.append(d); return; }
+  items = r.items || []; current = r.current;
+  const src = document.getElementById('src');
+  const dl = items.filter(t => !isHere(t) || t.status === 'update');
+  src.className = 'meta' + (r.error ? ' bad' : '');
+  src.textContent = r.error ? `讀不到線上主題清單（${r.error}），先列出已安裝的`
+    : `來源：${r.source} · ${items.length} 個主題，${items.filter(isHere).length} 個已安裝` + (dl.length ? `，可下載 ${dl.length} 個共 ${mb(dl.reduce((s, t) => s + t.size, 0))}` : '');
   render();
 }
-function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
-function button(text, cls, fn) { const b = el('button', 'b ' + (cls || ''), text); b.addEventListener('click', fn); return b; }
-
-function render() {
-  if (!items.length) { listEl.replaceChildren(el('div', 'empty', '目前沒有可下載的主題')); return; }
-  listEl.replaceChildren(...items.map(t => {
-    const c = el('div', 'card' + (t.id === focusId ? ' focus' : '')); c.dataset.id = t.id;
-    const top = el('div', 'top'); top.append(el('span', 'name', t.name));
-    if (t.status === 'builtin') top.append(el('span', 'chip', '內建'));
-    if (t.status === 'installed') top.append(el('span', 'chip', '已安裝'));
-    if (t.status === 'update') top.append(el('span', 'chip', '有更新'));
-    if (t.id === current) top.append(el('span', 'chip on', '使用中'));
-    top.append(el('span', 'size', mb(t.size)));
-    c.append(top, el('div', 'desc', t.description || ''));
-    const row = el('div', 'row'), u = ui[t.id] || {};
-    if (t.job) {                                   // downloading / unpacking
-      const bar = el('div', 'bar' + (t.job.phase === 'extract' ? ' busy' : '')), fill = el('i'); bar.append(fill);
-      const pct = t.job.total ? t.job.got / t.job.total : 0; fill.style.width = (pct * 100).toFixed(1) + '%';
-      row.append(bar, el('span', 'nums', t.job.phase === 'extract' ? '解壓、安裝中…' : `${mb(t.job.got)} / ${mb(t.job.total)} · ${Math.floor(pct * 100)}%`));
-    } else if (u.confirm) {                        // second step: say what will happen
-      row.append(el('span', 'msg', `${t.status === 'update' ? '更新' : '下載'}「${t.name}」${mb(t.size)}，裝好後可在「桌布」選它。`));
-      row.append(button('確定', '', () => { u.confirm = false; ui[t.id] = u; start(t); }), button('取消', 'ghost', () => { u.confirm = false; render(); }));
-    } else {
-      if (t.status === 'available' || t.status === 'update')
-        row.append(button(`${t.status === 'update' ? '更新' : '下載'} ${mb(t.size)}`, '', () => { ui[t.id] = { confirm: true }; render(); }));
-      if (t.status === 'installed' || t.status === 'builtin' || t.status === 'update') {
-        const b = button(t.id === current ? '使用中' : '使用', 'ghost', () => use(t)); b.disabled = t.id === current; row.append(b); }
-      if (t.status === 'installed' || t.status === 'update') row.append(button('移除', 'warn', () => removeTheme(t)));
-      if (u.msg) row.append(el('span', 'msg' + (u.bad ? ' bad' : ''), u.msg));
-    }
-    c.append(row);
-    return c;
+function renderBars() {
+  const f = document.getElementById('filter');
+  f.replaceChildren(...FILTERS.map(([k, label]) => {
+    const n = items.filter(MATCH[k]).length;
+    const b = btn(k === 'all' ? label : `${label} ${n}`, k === filter ? 'on' : '', () => { filter = k; render(); });
+    b.hidden = k === 'update' && !n; return b;
   }));
+  const tags = [...new Set(items.flatMap(t => t.tags || []))];
+  document.getElementById('tags').replaceChildren(...tags.map(t => btn(t, 'tag' + (t === tag ? ' on' : ''), () => { tag = tag === t ? null : t; render(); })));
+}
+function render() {
+  renderBars();
+  const q = query.trim().toLowerCase();
+  const shown = items.filter(t => MATCH[filter](t) && (!tag || (t.tags || []).includes(tag))
+    && (!q || (t.name + ' ' + t.description + ' ' + (t.tags || []).join(' ') + ' ' + t.id).toLowerCase().includes(q)));
+  if (!shown.length) { listEl.replaceChildren(el('div', 'empty', items.length ? '沒有符合的主題' : '目前沒有主題')); return; }
+  listEl.replaceChildren(...shown.map(card));
+}
+function card(t) {
+  const here = isHere(t), u = ui[t.id] || {};
+  const c = el('div', 'card' + (t.id === focusId ? ' focus' : '') + (t.id === current ? ' current' : '')); c.dataset.id = t.id;
+  const th = el('div', 'thumb');
+  if (t.preview) { const img = el('img'); img.src = t.preview; img.alt = ''; img.loading = 'lazy'; img.onerror = () => { th.replaceChildren('還沒有預覽圖'); }; th.append(img); }
+  else th.textContent = '還沒有預覽圖';
+  c.append(th);
+  const badge = t.id === current ? ['使用中', 'on'] : t.status === 'update' ? ['有更新', 'up'] : here ? [t.status === 'builtin' ? '內建' : '已安裝', ''] : null;
+  if (badge) c.append(el('span', 'badge ' + badge[1], badge[0]));
+  // ⋯ → 移除: only for downloaded ones (a built-in theme cannot go)
+  if (t.status === 'installed' || t.status === 'update') {
+    c.append(btn('⋯', 'more', () => { popId = popId === t.id ? null : t.id; render(); }));
+    if (popId === t.id) { const p = el('div', 'pop'); p.append(btn(`移除「${t.name}」`, '', () => removeTheme(t))); c.append(p); }
+  }
+  const b = el('div', 'body');
+  const r1 = el('div', 'row1'); r1.append(el('span', 'name', t.name), el('span', 'size', here && t.status !== 'update' ? '' : mb(t.size)));
+  b.append(r1, el('div', 'desc', t.description || ''));
+  const act = el('div', 'act');
+  if (t.job) {                                   // downloading / unpacking
+    const bar = el('div', 'pbar' + (t.job.phase === 'extract' ? ' busy' : '')), fill = el('i'); bar.append(fill);
+    const pct = t.job.total ? t.job.got / t.job.total : 0; fill.style.width = (pct * 100).toFixed(1) + '%';
+    act.append(bar, el('span', '', t.job.phase === 'extract' ? '安裝中…' : Math.floor(pct * 100) + '%'));
+  } else if (u.confirm) {                        // second step: say what will happen
+    act.append(el('span', '', `${t.status === 'update' ? '更新' : '下載'} ${mb(t.size)}？`),
+      btn('確定', '', () => { u.confirm = false; start(t); }), btn('取消', 'ghost', () => { u.confirm = false; render(); }));
+  } else if (u.msg) act.append(el('span', 'msg' + (u.bad ? ' bad' : ''), u.msg));
+  else act.append(el('span', '', t.id === current ? '' : here ? (t.status === 'update' ? '點一下更新' : '點一下套用') : '點一下下載'));
+  b.append(act);
+  if ((t.tags || []).length) { const ch = el('div', 'chips'); ch.append(...t.tags.map(x => el('span', 'chip', x))); b.append(ch); }
+  c.append(b);
+  c.addEventListener('click', () => {
+    popId = null;
+    if (t.job) return;
+    if (t.status === 'update' || !here) { ui[t.id] = { confirm: true }; render(); return; }
+    use(t);
+  });
+  return c;
 }
 async function start(t) {
   t.job = { phase: 'download', got: 0, total: t.size }; render();
   const r = await api.install(t.id);
-  ui[t.id] = { msg: r.ok ? '安裝完成' : r.msg, bad: !r.ok };
-  await load(false);
+  if (r.ok) { await load(false); await use(items.find(x => x.id === t.id) || t, '已安裝並套用'); return; }
+  ui[t.id] = { msg: r.msg, bad: true }; await load(false);
 }
-async function use(t) { current = await api.use(t.id); ui[t.id] = { msg: '已換成這個桌布' }; render(); }
+async function use(t, msg) { current = await api.use(t.id); ui[t.id] = { msg: msg || '已換成這個桌布' }; render(); setTimeout(() => { if (ui[t.id] && !ui[t.id].bad) { delete ui[t.id]; render(); } }, 2500); }
 async function removeTheme(t) {
-  if (!confirm(`移除「${t.name}」？`)) return;
+  popId = null;
+  if (!confirm(`移除「${t.name}」？之後可以再從主題庫下載。`)) { render(); return; }
   const r = await api.remove(t.id); ui[t.id] = { msg: r.msg, bad: !r.ok }; await load(false);
 }
 api.onProgress(p => {
@@ -103,9 +159,11 @@ api.onProgress(p => {
   if (p.phase === 'done' || p.phase === 'error') { t.job = null; return; }
   t.job = { phase: p.phase, got: p.got || 0, total: p.total || t.size }; render();
 });
-api.onFocus(id => { focusId = id; render(); const c = listEl.querySelector(`[data-id="${CSS.escape(id || '')}"]`); if (c) c.scrollIntoView({ block: 'center', behavior: 'smooth' }); });
+api.onFocus(id => { focusId = id; filter = 'all'; tag = null; query = qEl.value = ''; render(); const c = listEl.querySelector(`[data-id="${CSS.escape(id || '')}"]`); if (c) c.scrollIntoView({ block: 'center', behavior: 'smooth' }); });
+qEl.addEventListener('input', () => { query = qEl.value; render(); });
 document.getElementById('refresh').addEventListener('click', () => load(true));
-window.addEventListener('keydown', e => { if (e.key === 'Escape') window.close(); });
+document.addEventListener('click', () => { if (popId) { popId = null; render(); } });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { if (qEl.value) { qEl.value = query = ''; render(); } else window.close(); } });
 load(false);
 </script>
 </body></html>

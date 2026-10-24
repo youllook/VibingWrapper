@@ -2,7 +2,8 @@
 // The app ships with only a few themes (the lite build: just `basic`); the rest come from here.
 //
 // Catalog: themes.json on the release tagged "themes" (built by scripts/pack-themes.js):
-//   { format: 1, themes: [{ id, name, description, order, file, size, sha256, version }] }
+//   { format: 1, themes: [{ id, name, description, order, file, size, sha256, version, tags, preview }] }
+// preview (2026-10-24) = an image file beside the packs (preview-<id>.jpg), shown in 主題庫 before installing.
 // Each pack is a zip holding one folder <id>/ with its theme.json. Install = download → check size and
 // sha256 → unzip with the system tar (bsdtar reads zip; it refuses absolute paths and "..") into a temp
 // folder → check <id>/theme.json → swap it in. .pack.json beside it remembers the installed version.
@@ -29,6 +30,8 @@ function init(userData, source) {
 }
 const isLocal = () => !/^https?:\/\//.test(SOURCE);
 const sourceLabel = () => isLocal() ? SOURCE : 'GitHub Releases';
+const previewUrl = f => typeof f !== 'string' || !/^[\w.-]+\.(jpe?g|png|webp)$/i.test(f) ? null
+  : isLocal() ? require('url').pathToFileURL(path.join(SOURCE, f)).href : SOURCE + f;
 
 // a readable byte stream + its length, from the web or the local folder
 async function open(file) {
@@ -64,6 +67,7 @@ async function list(installedThemes, fresh) {
     if (p) status = p.version === t.version ? 'installed' : 'update';
     else if (h && h.builtin && h.bundled !== false) status = 'builtin';
     return { id: t.id, name: String(t.name || t.id), description: String(t.description || ''), size: Number(t.size) || 0, status,
+      tags: Array.isArray(t.tags) ? t.tags.map(String).slice(0, 6) : [], preview: previewUrl(t.preview),
       order: (Number.isFinite(+t.order) ? +t.order : 99), job: busy.get(t.id) || null };
   }).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }

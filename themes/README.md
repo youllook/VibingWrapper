@@ -3,10 +3,10 @@
 每種桌布是一個資料夾。主程式啟動時、以及每次打開齒輪選單時，會掃描 `themes/*/theme.json`，
 把啟用中的主題依 `order` 排進「桌布」選單。要調哪一種，就只動那個資料夾。
 
-**下載的主題**（2026-10-21）：齒輪 →「下載主題」（或系統匣「下載主題…」）打開下載視窗，從 GitHub Release `themes` 下載主題包，裝在
+**下載的主題**（2026-10-21）：齒輪 →「桌布」→「主題庫」（或系統匣「主題庫…」）打開主題庫視窗，從 GitHub Release `themes` 下載主題包，裝在
 `%APPDATA%ibing-wrapper	hemes\<id>\`（程式資料夾不動）。同 ID 時下載的版本優先。
 發布：`npm run themes:pack [-- <id> …]` 產生 `dist/themes/theme-<id>.zip` 與型錄 `themes.json`，再照它印出的 `gh release` 指令上傳。
-上傳前想先試：settings.json 加 `"themeStore": "<dist/themes 的完整路徑>"`，下載視窗就改讀那個資料夾（流程完全一樣）。
+上傳前想先試：settings.json 加 `"themeStore": "<dist/themes 的完整路徑>"`，主題庫就改讀那個資料夾（流程完全一樣）。
 精簡版（`npm run dist:lite`）只帶 [basic](basic/)（基礎版），其他主題都從這裡裝。
 
 ## 一個主題資料夾放什麼
@@ -16,6 +16,7 @@
 | `theme.json` | ✅ | 名稱、排序、入口頁、是否啟用 |
 | `index.html` | ✅ | 桌布頁面本體（單一檔案；可以再放圖片、js 等，全部用相對路徑引用） |
 | `README.md` | | 這個主題的參數、狀態對照、調整筆記 |
+| `preview.jpg` | | 主題庫的預覽圖，16:9（480×270 就夠） |
 
 資料夾名稱就是主題 ID（存在 settings.json 的 `wallpaperStyle`）。以 `_` 或 `.` 開頭的資料夾不會被掃描。
 
@@ -27,7 +28,8 @@
   "order": 2,
   "entry": "index.html",
   "enabled": true,
-  "description": "一句話說明"
+  "description": "一句話說明",
+  "tags": ["天空", "海"]
 }
 ```
 
@@ -35,6 +37,8 @@
 - `order`：選單順序，小的在前
 - `entry`：入口頁，預設 `index.html`；可以帶查詢參數，例如 `index.html?sea=1`
 - `enabled`：`false` 就不出現在選單（資料夾保留，隨時可以打開）
+- `tags`：主題庫的標籤，用來篩選。目前用的：天空、海、山、鄉村、鐵道、夜景、像素、風格實驗、簡約
+- `preview`：預覽圖檔名，預設 `preview.jpg`；沒有就顯示「還沒有預覽圖」
 - `bundled`：`false` 表示只做下載包，`npm run dist` 不放進程式 zip（程式碼仍在 repo）。
   目前只做下載包的：`silhouette-forest-blender`、`pixel-hillzone-claude`、`voxel-station-claude`
   （風格競稿的作品；它們 README 提到的製作工具 `studio/` 在作者本機，不在公開 repo）

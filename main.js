@@ -14,7 +14,8 @@ const codexHooks = require('./tools/codex-hooks');     // 一鍵安裝 Codex hoo
 const AGENT_HOOKS = { claude: claudeHooks, codex: codexHooks };
 const agentHooks = a => AGENT_HOOKS[a] || claudeHooks;
 const uninstall = require('./tools/uninstall');         // 解除安裝: hooks out, settings + program files deleted after exit
-const themeStore = require('./tools/theme-store');     // 下載主題: theme packs from GitHub Releases → userData/themes/
+const themeStore = require('./tools/theme-store');     // 主題庫: theme packs from GitHub Releases → userData/themes/
+const updater = require('./tools/updater');            // 自動更新: newer zip build from GitHub Releases, swapped in after exit
 
 // a dev copy can run beside the installed app: its own profile (and VIBINGWRAPPER_PORT for the bridge)
 if (process.env.VIBINGWRAPPER_PROFILE) app.setPath('userData', process.env.VIBINGWRAPPER_PROFILE);
@@ -90,7 +91,8 @@ function menuOnTop(open) {
   if (open) { win.setAlwaysOnTop(true, 'pop-up-menu'); win.moveTop(); }
   else win.setAlwaysOnTop(!!settings.alwaysOnTop);
 }
-ipcMain.on('pet:menu-open', (_e, open) => menuOnTop(!!open));
+let menuOpen = false;                                   // also keeps an automatic update from restarting under the user
+ipcMain.on('pet:menu-open', (_e, open) => { menuOpen = !!open; menuOnTop(menuOpen); });
 ipcMain.on('pet:interactive', (_e, on) => {
   if (!alive()) return;
   if (on) win.setIgnoreMouseEvents(false);
@@ -108,19 +110,26 @@ const wallpaperUrl = () => {
 };
 ipcMain.handle('pet:wallpaper-style', () => settings.wallpaperStyle);
 ipcMain.handle('pet:wallpaper-styles', () => claudeBridge.themes().map(t => ({ id: t.id, name: t.name })));
+// 最近用過 (2026-10-24): the gear menu's 桌布 page puts the last few picks on top, so a long list stays quick
+const recentThemes = () => (Array.isArray(settings.recentThemes) ? settings.recentThemes : []).filter(id => claudeBridge.themeUrl(id));
+ipcMain.handle('pet:recent-themes', () => recentThemes());
 function setWallpaperStyle(style) {
   if (!claudeBridge.themeUrl(style)) return settings.wallpaperStyle;
-  settings.wallpaperStyle = style; saveSettings();
+  settings.wallpaperStyle = style;
+  settings.recentThemes = [style, ...recentThemes().filter(id => id !== style)].slice(0, 4);
+  saveSettings();
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   buildTrayMenu();                                      // keep the tray's radio list in step
   return style;
 }
 ipcMain.handle('pet:set-wallpaper-style', (_e, style) => setWallpaperStyle(style));
-// 下載主題: the HUD menu lists the packs (with sizes); downloading happens in its own window (tools/store.html)
+// 主題庫 (2026-10-24, was 下載主題): one window to browse every theme — installed or not — with previews, tags and
+// a search; picking, downloading and removing all happen there (tools/store.html). The gear menu keeps only the
+// installed ones, so it stays short however many themes there are.
 let storeWin = null;
 function openStore(focusId) {
   if (storeWin && !storeWin.isDestroyed()) { storeWin.show(); storeWin.focus(); storeWin.webContents.send('store:focus', focusId || null); return; }
-  storeWin = new BrowserWindow({ width: 560, height: 680, minWidth: 420, minHeight: 360, title: '下載主題 · VibingWrapper', autoHideMenuBar: true,
+  storeWin = new BrowserWindow({ width: 820, height: 680, minWidth: 460, minHeight: 400, title: '主題庫 · VibingWrapper', autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.ico'), backgroundColor: '#eef3f8', show: false,
     webPreferences: { preload: path.join(__dirname, 'tools', 'store-preload.js'), contextIsolation: true, nodeIntegration: false } });
   storeWin.loadFile(path.join(__dirname, 'tools', 'store.html'));
@@ -130,10 +139,24 @@ function openStore(focusId) {
   storeWin.on('closed', () => { storeWin = null; });
 }
 const storeList = fresh => themeStore.list(claudeBridge.themes(), fresh);
+// the library = the release catalog plus every theme here that is not in it (built-in only, or a local folder);
+// without a network the installed ones still show, with the error beside them
+async function libraryList(fresh) {
+  let cat = [], error = null;
+  try { cat = await storeList(fresh); } catch (e) { error = String(e.message || e); }
+  const here = claudeBridge.themes(), seen = new Set(cat.map(t => t.id));
+  const local = here.filter(t => !seen.has(t.id)).map(t => ({ id: t.id, name: t.name, description: t.description, size: 0,
+    status: t.builtin ? 'builtin' : 'installed', order: t.order, job: null, local: true }));
+  const items = [...cat, ...local].map(t => {
+    const h = here.find(x => x.id === t.id);
+    // an installed theme's preview comes from its own folder (served by the bridge); otherwise from the catalog
+    return { ...t, tags: (h && h.tags.length ? h.tags : t.tags) || [], preview: (h && h.preview) || t.preview || null, installed: !!h };
+  }).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  return { items, error };
+}
 ipcMain.handle('pet:theme-catalog', () => storeList().catch(e => ({ error: String(e.message || e) })));
 ipcMain.on('pet:open-store', (_e, id) => openStore(typeof id === 'string' ? id : null));
-ipcMain.handle('store:catalog', (_e, fresh) => storeList(fresh).then(items => ({ items, source: themeStore.sourceLabel(), current: settings.wallpaperStyle }))
-  .catch(e => ({ error: String(e.message || e) })));
+ipcMain.handle('store:catalog', (_e, fresh) => libraryList(fresh).then(r => ({ ...r, source: themeStore.sourceLabel(), current: settings.wallpaperStyle, recent: recentThemes() })));
 ipcMain.handle('store:install', async (_e, id) => {
   const send = p => { if (storeWin && !storeWin.isDestroyed()) storeWin.webContents.send('store:progress', p); };
   const r = await themeStore.install(String(id), send);
@@ -147,6 +170,26 @@ ipcMain.handle('store:remove', (_e, id) => {
   return r;
 });
 ipcMain.handle('store:use', (_e, id) => setWallpaperStyle(String(id)));
+// 說明 (2026-10-24, user feedback: 做個小手冊敘述每個功能): one page, every feature in a sentence (tools/help.html)
+let helpWin = null;
+function openHelp() {
+  if (helpWin && !helpWin.isDestroyed()) { helpWin.show(); helpWin.focus(); return; }
+  helpWin = new BrowserWindow({ width: 520, height: 640, minWidth: 380, minHeight: 360, title: '說明 · VibingWrapper', autoHideMenuBar: true,
+    icon: path.join(__dirname, 'assets', 'icon.ico'), backgroundColor: '#eef3f8', show: false });
+  helpWin.loadFile(path.join(__dirname, 'tools', 'help.html'), { query: { v: app.getVersion() } });
+  helpWin.once('ready-to-show', () => helpWin.show());
+  helpWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  helpWin.webContents.on('will-navigate', e => e.preventDefault());
+  helpWin.on('closed', () => { helpWin = null; });
+}
+ipcMain.on('pet:open-help', openHelp);
+ipcMain.handle('pet:version', () => app.getVersion());
+// 自動更新: state for the gear menu (設定 → 更新) and the tray; install quits, a script swaps the files and restarts
+const updateMode = () => settings.updateMode === 'manual' ? 'manual' : 'auto';
+ipcMain.handle('pet:update-state', () => ({ ...updater.status(), mode: updateMode() }));
+ipcMain.handle('pet:set-update-mode', (_e, m) => { settings.updateMode = m === 'manual' ? 'manual' : 'auto'; saveSettings(); return updateMode(); });
+ipcMain.handle('pet:update-check', () => updater.check());
+ipcMain.handle('pet:update-install', () => updater.install());
 ipcMain.handle('pet:time-mode', () => timeMode());
 ipcMain.handle('pet:set-time-mode', (_e, mode) => {
   if (!TIME_MODES.includes(mode)) return timeMode();
@@ -227,8 +270,11 @@ function buildTrayMenu() {
       label: '動態桌布', type: 'checkbox', checked: settings.weatherWallpaper,
       click: item => { settings.weatherWallpaper = item.checked; wallpaper.setEnabled(item.checked, wallpaperUrl()); saveSettings(); },
     },
-    // 桌布: pick one directly (2026-10-14; the gear menu used to only cycle to the next theme)
-    { label: '桌布', submenu: claudeBridge.themes().map(t => ({ label: t.name, type: 'radio', checked: t.id === settings.wallpaperStyle, click: () => setWallpaperStyle(t.id) })) },
+    // 桌布: the recent picks plus the current one, then 主題庫… for the rest (2026-10-24: a full radio list grows too long)
+    { label: '桌布', submenu: [
+      ...claudeBridge.themes().filter(t => t.id === settings.wallpaperStyle || recentThemes().includes(t.id))
+        .map(t => ({ label: t.name, type: 'radio', checked: t.id === settings.wallpaperStyle, click: () => setWallpaperStyle(t.id) })),
+      { type: 'separator' }, { label: '主題庫…', click: () => openStore() }] },
     {
       label: '永遠在最上層', type: 'checkbox', checked: settings.alwaysOnTop,
       click: item => { settings.alwaysOnTop = item.checked; win.setAlwaysOnTop(item.checked); saveSettings(); },
@@ -240,7 +286,9 @@ function buildTrayMenu() {
     { label: claudeHooks.status() === 'on' ? 'Claude hook 已安裝' : '安裝 Claude hook', enabled: claudeHooks.status() !== 'on', click: () => { claudeHooks.install(); buildTrayMenu(); } },
     ...(codexHooks.status() === 'none' ? [] : [{ label: codexHooks.status() === 'on' ? 'Codex hook 已安裝' : '安裝 Codex hook', enabled: codexHooks.status() !== 'on', click: () => { codexHooks.install(); buildTrayMenu(); } }]),
     { type: 'separator' },
-    { label: '下載主題…', click: () => openStore() },
+    { label: '主題庫…', click: () => openStore() },
+    ...(updater.status().phase === 'available' ? [{ label: `更新到 ${updater.status().version}`, enabled: !!updater.status().canInstall, click: () => updater.install() }] : []),
+    { label: '說明', click: openHelp },
     { type: 'separator' },
     { label: '開發者工具', click: () => win.webContents.openDevTools({ mode: 'detach' }) },
     { label: '重新載入', click: () => win.reload() },
@@ -272,6 +320,9 @@ app.whenReady().then(() => {
     version: app.getVersion(), onState: s => alive() && win.webContents.send('pet:ai-state', s) });   // → %APPDATA%\vibing-wrapper\weather-log.jsonl
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   desktopIcons.init(buildTrayMenu);
+  // 自動 (default) installs only while Claude is idle and the gear menu is closed: the restart takes a few seconds
+  updater.init({ onChange: st => { buildTrayMenu(); if (alive()) win.webContents.send('pet:update-state', { ...st, mode: updateMode() }); },
+    auto: () => updateMode() === 'auto', idle: () => claudeBridge.current() === 'clear' && !menuOpen });
   // 老闆鍵: everything goes except the HUD, which shrinks to its gear (the way back); the tray icon goes too
   bossKey.init({
     accelerator: settings.bossKey, icons: desktopIcons, keep: () => (alive() ? win : null),

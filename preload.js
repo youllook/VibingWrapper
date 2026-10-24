@@ -16,10 +16,20 @@ contextBridge.exposeInMainWorld('petAPI', {
   getWallpaperStyle: () => ipcRenderer.invoke('pet:wallpaper-style'),
   getWallpaperStyles: () => ipcRenderer.invoke('pet:wallpaper-styles'),
   setWallpaperStyle: s => ipcRenderer.invoke('pet:set-wallpaper-style', s),
-  // 下載主題: [{ id, name, size, status: builtin / installed / update / available, job }] or { error };
-  // openStore(id) opens the download window (focused on that theme)
+  // the last few themes picked (newest first), for the top of the 桌布 page
+  recentThemes: () => ipcRenderer.invoke('pet:recent-themes'),
+  // 主題庫: [{ id, name, size, status: builtin / installed / update / available, job }] or { error } (the menu
+  // counts what is new); openStore(id) opens the library window (focused on that theme)
   themeCatalog: () => ipcRenderer.invoke('pet:theme-catalog'),
   openStore: id => ipcRenderer.send('pet:open-store', id),
+  openHelp: () => ipcRenderer.send('pet:open-help'),          // 說明: the one-page guide
+  version: () => ipcRenderer.invoke('pet:version'),           // app version: the tour shows what is new since the last one seen
+  // 自動更新: { phase: idle / checking / latest / available / downloading / installing / error, current, version, got, total, canInstall, msg }
+  updateState: () => ipcRenderer.invoke('pet:update-state'),
+  updateCheck: () => ipcRenderer.invoke('pet:update-check'),
+  updateInstall: () => ipcRenderer.invoke('pet:update-install'),
+  setUpdateMode: m => ipcRenderer.invoke('pet:set-update-mode', m),   // 'auto' / 'manual'
+  onUpdateState: fn => ipcRenderer.on('pet:update-state', (_e, s) => fn(s)),
   getTimeMode: () => ipcRenderer.invoke('pet:time-mode'),        // 模式: 'auto' (real clock) / 'day' / 'night'
   setTimeMode: mode => ipcRenderer.invoke('pet:set-time-mode', mode),
   // 一鍵安裝 hook, agent = 'claude' (default) / 'codex': 'on' / 'partial' / 'off' / 'error' / 'none', and install → { ok, msg }

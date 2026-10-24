@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>說明 · VibingWrapper</title>
+<!-- 說明 (2026-10-24, user feedback: 老闆鍵不懂意思，可能要做個小手冊敘述每個功能): every feature in a sentence,
+     in the order of the gear menu. Static; the version comes in as ?v=. Opened from 設定 → 說明 and the tray. -->
+<style>
+  html, body { margin: 0; background: #eef3f8; color: #17324d; font: 14px/1.6 "Microsoft JhengHei UI", "Segoe UI", sans-serif; }
+  main { padding: 18px 22px 26px; max-width: 560px; }
+  h1 { margin: 0 0 2px; font-size: 18px; letter-spacing: .05em; }
+  .ver { color: #5a7590; font-size: 12px; }
+  h2 { margin: 20px 0 6px; font-size: 14px; color: #2f6fae; letter-spacing: .05em; }
+  dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; }
+  dt { font-weight: 600; white-space: nowrap; }
+  dd { margin: 0; color: #33506b; }
+  kbd { font: 12px Consolas, monospace; padding: 0 5px; border: 1px solid rgba(23,50,77,.25); border-bottom-width: 2px; border-radius: 4px; background: #fff; white-space: nowrap; }
+  .tip { margin-top: 18px; padding: 10px 12px; border-radius: 8px; background: #fff; border: 1px solid rgba(23,50,77,.12); color: #33506b; font-size: 13px; }
+</style></head>
+<body><main>
+  <h1>VibingWrapper 說明</h1>
+  <div class="ver" id="ver"></div>
+
+  <h2>右上角</h2>
+  <dl>
+    <dt>AI 圖示</dt><dd>Claude Code／Codex 現在在做什麼：待命、思考中、執行中、收尾、等你。桌布的天氣跟著它變。</dd>
+    <dt>齒輪</dt><dd>所有設定都在這裡。上下鍵移動、Enter 選、← 或 Esc 回上一層。</dd>
+  </dl>
+
+  <h2>齒輪選單</h2>
+  <dl>
+    <dt>桌布</dt><dd>換桌布。最近用過的排最上面；主題很多時可以直接打字搜尋。</dd>
+    <dt>主題庫</dt><dd>在「桌布」最下面。看所有主題的預覽圖，下載新的、套用、移除下載過的。</dd>
+    <dt>模式</dt><dd>預設跟著真實時間日夜變化；也可以固定成日間或夜間。</dd>
+    <dt>還原桌面</dt><dd>一鍵把桌布和圖示全收起來，看起來就是普通桌面；再按一次同一組快捷鍵就回來。</dd>
+    <dt>工具</dt><dd>範圍截圖、螢幕錄影、錄目前視窗、收桌面圖示。</dd>
+    <dt>設定</dt><dd>Claude／Codex 連動、改快捷鍵、更新、這份說明、重新啟動、解除安裝。</dd>
+  </dl>
+
+  <h2>快捷鍵</h2>
+  <dl>
+    <dt><kbd>Ctrl+Alt+B</kbd></dt><dd>還原桌面（可在 設定 → 快捷鍵 改）</dd>
+    <dt><kbd>Ctrl+Alt+S</kbd></dt><dd>範圍截圖：拖一個框，圖進剪貼簿，也存到「圖片\Saved Pictures」（可改）</dd>
+    <dt><kbd>Ctrl+Alt+R</kbd></dt><dd>螢幕錄影開始／停止，存到「影片」</dd>
+    <dt><kbd>Win+Alt+R</kbd></dt><dd>用 Xbox Game Bar 錄你正在用的視窗</dd>
+    <dt><kbd>Ctrl+Alt+D</kbd></dt><dd>隱藏／顯示桌面上所有圖示</dd>
+  </dl>
+
+  <h2>連動與更新</h2>
+  <dl>
+    <dt>Claude 連動</dt><dd>只對 Claude Code 有效：終端機的 CLI，或 Claude Desktop 的 Code 分頁。Claude Desktop 的一般對話沒有 hook，天氣不會變。裝好後要重開 Claude Code。</dd>
+    <dt>Codex 連動</dt><dd>有裝 Codex 才會出現，用法同上。</dd>
+    <dt>更新</dt><dd>有新版時齒輪會出現紅點。「自動」會在 Claude 閒著時自己更新並重開；「手動」只提醒，到 設定 → 更新 點一下。</dd>
+  </dl>
+
+  <div class="tip">桌布被最大化或全螢幕的視窗蓋住時會自動暫停，不吃效能。設定、紀錄和下載的主題都在 <code>%APPDATA%\vibing-wrapper</code>，更新不會動到。</div>
+</main>
+<script>
+  const v = new URLSearchParams(location.search).get('v');
+  document.getElementById('ver').textContent = v ? '版本 ' + v : '';
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') window.close(); });
+</script>
+</body></html>
