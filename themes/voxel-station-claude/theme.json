@@ -1,9 +1,0 @@
-{
-  "name": "體素雨夜加油站・Claude",
-  "order": 53,
-  "entry": "index.html",
-  "enabled": true,
-  "bundled": false,
-  "description": "0.1 m 體素蓋的雨夜加油站，在 Blender 依燈光分組烘好；執行時每格的燈跟著 session，車子開進開出、車燈與水窪倒影，窗戶依狀態開關，雨打在水窪、雨棚滴水。",
-  "tags": ["夜景", "風格實驗"]
-}
