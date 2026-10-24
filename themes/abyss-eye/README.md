@@ -61,7 +61,8 @@
 
 ## 光與空氣
 
-- 餌球上掛一盞 `PointLight`，是場景唯一的真光源。
+- 餌球上掛一盞 `PointLight`（衰減 1.3，比物理慢）＋一盞冷藍補光（衰減 0.6）：概念圖裡燈把整張臉洗成藍白，光學上不對但氣氛對，**這是氛圍桌布，氣氛優先**。
+- 眼下發光器縮小成深青色，每顆帶一張小光暈 sprite。
 - 右後方一盞極弱的冷藍 `DirectionalLight` 做輪廓光，再加極弱的半球光。
 - ACES 色調、exposure 0.7、背景與指數霧都是 `#040a16`。
 - **光暈**：餌燈上疊兩張加法 sprite，一張小而亮的核心、一張大而柔的霧中散射，大小與透明度跟著光量變。
@@ -73,7 +74,7 @@
 - three.js r170，放在 `vendor/`（MIT，`vendor/LICENSE-three.txt`）。
 - 模型：`assets/colossal_squid.glb`（5.45 m、84 根骨頭，眼球與 14 顆發光器掛在頭骨）、`assets/anglerfish.glb`（0.185 m）。兩者都是 Tripo 專業版產出再經 Blender 腳本處理，說明見素材庫 README。
 - 30 fps 上限、像素預算 1920×1080 的一半。
-- 實測每格約 8.7 ms（1357×763，內建瀏覽器，含 GPU 同步）；第一版約 5.5 ms。
+- 實測每格約 9.4 ms（1357×763，內建瀏覽器，含 GPU 同步）；第一版約 5.5 ms。
 - 測試網址參數：`?t=55` 固定在演出第 55 秒、`?state=waiting` 固定狀態（不讀 state.json）。
 - `window.theme`：`requestState`、`applyState`、`setTime(秒|null)`、`setSessions([...])`、`frame()`、`place()`、`CONFIG`、`squid`、`fish`、`renderer`。
 

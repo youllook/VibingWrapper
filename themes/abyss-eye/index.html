@@ -146,7 +146,10 @@ scene.add(ambient);
 const rim = new THREE.DirectionalLight(0x4f86c6, 0.35);
 rim.position.set(1.5, 1.2, -2.5);
 scene.add(rim);
-const lureLight = new THREE.PointLight(0xcff4ff, 0, 0, 2);
+// The lure light falls off slower than physics (decay 1.3) and a cold fill rides along with an even flatter falloff:
+// in the concept art the lure washes the whole face in blue-white, which is wrong optically but right for the mood.
+const lureLight = new THREE.PointLight(0xcff4ff, 0, 0, 1.3);
+const lureFill = new THREE.PointLight(0x7fa6e8, 0, 0, 0.6);
 // the lure's glow in the murky water: a tight hot core and a wide soft halo, both additive sprites
 function glowTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -156,7 +159,12 @@ function glowTexture() {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 const glowTex = glowTexture();
-const halo = [0.06, 0.55].map(size => {
+const photoGlow = Array.from({ length: 14 }, () => {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x39b6ff, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: false, opacity: 0 }));
+  sp.scale.setScalar(0.07); scene.add(sp); return sp;
+});
+const halo = [0.06, 1.0].map(size => {
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xcff4ff, transparent: true, depthWrite: false,
     depthTest: size < 0.1, blending: THREE.AdditiveBlending, fog: false }));
   sp.userData.size = size; scene.add(sp); return sp;
@@ -241,7 +249,7 @@ function eyeMaterial() {
         vec3 iris = mix(vec3(0.10, 0.16, 0.22), vec3(0.42, 0.50, 0.55), smoothstep(uPupil, 0.95, rho)) * striae;
         iris *= smoothstep(0.98, 0.85, rho);                          // dark limbal ring
         float pupil = smoothstep(uPupil + 0.02, uPupil - 0.02, rho);
-        vec3 inside = mix(iris, vec3(0.0), pupil) * (0.015 + lit * 0.07) * uLureCol;
+        vec3 inside = mix(iris, vec3(0.0), pupil) * (0.012 + lit * 0.035) * uLureCol;
         inside += vec3(0.010, 0.016, 0.026) * (1.0 - pupil);         // a hint of the iris even unlit
         // the cornea: fresnel reflection of the dark water, plus the lure as a sharp highlight
         vec3 v = -rd, h = normalize(l + v);
@@ -352,7 +360,7 @@ function lookAtLure(dt, t, L) {
     target.multiply(e.sacc).multiply(drift);
     e.node.quaternion.slerp(target, 1 - Math.exp(-dt / (GAZE.lag / (1 + L * 2))));   // brighter → keener
     // pupil follows the light, slowly
-    e.pupil += (THREE.MathUtils.lerp(0.8, 0.64, THREE.MathUtils.smoothstep(L, 0, 0.4)) - e.pupil) * (1 - Math.exp(-dt / 1.5));
+    e.pupil += (THREE.MathUtils.lerp(0.82, 0.71, THREE.MathUtils.smoothstep(L, 0, 0.4)) - e.pupil) * (1 - Math.exp(-dt / 1.5));
     const u = e.mat.uniforms;
     u.uPupil.value = e.pupil; u.uLight.value = L;
     e.node.updateMatrixWorld();
@@ -375,7 +383,11 @@ loader.load('assets/colossal_squid.glb', g => {
   m.traverse(o => {
     if (o.isMesh) {
       o.frustumCulled = false;                    // skinned bounds are unreliable
-      if (o.material.name === 'photophore') squid.photo = o.material;
+      if (o.material.name === 'photophore') {
+        squid.photo = o.material; o.scale.multiplyScalar(0.6);
+        o.material.color.set(0x05121a); o.material.emissive.set(0x2fb8ff);
+        (squid.photoNodes ??= []).push(o);
+      }
       else if (o.material.name === 'eye_dark') o.material = eyeMaterial();   // a lens with depth, see eyeMaterial()
       else if (o.material.isMeshStandardMaterial) skinMaterial(o.material);
     }
@@ -404,7 +416,7 @@ loader.load('assets/anglerfish.glb', g => {
   });
   fish.esca = fish.parts.esca;
   fish.escaMat = fish.esca.material;
-  fish.esca.add(lureLight);
+  fish.esca.add(lureLight, lureFill);
   keep(fish.parts.illicium);
   fish.ready = true;
 }, undefined, e => console.warn('anglerfish not loaded:', e));
@@ -453,7 +465,12 @@ function animate(dt) {
     squid.spine.forEach((b, i) => wiggle(b, 0, Math.sin(t * 0.25 + i) * 0.012, Math.sin(t * 0.18 + i * 0.5) * 0.01));
     if (squid.head) wiggle(squid.head, 0, Math.sin(t * 2 * Math.PI / 40) * 0.02 * appear, 0);
     // photophores wake up as it arrives; a slow shimmer, brighter when the lure is brighter
-    if (squid.photo) squid.photo.emissiveIntensity = (0.15 + 2.2 * ss(14, 30, T) * (1 - ss(74, 86, T))) * (0.7 + 0.3 * Math.sin(t * 1.7)) * (0.6 + 1.5 * L);
+    const ph = (0.05 + 0.95 * ss(14, 30, T) * (1 - ss(74, 86, T))) * (0.75 + 0.25 * Math.sin(t * 1.7));
+    if (squid.photo) squid.photo.emissiveIntensity = ph * 1.4;
+    squid.photoNodes?.forEach((o, i) => {                              // each photophore gets a small soft glow
+      const sp = photoGlow[i]; o.getWorldPosition(sp.position);
+      sp.material.opacity = ph * (0.55 + 0.15 * Math.sin(t * 2.3 + i));
+    });
     squid.root.updateMatrixWorld(true);
     squid.eyeNode.getWorldPosition(squid.eye);
   }
@@ -476,8 +493,8 @@ function animate(dt) {
     if (p.illicium) wiggle(p.illicium, Math.sin(t * 1.3) * 0.08, Math.sin(t * 0.9) * 0.05, 0);
     if (fish.jaw) wiggle(fish.jaw, (0.5 + 0.5 * Math.sin(t * 0.45)) * 0.22, 0, 0);
     // the lure: glow + the scene's only light
-    lureLight.intensity = L;
-    lureLight.distance = 0;
+    lureLight.intensity = L * 0.8;
+    lureFill.intensity = L * 0.6;
     fish.escaMat.emissiveIntensity = 0.6 + 2.5 * Math.min(1, L / 0.25) + 0.15 * Math.sin(t * 2.9);
     fish.esca.getWorldPosition(lurePos);
   }
@@ -487,7 +504,7 @@ function animate(dt) {
   for (const sp of halo) {
     sp.position.copy(lurePos);
     sp.scale.setScalar(sp.userData.size * (0.55 + 0.8 * hk));
-    sp.material.opacity = sp.userData.size < 0.1 ? 0.5 + 0.5 * hk : 0.06 + 0.32 * hk;
+    sp.material.opacity = sp.userData.size < 0.1 ? 0.5 + 0.5 * hk : 0.10 + 0.45 * hk;
   }
   snowMat.uniforms.uTime.value = t;
   snowMat.uniforms.uLure.value.copy(lurePos);
