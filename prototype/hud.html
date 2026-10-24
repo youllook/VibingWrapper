@@ -70,7 +70,17 @@
   #menu .item.pick { padding: 5px 10px; justify-content: flex-start; gap: 8px; }
   #menu .item.pick .tick { width: 12px; color: #2f6fae; }
   #menu .item.back { color: #4a6a88; }
-  /* 老闆鍵: only a faint gear is left (the way back) */
+  /* first launch (2026-10-23, user feedback: 右上角沒注意到): the strip glows a few times + one hint line */
+  body.intro #ai, body.intro #gear { animation: intro-glow 1.6s ease-in-out 4; }
+  body.intro #gear { opacity: 1; }
+  @keyframes intro-glow { 50% { filter: drop-shadow(0 0 6px #fff) drop-shadow(0 0 14px #7fb8ff); } }
+  #intro { position: fixed; top: 100px; right: 8px; max-width: 200px; padding: 8px 12px; border-radius: 10px;
+    background: rgba(240,247,255,.95); color: #17324d; font-size: 13px; line-height: 1.5;
+    box-shadow: 0 6px 20px rgba(10,30,60,.25); cursor: pointer; transition: opacity .6s; }
+  #intro::before { content: ''; position: absolute; top: -6px; right: 14px; border: 6px solid transparent;
+    border-top: 0; border-bottom-color: rgba(240,247,255,.95); }
+  #intro.gone { opacity: 0; }
+  /* 還原桌面 (boss key): only a faint gear is left (the way back) */
   body.stealth #ai { display: none; }
   body.stealth #gear { opacity: .35; }
 </style>
@@ -151,8 +161,9 @@ const SETTINGS = IS_APP ? [
   // 下載主題: the theme packs on GitHub Releases; the menu turns into that list (← 返回 goes back)
   { label: '　下載主題', value: () => '›', run: () => openStore() },
   { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },   // right side = the hotkey, as a reminder
-  // 老闆鍵 (boss key): hides every VibingWrapper window; same key brings them back. Right side = the hotkey.
-  { label: '老闆鍵', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
+  // 還原桌面 (boss key; 2026-10-23 renamed from 老闆鍵, users didn't get it): hides every VibingWrapper window;
+  // same key brings them back. Right side = the hotkey.
+  { label: '還原桌面', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
   { label: '　變更快捷鍵', value: () => keyMsg.boss, run: () => startKeyCapture('boss') },
   // Claude / Codex 連動: whether our hooks are in ~/.claude/settings.json / ~/.codex/hooks.json; click adds the missing ones
   hooksRow('Claude 連動', 'claude'),
@@ -238,7 +249,25 @@ window.addEventListener('keydown', ev => {
   KEY_API[w].set([...mods, k].join('+')).then(r => { KEY_API[w].got(r); endKeyCapture(r.ok ? '已更新' : '被占用，沒換'); });
 }, true);
 window.addEventListener('blur', () => { if (capturing) endKeyCapture(''); });
-document.getElementById('gear').addEventListener('click', ev => { ev.stopPropagation(); setMenu(!settingsEl.classList.contains('open')); });
+/* first launch: glow + hint until the gear is clicked once (or 15 s pass); remembered in localStorage */
+let introEl = null;
+function endIntro() {
+  if (!introEl) return;
+  try { localStorage.setItem('introSeen', '1'); } catch (_) {}
+  document.body.classList.remove('intro'); introEl.classList.add('gone');
+  const el = introEl; introEl = null; setTimeout(() => el.remove(), 700);
+}
+let introSeen = true;
+try { introSeen = !!localStorage.getItem('introSeen'); } catch (_) {}
+if (!introSeen) {
+  introEl = document.createElement('div');
+  introEl.id = 'intro'; introEl.className = 'ui-hit';
+  introEl.textContent = '我在這裡：左邊是 Claude 的狀態，點齒輪看設定';
+  introEl.addEventListener('click', ev => { ev.stopPropagation(); endIntro(); });
+  document.body.append(introEl); document.body.classList.add('intro');
+  setTimeout(endIntro, 15000);
+}
+document.getElementById('gear').addEventListener('click', ev => { ev.stopPropagation(); endIntro(); setMenu(!settingsEl.classList.contains('open')); });
 settingsEl.addEventListener('click', ev => ev.stopPropagation());
 document.addEventListener('click', () => setMenu(false));
 window.addEventListener('keydown', ev => { if (ev.key === 'Escape') setMenu(false); });
