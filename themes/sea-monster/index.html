@@ -74,14 +74,17 @@ const DEBOUNCE_MS = 300, POLL_MS = 1000;
 
 // the sea's three knobs (PLAN §5.4)
 const STATES = {
-  none:     { D: 0.50, net: 1.0, glint: 1.0 },
-  clear:    { D: 0.50, net: 1.0, glint: 1.0 },
-  overcast: { D: 0.65, net: 0.7, glint: 0.85 },
-  storm:    { D: 0.70, net: 1.0, glint: 0.85 },
-  waiting:  { D: 0.62, net: 0.85, glint: 0.9 },
-  clearing: { D: 0.50, net: 1.0, glint: 1.0 },
+  none:     { D: 0.50, net: 1.0, glint: 1.0, murk: 0 },
+  clear:    { D: 0.50, net: 1.0, glint: 1.0, murk: 0 },
+  overcast: { D: 0.65, net: 0.7, glint: 0.85, murk: 1 },
+  storm:    { D: 0.70, net: 1.0, glint: 0.85, murk: 1 },
+  waiting:  { D: 0.62, net: 0.85, glint: 0.9, murk: 0.85 },
+  clearing: { D: 0.50, net: 1.0, glint: 1.0, murk: 0 },
 };
-const PARAMS = { D: [0.4, 0.8], net: [0, 1], glint: [0, 1] };
+const PARAMS = { D: [0.4, 0.8], net: [0, 1], glint: [0, 1], murk: [0, 1] };
+// the mood arc (user 2026-10-26): idle is the brighter sea; once Claude starts thinking the water sinks slowly to
+// blue-black, and lifts again as slowly after. Seconds for murk to get there, per state (others use CONFIG.dur).
+const MURK_DUR = { overcast: 10, storm: 6, waiting: 6, clearing: 10, clear: 10, none: 10 };
 const KEYS = { '0': 'none', '1': 'clear', '2': 'overcast', '3': 'storm', '4': 'clearing', '5': 'waiting' };
 
 /* ------------------------------ tweens ------------------------------ */
@@ -134,7 +137,7 @@ const WAVES = (() => {
 const seaU = {
   uCam: { value: new THREE.Vector2() }, uZoom: { value: 1 }, uAspect: { value: 16 / 9 }, uT: { value: 0 },
   uD: { value: 0.35 }, uNet: { value: 1 }, uGlint: { value: 1 },
-  uSqZ: { value: 1 }, uSqA: { value: 0 }, uFishZ: { value: 0.05 },
+  uSqZ: { value: 1 }, uSqA: { value: 0 }, uFishZ: { value: 0.05 }, uMurk: { value: 0 }, uClar: { value: 0 },
   uWave: { value: WAVES.a }, uWave2: { value: WAVES.b },
   uRes: { value: new THREE.Vector2(1, 1) }, uOcc: { value: occRT.texture }, uFish: { value: fishRT.texture }, uWake: { value: wakeRT.texture },
 };
@@ -145,7 +148,7 @@ const seaMat = new THREE.ShaderMaterial({
 precision highp float;
 varying vec2 vUv;
 uniform vec4 uWave[16], uWave2[16];   // dir.xy, k, phase0 / omega, slope, gust mix, shortness
-uniform vec2 uCam, uRes; uniform float uZoom, uAspect, uT, uD, uNet, uGlint, uSqZ, uSqA, uFishZ;
+uniform vec2 uCam, uRes; uniform float uZoom, uAspect, uT, uD, uNet, uGlint, uSqZ, uSqA, uFishZ, uMurk, uClar;
 uniform sampler2D uOcc, uFish, uWake;
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 vec2 h22(vec2 p){ vec3 a = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973)); a += dot(a, a.yzx + 33.33); return fract((a.xx + a.yz) * a.zy); }
@@ -159,7 +162,7 @@ float cellEdge(vec2 p){ vec2 i = floor(p), f = fract(p); float d1 = 8., d2 = 8.;
 // the water: per-channel absorption with in-scatter (red dies first). Murky and deep (user 2026-10-26: dirtier,
 // cloudier, deeper; then toward blue-black, darker than the reference): a deep blue in-scatter, a dim floor, and
 // drifting clouds of silt that turn it a little greener in places (set per pixel in main)
-const vec3 SIG = vec3(9.0, 4.5, 3.6);
+vec3 SIG = vec3(9.0, 4.5, 3.6);                                // set per frame from uMurk (main)
 vec3 SCAT = vec3(0.01, 0.075, 0.15);
 vec3 absorb(vec3 base, float d){ vec3 T = exp(-SIG * d); return base * T + SCAT * (1. - T); }
 // surface: sixteen directional waves with analytic slopes (no noise lattice: value noise's square cells showed as
@@ -202,11 +205,13 @@ void main(){
   float c1 = 1. - smoothstep(0., .22, cellEdge(wr * 15. + vec2(uT * .030, uT * .021) + n.xy * 1.5));   // bent by the surface
   float patchy = 0.55 + 0.9 * vnoise(wr * 2.3 + 4.);               // the net is brighter in patches
   float net = clamp(c1 * c1 * patchy, 0., 1.4);
-  vec3 bed = vec3(.70, .70, .66) * (0.90 + 0.18 * net * uNet);   // a faint net: the murk eats most of it
+  SIG = mix(vec3(7.0, 2.6, 1.9), vec3(9.0, 4.5, 3.6), uMurk);     // idle: clearer water; thinking on: it closes in
+  vec3 bed = vec3(.70, .70, .66) * mix(1.25, 1., uMurk) * (0.90 + 0.18 * net * uNet);   // a faint net: the murk eats most of it
 
   // silt: slow clouds that make the water dirtier and greener in places
   float silt = vnoise(w * 1.6 + vec2(uT * .006, -uT * .004));
-  SCAT = mix(vec3(0.010, 0.075, 0.150), vec3(0.020, 0.090, 0.110), smoothstep(.35, .85, silt)) * (0.9 + 0.2 * silt);
+  SCAT = mix(mix(vec3(0.02, 0.17, 0.33), vec3(0.03, 0.19, 0.27), smoothstep(.35, .85, silt)),   // idle: a brighter blue
+             mix(vec3(0.010, 0.075, 0.150), vec3(0.020, 0.090, 0.110), smoothstep(.35, .85, silt)), uMurk) * (0.9 + 0.2 * silt);
 
   // 3 what is in the water: the squid target (RGB lit skin, A coverage, mipmapped) and the fish target (R)
   vec2 uvR = vUv + n.xy * 0.0025;
@@ -222,13 +227,17 @@ void main(){
 
   if (uSqA > 0.) {
   vec4 sq = textureLod(uOcc, uvR + n.xy * 0.003, mix(0.9, 6.2, uSqZ));   // more ripple warp than the floor: it is closer to the surface
-  float a = clamp(sq.a * 1.15, 0., 1.) * uSqA;
+  // its bulk shades the water around and behind it: a wide dark halo, so the edge fades into dark, not into blue
+  float halo = textureLod(uOcc, uvR, 6.8).a * uSqA;
+  col *= 1. - 0.55 * smoothstep(0., 0.8, halo);
+  float soft = textureLod(uOcc, uvR + n.xy * 0.003, mix(0.9, 6.2, uSqZ) + 1.6).a;   // and the edge itself a little softer
+  float a = clamp(mix(sq.a, soft, 0.5) * 1.15, 0., 1.) * uSqA;
   vec3 skin = sq.rgb / max(sq.a, 1e-3) * vec3(.34, .17, .24);     // the GLB's own skin pattern, pushed to a very dark red near blue-black (user 2026-10-26)
   vec3 sqBase = skin * (1. + 0.3 * net * uNet * (1. - uSqZ));      // a faint net falls on its back when it is shallow
   // deep, it is a dark mass: its body shades the water above it (mood over optics) so it never melts into the murk;
   // shallow, the red comes through because red has the least water left to cross
-  vec3 Tz = exp(-SIG * uSqZ * uD);
-  vec3 sqCol = (sqBase * Tz + SCAT * (1. - Tz)) * mix(0.45, 1., (1. - uSqZ) * (1. - uSqZ));   // stays darker than the water until near the top
+  vec3 Tz = exp(-SIG * uSqZ * uD * (1. - 0.6 * uClar));          // near the top the water over it clears
+  vec3 sqCol = (sqBase * Tz * (1. + 0.6 * uClar) + SCAT * (1. - Tz)) * mix(0.45, 1., (1. - uSqZ) * (1. - uSqZ));   // darker than the water until near the top
   col = mix(col, sqCol, a);
   }
 
@@ -239,7 +248,7 @@ void main(){
     float cloud = smoothstep(0.015, 0.22, textureLod(uFish, uvR, 3.2).r);   // the school's mass, ~10 px soft
     col = mix(col, absorb(vec3(.10, .17, .19), uFishZ * 3.), cloud * far * 0.35);   // over deep water a school is a grey-green haze
   }
-  col = mix(col, absorb(mix(vec3(.02, .05, .06), vec3(.25, .34, .35), rim), uFishZ), fish);   // dark backs, the flank catching light at the rim
+  col = mix(col, absorb(mix(vec3(.07, .12, .13), vec3(.38, .48, .48), rim), uFishZ), fish);   // dark backs, the flank catching light at the rim
   col += vec3(.55, .66, .66) * clamp(fs.g, 0., 1.) * 0.30;       // a fish turning hard shows its silver side: the startle wave reads
   col += vec3(.20, .26, .26) * smoothstep(1.2, 2.6, fs.r);        // dense knots catch a little light
 
@@ -459,8 +468,30 @@ const sim = createFishSim();
 const rnd = (a, b) => a + Math.random() * (b - a);
 function viewRect() { const w = aspect / zoom.v, h = 1 / zoom.v; return { x0: camPos.x - w / 2, x1: camPos.x + w / 2, y0: camPos.y - h / 2, y1: camPos.y + h / 2, cx: camPos.x, cy: camPos.y, w, h }; }
 const SHAPE_NAMES = Object.keys(SHAPES);
-function spawnSchool(n = Math.round(rnd(30, 120)), shape = SHAPE_NAMES[Math.floor(Math.random() * SHAPE_NAMES.length)], opt = {}) {
-  return sim.spawn({ n, shape, view: viewRect(), ...opt });
+// Fish ranges for the fixed camera (user 2026-10-26: no pull-back, so the fish get their own plan, PLAN §8).
+// The frame is 1.78 × 1 world with the boat at (0.68, 0.42); the left quarter is the desktop-icon column.
+const FISH = {
+  stage: { x: [0.30, 0.92], y: [0.12, 0.88] },   // where idle schools settle, as screen fractions (0,0 top-left)
+  keepFromBoat: 0.20,                            // world units between a settling school and the boat
+  idleMax: 2, idleN: [40, 90],
+  thinkR: 1.4,                                   // thinking: the fright spreads from the boat across the whole frame in 3 s
+  omenR: 1.4, omenN: [30, 60],                   // running 6–14 s: the same front, with schools bolting ahead of it
+  visitN: [40, 80],                              // the long hold: a school wanders in now and then and shies away
+  ring: [0.24, 0.34], ringN: 60,                 // waiting: circling the boat, wider the longer you wait
+};
+// a settling point inside the stage, away from the boat, as the view-relative target fish.js wants
+function stageRel(view) {
+  for (let i = 0; i < 20; i++) {
+    const sx = rnd(...FISH.stage.x), sy = rnd(...FISH.stage.y);
+    const rel = { x: sx - 0.5, y: 0.5 - sy };
+    const wx = view.cx + rel.x * view.w, wy = view.cy + rel.y * view.h;
+    if (Math.hypot(wx - boat.x, wy - boat.y) > FISH.keepFromBoat + CONFIG.boatLen * 0.5) return rel;
+  }
+  return { x: 0.05, y: -0.25 };
+}
+function spawnSchool(n = Math.round(rnd(...FISH.idleN)), shape = SHAPE_NAMES[Math.floor(Math.random() * SHAPE_NAMES.length)], opt = {}) {
+  const view = viewRect();
+  return sim.spawn({ n, shape, view, ...(shape !== 'band' && !opt.rel ? { rel: stageRel(view) } : {}), ...opt });
 }
 // what the fish are afraid of: thinking — something under the boat, felt as a circle spreading from it;
 // running — the omen front spreading the same way, then the squid itself (a capsule along its body)
@@ -471,7 +502,7 @@ function currentThreat() {
   const d = squidDir(), rear = { x: -d.x, y: -d.y };              // escape turns toward its tail, away from the arms
   if (stateName === 'overcast' && squid.alpha.v < 0.5) return fear.r.v > 0.01 ? { kind: 'circle', x: boat.x, y: boat.y, r: fear.r.v, rear } : null;
   if (stateName === 'storm' && squid.script && squid.T < 14) {
-    const r = 0.95 * ss(6, 14, squid.T);
+    const r = FISH.omenR * ss(6, 14, squid.T);
     return r > 0.01 ? { kind: 'circle', x: boat.x, y: boat.y, r, rear } : null;
   }
   if ((stateName === 'storm' || stateName === 'overcast') && squid.alpha.v > 0.3) {
@@ -485,29 +516,32 @@ const M4 = new THREE.Matrix4(), Q4 = new THREE.Quaternion(), V4 = new THREE.Vect
 function animateFish(dt) {
   const view = viewRect();
   const calm = (stateName === 'clear' || stateName === 'clearing') && boat.present;
-  if (calm && CONFIG.idleSchools) {                                   // idle: a school every 20–60 s, at most three
+  if (calm && CONFIG.idleSchools) {                                   // idle: a school every 20–60 s, at most FISH.idleMax
     nextSchool -= dt;
-    if (nextSchool <= 0) { if (sim.schools.length < 3) spawnSchool(); nextSchool = rnd(20, 60); }
+    if (nextSchool <= 0) { if (sim.schools.length < FISH.idleMax) spawnSchool(); nextSchool = rnd(20, 60); }
   }
   if (stateName === 'storm' && squid.script && squid.T > 6 && squid.T < 13) {   // the omen: schools keep bolting
     nextOmen -= dt;
     if (nextOmen <= 0) {
       nextOmen = rnd(1.0, 1.8);
-      const a = Math.random() * 2 * Math.PI, d = 0.95 * ss(6, 14, squid.T) + rnd(0.15, 0.4);
-      const cx = boat.x + Math.cos(a) * d, cy = boat.y + Math.sin(a) * d;
-      if (cx > view.x0 && cx < view.x1 && cy > view.y0 && cy < view.y1)
-        spawnSchool(Math.round(rnd(50, 90)), Math.random() < 0.5 ? 'band' : 'ball', { cx, cy, rel: { x: (cx - view.cx) / view.w, y: (cy - view.cy) / view.h } });
+      const front = FISH.omenR * ss(6, 14, squid.T);
+      for (let i = 0; i < 12; i++) {                                 // somewhere on screen, just ahead of the front
+        const cx = rnd(view.x0 + 0.08, view.x1 - 0.08), cy = rnd(view.y0 + 0.08, view.y1 - 0.08), d = Math.hypot(cx - boat.x, cy - boat.y);
+        if (d < front + 0.08 || d > front + 0.45) continue;
+        spawnSchool(Math.round(rnd(...FISH.omenN)), Math.random() < 0.5 ? 'band' : 'ball', { cx, cy, rel: { x: (cx - view.cx) / view.w, y: (cy - view.cy) / view.h } });
+        break;
+      }
     }
   }
   if (stateName === 'storm' && !squid.script && squid.alpha.v > 0.9) {   // the long hold: now and then a school wanders in and shies away
     nextVisit -= dt;
-    if (nextVisit <= 0) { nextVisit = rnd(10, 18); spawnSchool(Math.round(rnd(80, 140)), Math.random() < 0.6 ? 'band' : 'ball'); }   // big enough to read from up here
+    if (nextVisit <= 0) { nextVisit = rnd(10, 18); spawnSchool(Math.round(rnd(...FISH.visitN)), Math.random() < 0.6 ? 'band' : 'ball'); }
   }
   let ring = null;
   if (stateName === 'waiting' && boat.present) {
     waitT += dt;
     const wob = Math.min(waitT / 300, 1);                            // the longer you wait, the wider the ring
-    ring = { x: boat.x, y: boat.y, r: 0.30 + 0.12 * wob, w: 1 };
+    ring = { x: boat.x, y: boat.y, r: FISH.ring[0] + (FISH.ring[1] - FISH.ring[0]) * wob, w: 1 };
   }
   fear.r.step();
   sim.step(Math.min(dt, 1 / 20), { view, threat: currentThreat(), ring,
@@ -540,12 +574,12 @@ function enter(name) {
   if (name === prev) return;
   stateName = name;
   const d = CONFIG.dur[name];
-  for (const p in PARAMS) knob[p].to(STATES[name][p], d);
+  for (const p in PARAMS) knob[p].to(STATES[name][p], p === 'murk' ? MURK_DUR[name] : d);
   zoom.to(CONFIG.cameraZoom ? CONFIG.zoom[name] : 1, d);
   if (name === 'none') boatLeave(); else boatEnter();
   boat.speedK.to(name === 'waiting' ? 0.45 : 1, 4);
-  if (name === 'overcast') fear.r.set(0).to(0.6, 3);
-  if (name === 'waiting') { waitT = 0; sim.claimRing(80, viewRect(), { x: boat.x, y: boat.y }); }
+  if (name === 'overcast') fear.r.set(0).to(FISH.thinkR, 3);
+  if (name === 'waiting') { waitT = 0; sim.claimRing(FISH.ringN, viewRect(), { x: boat.x, y: boat.y }); }
   if (prev === 'waiting') sim.releaseRing();
   if (name === 'storm') { nextOmen = 0; nextVisit = rnd(8, 14); }
   // the squid: its depth is the performance (PLAN §5.5)
@@ -644,7 +678,8 @@ function render() {
   Object.assign(seaU.uCam.value, { x: camPos.x, y: camPos.y });
   seaU.uZoom.value = z; seaU.uAspect.value = aspect; seaU.uT.value = simT;
   seaU.uD.value = knob.D.v; seaU.uNet.value = knob.net.v; seaU.uGlint.value = knob.glint.v;
-  seaU.uSqZ.value = squid.z.v; seaU.uSqA.value = squid.alpha.v;
+  seaU.uSqZ.value = squid.z.v; seaU.uSqA.value = squid.alpha.v; seaU.uMurk.value = knob.murk.v;
+  seaU.uClar.value = squid.alpha.v * ss(0.35, 0.12, squid.z.v);   // the water clears as it nears the surface
 
   renderer.setClearColor(0x000000, 0);
   const skip = CONFIG.skip || '';                              // bench ablation: 'occ fish wake sea top'

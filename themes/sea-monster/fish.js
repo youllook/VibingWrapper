@@ -248,7 +248,7 @@ export function createFishSim() {
       sc.fled = sc.leaving = true;
     }
     // gone: off the view and done with it (fleeing, leaving or just passing through)
-    const m = 0.35;
+    const m = 0.2;                                // the camera no longer rises: a fish 0.2 past the edge is gone
     for (let i = fish.length - 1; i >= 0; i--) {
       const f = fish[i];
       const out = f.x < view.x0 - m || f.x > view.x1 + m || f.y < view.y0 - m || f.y > view.y1 + m;
