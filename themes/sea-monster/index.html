@@ -228,13 +228,14 @@ void main(){
   col = mix(col, sqCol, a);
   }
 
-  vec2 fs = texture(uFish, uvR).rg;                              // R how many fish overlap here, G flank flashes
+  vec3 fs = texture(uFish, uvR).rgb;                             // R how many fish overlap here, G flank flashes, B how light
   float fish = clamp(fs.r, 0., 1.);
+  float rim = fs.b / max(fs.r, 1e-3);
   if (far > 0.) {
     float cloud = smoothstep(0.015, 0.22, textureLod(uFish, uvR, 3.2).r);   // the school's mass, ~10 px soft
     col = mix(col, absorb(vec3(.10, .17, .19), uFishZ * 3.), cloud * far * 0.35);   // over deep water a school is a grey-green haze
   }
-  col = mix(col, absorb(vec3(.16, .24, .25), uFishZ), fish);        // over blue-black water fish read lighter: grey-green backs
+  col = mix(col, absorb(mix(vec3(.02, .05, .06), vec3(.25, .34, .35), rim), uFishZ), fish);   // dark backs, the flank catching light at the rim
   col += vec3(.55, .66, .66) * clamp(fs.g, 0., 1.) * 0.30;       // a fish turning hard shows its silver side: the startle wave reads
   col += vec3(.20, .26, .26) * smoothstep(1.2, 2.6, fs.r);        // dense knots catch a little light
 
@@ -408,8 +409,44 @@ function animateSquid() {
 
 /* ------------------------------ fish: Couzin schools + startle waves (fish.js, 研究筆記 11) ------------------------------ */
 const MAXF = 600;
-const fishMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending });
-const fishMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.5, 10), fishMat, MAXF);
+// Each fish is a strip along its length (8 segments). The vertex shader swims it: a wave runs head → tail, small at
+// the head and growing toward the tail, its phase advanced on the CPU by speed (a fast fish beats faster). The
+// fragment shader cuts a fish out of the strip: a spindle body widest a third back from the snout, a thin caudal
+// peduncle and a forked tail; dark along the back, lighter at the edges where the flank shows. (User 2026-10-26:
+// the ellipses that pulsed in length read as maggots.) Writes R coverage, G flank flash, B how light (premultiplied).
+const fishMat = new THREE.ShaderMaterial({
+  depthTest: false, depthWrite: false, transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  vertexShader: `
+    varying vec2 vL; varying vec3 vC;
+    void main(){
+      vL = position.xy;                                   // x: -0.5 tail … +0.5 snout, y: across (body length units)
+      vec3 c = instanceColor;                             // r alpha, g flash, b tail phase (0..1)
+      float u = 0.5 - position.x;                         // 0 at the snout, 1 at the tail tip
+      float bend = (0.02 + 0.16 * u * u) * sin(6.2832 * c.b - u * 4.2);
+      vec3 p = vec3(position.x, position.y + bend, 0.);
+      vC = c;
+      gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(p, 1.);
+    }`,
+  fragmentShader: `
+    varying vec2 vL; varying vec3 vC;
+    void main(){
+      float x = vL.x, y = abs(vL.y);
+      // half-width along the body: round snout, widest at x ≈ 0.18, taper to the peduncle at x = -0.30
+      float body = 0.105 * sqrt(max(0., 1. - pow(abs((x - 0.13) / 0.38), 2.2))) * step(-0.30, x);
+      body = max(body, 0.022 * step(-0.34, x) * step(x, -0.20));          // the peduncle
+      // forked tail: two lobes spreading out to the tips, a notch in the middle
+      float tx = clamp((-0.30 - x) / 0.2, 0., 1.);
+      float lobe = step(x, -0.30) * step(-0.5, x) * smoothstep(0.0, 0.012, 0.035 + 0.05 * tx - abs(y - 0.12 * tx));
+      float aa = fwidth(y) * 1.2;
+      float cov = max(smoothstep(-aa, aa, body - y), lobe * 0.7);    // the tail fin is thinner: half see-through
+      if (cov < 0.01) discard;
+      float edge = smoothstep(0.45, 1.0, y / max(body, 1e-3)) * step(-0.30, x);   // the flank showing at the rim
+      float light = 0.15 + 0.85 * edge;
+      float a = vC.r * cov;
+      gl_FragColor = vec4(a, a * vC.g, a * light, 1.);
+    }`,
+});
+const fishMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 0.5, 8, 1), fishMat, MAXF);
 fishMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAXF * 3), 3);
 fishMesh.frustumCulled = false;
 const fishScene = new THREE.Scene();
@@ -474,12 +511,13 @@ function animateFish(dt) {
   const F = sim.fish, n = Math.min(F.length, MAXF), fishK = Math.pow(1 / zoom.v, 0.8), far = Math.min(1, Math.max(0, (1 - zoom.v) / 0.6));
   for (let i = 0; i < n; i++) {
     const f = F[i];
-    const wig = 1 + 0.06 * Math.sin(simT * (6 + f.sp / BL * 2) + f.ph);
-    Q4.setFromAxisAngle(Z4, Math.atan2(f.hy, f.hx)); V4.set(f.x, f.y, 0); S4.set(BL * 1.3 * wig * fishK, BL * 0.42 * fishK, 1);   // drawn a bit fat, fatter as the camera rises: in murky water from height they must still read
+    f.tp = ((f.tp ?? f.ph) + (1.6 + 1.1 * f.sp / BL) / FPS) % 1;   // tail beats: ~2 Hz cruising, faster when it bolts
+    const L = BL * 1.5 * fishK * (f.size ??= 0.8 + 0.4 * Math.random());   // drawn a touch large, larger as the camera rises
+    Q4.setFromAxisAngle(Z4, Math.atan2(f.hy, f.hx)); V4.set(f.x, f.y, 0); S4.set(L, L, 1);
     fishMesh.setMatrixAt(i, M4.compose(V4, Q4, S4));
     // from height a school shimmers: flanks catch the sun as fish roll, a few at a time — the tell that it's fish, not rock
     const glint = (0.5 + 0.5 * far) * Math.pow(Math.max(0, Math.sin(simT * 2.3 + f.ph * 9.7)), 32);
-    fishMesh.instanceColor.setXYZ(i, f.alpha, f.alpha * Math.max(f.flash, glint), 0);   // R body, G flank flash
+    fishMesh.instanceColor.setXYZ(i, f.alpha, Math.max(f.flash, glint), f.tp);   // alpha, flank flash, tail phase
   }
   fishMesh.count = n;
   fishMesh.instanceMatrix.needsUpdate = true; fishMesh.instanceColor.needsUpdate = true;
