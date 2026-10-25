@@ -35,6 +35,18 @@
 - 畫法：全解析度、有 mipmap 的貼圖，R＝魚、G＝閃光。拉遠時要「仍認得出是魚群」（用戶 2026-10-26）：魚畫得越來越粗（`(1/zoom)^0.8`）；疊一層糊開的覆蓋率當群影（一整群讀成一塊暗斑，底下有糊影子）；魚隨機翻身閃一下銀光，讓暗斑會閃，不像礁石。執行中的魚群也加大到 50–140 條。
 - 測試：`T.spawnSchool(n, 'ball'|'ring'|'band'|'scatter', { cx, cy, rel, life })`、`T.view()`、`CONFIG.idleSchools = false`。
 
+## 效能（2026-10-26 Look dev）
+
+`theme.bench(n)`：每格畫完讀 1 個像素逼 GPU 做完（ANGLE 下 gl.finish 不會等），先暖機 90 格（閒置的內顯從低時脈起跳，會量成 1.6 倍）。回傳 `{ sim, avg, p95, max, size, gpu }`。
+`CONFIG.skip = 'occ fish wake sea top'` 可逐項關掉繪製步驟做拆解。
+
+| GPU（1920×1080 視窗，畫布 1384×749） | 待命 | 執行中停住 | 等你 |
+|---|---|---|---|
+| RTX 2060 SUPER | 2.3 ms | 2.5 ms | 2.6 ms |
+| Intel UHD 630 | 10–13 ms | 10–13 ms | 10–12 ms |
+
+內顯同時在畫桌面，每次量會差 ±2 ms；暖機後拆解量到 8.2 ms，其中海 pass 約 7 ms，魷魚、魚、尾痕、船各 <0.3 ms。再要省就從海 pass 下手（波數、光網）。CPU 模擬約 1–2 ms（300–450 條魚）。
+
 ## 錄分鏡
 
 ```bash

@@ -96,19 +96,31 @@ export function createFishSim() {
       let a = grid.get(k); if (!a) grid.set(k, a = []); a.push(f);
     }
   }
-  const near = [];
-  function neighbours(f, R) {
-    near.length = 0;
-    const ix = Math.floor(f.x / cell), iy = Math.floor(f.y / cell), n = Math.ceil(R / cell);
+  // one pass over the grid cells around f: repulsion from anyone inside zr, and the K nearest visible schoolmates
+  // kept in a small sorted buffer (no per-neighbour objects, no sort: this ran 4 ms a frame for 270 fish)
+  const kd = new Float64Array(K_NEAR), kg = new Array(K_NEAR);
+  const res = { rx: 0, ry: 0, k: 0, startled: false };
+  function scan(f, zr, za) {
+    res.rx = 0; res.ry = 0; res.k = 0; res.startled = false;
+    const ix = Math.floor(f.x / cell), iy = Math.floor(f.y / cell), n = Math.ceil(za / cell), za2 = za * za, zr2 = zr * zr;
     for (let j = -n; j <= n; j++) for (let i = -n; i <= n; i++) {
       const a = grid.get(key(ix + i, iy + j)); if (!a) continue;
-      for (const g of a) {
+      for (let q = 0; q < a.length; q++) {
+        const g = a[q];
         if (g === f) continue;
         const dx = g.x - f.x, dy = g.y - f.y, d2 = dx * dx + dy * dy;
-        if (d2 < R * R) near.push({ g, dx, dy, d: Math.sqrt(d2) });
+        if (d2 >= za2) continue;
+        const d = Math.sqrt(d2) || 1e-6;
+        if (d2 < zr2) { res.rx -= dx / d; res.ry -= dy / d; continue; }   // any school: no collisions
+        if (g.sc !== f.sc) continue;
+        if (f.hx * dx + f.hy * dy < BLIND * d) continue;               // behind: can't see it
+        if (g.jt && !f.jt && f.esc > 2) res.startled = true;           // a neighbour just bolted
+        if (res.k === K_NEAR && d >= kd[K_NEAR - 1]) continue;
+        let m = res.k < K_NEAR ? res.k++ : K_NEAR - 1;
+        while (m > 0 && kd[m - 1] > d) { kd[m] = kd[m - 1]; kg[m] = kg[m - 1]; m--; }
+        kd[m] = d; kg[m] = g;
       }
     }
-    return near;
   }
 
   /* env: { view {x0,x1,y0,y1,cx,cy,w,h}, boat {x,y,hx,hy,len,beam}|null, threat|null, ring {x,y,r,w}|null } */
@@ -132,19 +144,13 @@ export function createFishSim() {
     }
     for (const f of fish) {
       const S = f.sc.S, zr = S.zr * BL, zo = zr + S.dzo * BL, za = zo + S.dza * BL;
-      const nb = neighbours(f, za);
-      // topological: keep the nearest K of the school (plus everyone inside the repulsion zone)
-      nb.sort((a, b) => a.d - b.d);
-      let rx = 0, ry = 0, ox = 0, oy = 0, ax = 0, ay = 0, kept = 0, startled = false;
-      for (const o of nb) {
-        const ux = o.dx / (o.d || 1e-6), uy = o.dy / (o.d || 1e-6);
-        if (o.d < zr) { rx -= ux; ry -= uy; continue; }               // any school: no collisions
-        if (o.g.sc !== f.sc) continue;
-        if (f.hx * ux + f.hy * uy < BLIND) continue;                // behind: can't see it
-        if (o.g.jt && !f.jt && f.esc > 2) startled = true;          // a neighbour just bolted
-        if (kept++ >= K_NEAR) continue;
-        if (o.d < zo) { ox += o.g.hx; oy += o.g.hy; }
-        else { ax += ux; ay += uy; }
+      scan(f, zr, za);
+      const rx = res.rx, ry = res.ry, startled = res.startled;
+      let ox = 0, oy = 0, ax = 0, ay = 0;
+      for (let q = 0; q < res.k; q++) {
+        const g = kg[q], d = kd[q];
+        if (d < zo) { ox += g.hx; oy += g.hy; }
+        else { ax += (g.x - f.x) / d; ay += (g.y - f.y) / d; }
       }
       let dx, dy;
       if (rx || ry) { dx = rx; dy = ry; }
