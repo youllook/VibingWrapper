@@ -62,7 +62,7 @@ const CONFIG = {
   squidAngle: -138.6 * DEG,        // tail → arms, world angle: arms out to the lower left
   squidAnchor: 0.40,               // how far from the tail the boat sits (0 tail … 1 arm tips)
   squidOutline: 0.35,              // 14–30 s: rises to here, the outline reads (fraction of D)
-  squidUp: 0.28,                  // 30–44 s: on up as high as it goes, its red skin shows through a last veil of murk (never surfaces)
+  squidUp: 0.12,                  // 30–44 s: on up as high as it goes, its red skin shows through a last veil of murk (never surfaces)
   riseEnd: 44,
   squidShadow: 0.8,                // the depth while waiting / thinking: a blurred shadow
   lock: 30,                        // seconds of the rise that play out whatever the state does (PLAN §3)
@@ -199,13 +199,17 @@ void main(){
   float lost;
   float far = clamp((1. - uZoom) / 0.6, 0., 1.);                   // 0 at the idle camera, 1 at the running camera
   vec2 g = waveSlope(w, pxW, far, lost);
+  // as the squid reaches its highest the sea goes still (user 2026-10-26): smaller waves, less roughness, less
+  // refraction, so the water reads clearer over it — an eerie calm
+  float calm = 1. - 0.7 * uClar;
+  g *= calm; lost *= calm * calm;
   vec3 n = normalize(vec3(-g, 1.));
 
   // 1 the light net on the floor at depth D, seen through the refracting surface
   vec2 wr = w + n.xy * uD * 0.06;
   float c1 = 1. - smoothstep(0., .22, cellEdge(wr * 15. + vec2(uT * .030, uT * .021) + n.xy * 1.5));   // bent by the surface
   float patchy = 0.55 + 0.9 * vnoise(wr * 2.3 + 4.);               // the net is brighter in patches
-  float net = clamp(c1 * c1 * patchy, 0., 1.4);
+  float net = clamp(c1 * c1 * patchy, 0., 1.4) * (1. - 0.8 * uClar);   // a still surface focuses no light net
   SIG = mix(vec3(7.0, 2.6, 1.9), vec3(9.0, 4.5, 3.6), uMurk);     // idle: clearer water; thinking on: it closes in
   vec3 bed = vec3(.70, .70, .66) * mix(1.25, 1., uMurk) * (0.90 + 0.18 * net * uNet);   // a faint net: the murk eats most of it
 
@@ -252,7 +256,8 @@ void main(){
   // sunlight through the ripples dapples its back when it is shallow: the strongest "just under the surface" cue
   float caus = 1. - smoothstep(0., 0.26, cellEdge(w * 9. + vec2(uT * .05, uT * .032) + n.xy * 2.2));
   caus *= 0.6 + 0.8 * vnoise(w * 2.1 - uT * .03);
-  float cl = caus * caus * pow(1. - zf, 2.) * (0.4 + 0.6 * uClar);   // light falling on it: a cool white, not more red
+  // light falling on it: a cool white, not more red. Caustics come from the waves, so they fade as the sea stills
+  float cl = caus * caus * pow(1. - zf, 2.) * 0.6 * (1. - 0.85 * uClar);
   vec3 sqBase = skin * (1. + 0.45 * cl) + vec3(.035, .05, .06) * cl;
   // deep, it is a dark mass: its body shades the water above it (mood over optics) so it never melts into the murk;
   // shallow, the red comes through because red has the least water left to cross
