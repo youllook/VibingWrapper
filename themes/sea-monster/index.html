@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>大海怪</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #08a3c1;
+               user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+  canvas { display: block; width: 100vw; height: 100vh; pointer-events: none; }
+  #hud { position: fixed; left: 10px; bottom: 8px; font: 12px/1.5 Consolas, monospace; color: rgba(255,255,255,.9);
+         background: rgba(0,0,0,.45); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
+  body.debug #hud { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+<script type="module">
+/* =====================================================================================
+ * 大海怪 (sea-monster) — stage 1 animatic (docs/大海怪/PLAN.md §7), 2026-10-26
+ *
+ * Straight down on a turquoise sea at noon. A fishing boat sails slowly; while Claude runs tools a colossal squid
+ * rises under it to where its outline shows, and stays there.
+ *  - World units: the screen height at zoom 1 = 1. The camera is orthographic, locked to the first boat
+ *    (CONFIG.boatScreen), and zooms about it: three levels, 1 / 0.67 / 0.4 (PLAN §4).
+ *  - The sea (PLAN §5) is one full-screen pass, bottom to top: a light net (caustics) on an imagined floor at depth D,
+ *    the water column absorbing per channel down to it, whatever is in the water at its own depth z (squid, fish:
+ *    blurred by z through the mip chain, tinted by the water above them, hiding the net behind), then the rippled
+ *    surface (refraction, a screen-fixed sun glint whose sparkles turn into a soft sheen as the camera rises).
+ *  - The squid (three.js, skinned GLB, its own red skin, top-lit) is drawn into a half-resolution mipmapped target
+ *    first (RGB colour, A coverage); the fish into another (R coverage).
+ *  - The wake is three ribbons laid along the boat's path history (white water + two Kelvin arms at 19.5°), drawn
+ *    into a second half-resolution target: R = white water, G = the arms' crest height. No foam buffer.
+ *  - Infrastructure (state polling, wpPause, 30 fps cap, half resolution, window.theme hooks) follows the other themes.
+ * ===================================================================================== */
+import * as THREE from 'three';
+import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { createFishSim, SHAPES, BL } from './fish.js';
+
+/* ------------------------------ config ------------------------------ */
+const FPS = 30;
+const QS = new URLSearchParams(location.search);
+const RES_OVERRIDE = +(QS.get('res') || 0);
+const MAX_PIXELS = 1920 * 1080 * 0.5;
+function resScale(w, h) { return RES_OVERRIDE || Math.min(1, Math.sqrt(MAX_PIXELS / (w * h))); }
+const DEG = Math.PI / 180;
+const CONFIG = {
+  polling: true,
+  boatScreen: [0.68, 0.42],        // where the first boat sits (0..1 from top-left)
+  boatLen: 0.30,                   // world units = 30 % of the screen height at zoom 1
+  boatSpeed: 0.022,                // world units / s
+  turnEvery: [120, 180], turnMax: 25 * DEG,
+  zoom: { none: 1, clear: 1, overcast: 0.67, storm: 0.4, waiting: 0.5, clearing: 1 },
+  dur:  { none: 4, clear: 4, overcast: 4, storm: 6, waiting: 4, clearing: 6 },   // seconds per transition
+  squidLen: 6.4,                   // tail → club tips, world units: at zoom 0.4 it runs off the screen at both ends (user 2026-10-26)
+  squidAngle: -138.6 * DEG,        // tail → arms, world angle: arms out to the lower left
+  squidAnchor: 0.40,               // how far from the tail the boat sits (0 tail … 1 arm tips)
+  squidOutline: 0.35,              // 14–30 s: rises to here, the outline reads (fraction of D)
+  squidUp: 0.12,                  // 30–44 s: on up as high as it goes, its red skin shows through a last veil of murk (never surfaces)
+  riseEnd: 44,
+  squidShadow: 0.8,                // the depth while waiting / thinking: a blurred shadow
+  lock: 30,                        // seconds of the rise that play out whatever the state does (PLAN §3)
+  armPeriod: 10, armAmp: 0.035, breathe: 15,
+  wakeLife: 80,                    // seconds of path history
+  idleSchools: true,               // false: no random schools (for formation tests)
+};
+const DEBOUNCE_MS = 300, POLL_MS = 1000;
+
+// the sea's three knobs (PLAN §5.4)
+const STATES = {
+  none:     { D: 0.50, net: 1.0, glint: 1.0 },
+  clear:    { D: 0.50, net: 1.0, glint: 1.0 },
+  overcast: { D: 0.65, net: 0.7, glint: 0.85 },
+  storm:    { D: 0.70, net: 1.0, glint: 0.85 },
+  waiting:  { D: 0.62, net: 0.85, glint: 0.9 },
+  clearing: { D: 0.50, net: 1.0, glint: 1.0 },
+};
+const PARAMS = { D: [0.4, 0.8], net: [0, 1], glint: [0, 1] };
+const KEYS = { '0': 'none', '1': 'clear', '2': 'overcast', '3': 'storm', '4': 'clearing', '5': 'waiting' };
+
+/* ------------------------------ tweens ------------------------------ */
+const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+let simT = 0;
+// a value that eases to a target over a set time, from wherever it is now
+class Tw {
+  constructor(v) { this.a = this.b = this.v = v; this.t0 = 0; this.d = 0; }
+  to(b, d, delay = 0) { this.a = this.v; this.b = b; this.t0 = simT + delay; this.d = Math.max(0.01, d); return this; }
+  set(v) { this.a = this.b = this.v = v; this.d = 0; return this; }
+  step() { if (this.d) this.v = this.a + (this.b - this.a) * ss(0, 1, (simT - this.t0) / this.d); return this.v; }
+}
+
+/* ------------------------------ renderer ------------------------------ */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(1);
+renderer.autoClear = false;
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 50);
+cam.position.z = 20;
+const rtOpt = { type: THREE.UnsignedByteType, depthBuffer: true };
+const occRT = new THREE.WebGLRenderTarget(4, 4, { ...rtOpt, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+const wakeRT = new THREE.WebGLRenderTarget(4, 4, { ...rtOpt, depthBuffer: false });
+const fishRT = new THREE.WebGLRenderTarget(4, 4, { ...rtOpt, depthBuffer: false });
+let W = 1, H = 1, aspect = 16 / 9;
+function resize() {
+  const s = resScale(innerWidth, innerHeight);
+  W = Math.max(2, Math.round(innerWidth * s)); H = Math.max(2, Math.round(innerHeight * s)); aspect = W / H;
+  renderer.setSize(W, H, false);
+  occRT.setSize(W >> 1, H >> 1); wakeRT.setSize(W >> 1, H >> 1); fishRT.setSize(W, H);   // fish are a few pixels: full resolution
+  seaU.uRes.value.set(W, H);
+}
+addEventListener('resize', resize);
+
+/* ------------------------------ the sea pass ------------------------------ */
+const seaU = {
+  uCam: { value: new THREE.Vector2() }, uZoom: { value: 1 }, uAspect: { value: 16 / 9 }, uT: { value: 0 },
+  uD: { value: 0.35 }, uNet: { value: 1 }, uGlint: { value: 1 },
+  uSqZ: { value: 1 }, uSqA: { value: 0 }, uFishZ: { value: 0.05 },
+  uRes: { value: new THREE.Vector2(1, 1) }, uOcc: { value: occRT.texture }, uFish: { value: fishRT.texture }, uWake: { value: wakeRT.texture },
+};
+const seaMat = new THREE.ShaderMaterial({
+  uniforms: seaU, depthTest: false, depthWrite: false,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`,
+  fragmentShader: `
+precision highp float;
+varying vec2 vUv;
+uniform vec2 uCam, uRes; uniform float uZoom, uAspect, uT, uD, uNet, uGlint, uSqZ, uSqA, uFishZ;
+uniform sampler2D uOcc, uFish, uWake;
+float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+vec2 h22(vec2 p){ vec3 a = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973)); a += dot(a, a.yzx + 33.33); return fract((a.xx + a.yz) * a.zy); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3. - 2. * f);
+  return mix(mix(h21(i), h21(i + vec2(1, 0)), u.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), u.x), u.y); }
+// distance to the nearest Voronoi edge (the caustic net's bright lines), as in 鷗航灣
+float cellEdge(vec2 p){ vec2 i = floor(p), f = fract(p); float d1 = 8., d2 = 8.;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) { vec2 g = vec2(x, y); vec2 r = g + h22(i + g) - f; float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
+  return sqrt(d2) - sqrt(d1); }
+// the water: per-channel absorption with in-scatter (red dies first). Murky (user 2026-10-26: dirtier, cloudier,
+// deeper): a dull green-teal in-scatter, and drifting clouds of silt that vary it (set per pixel in main)
+const vec3 SIG = vec3(8.0, 3.0, 2.6);
+vec3 SCAT = vec3(0.04, 0.34, 0.38);
+vec3 absorb(vec3 base, float d){ vec3 T = exp(-SIG * d); return base * T + SCAT * (1. - T); }
+// surface ripples, three bands; a band whose wavelength drops under a few pixels fades out (PLAN §5.6)
+const vec3 RF = vec3(26., 61., 140.);
+const vec3 RA = vec3(0.0022, 0.0010, 0.00045);
+float ripple(vec2 p, vec3 fade){
+  vec2 wind = vec2(0.6, 0.8);
+  return RA.x * fade.x * vnoise(p * RF.x + wind * uT * 0.35)
+       + RA.y * fade.y * vnoise(p * RF.y * vec2(1., 1.3) - wind.yx * uT * 0.55 + 7.)
+       + RA.z * fade.z * vnoise(p * RF.z + vec2(uT * 0.9, -uT * 0.4) + 3.); }
+void main(){
+  float pxW = 1. / (uRes.y * uZoom);                               // world units per pixel
+  vec2 w = uCam + (vUv - .5) * vec2(uAspect, 1.) / uZoom;
+  vec3 lam = 1. / (RF * pxW);                                      // each band's wavelength in pixels
+  vec3 fade = smoothstep(vec3(3.), vec3(8.), lam);
+  float rough = 1. - dot(fade, vec3(.15, .3, .55));                // detail we can no longer draw becomes roughness
+  float e = 0.0015, h0 = ripple(w, fade);
+  vec2 g = vec2(ripple(w + vec2(e, 0), fade) - h0, ripple(w + vec2(0, e), fade) - h0) / e;
+  vec3 n = normalize(vec3(-g * 0.9, 1.));
+
+  // 1 the light net on the floor at depth D, seen through the refracting surface
+  vec2 wr = w + n.xy * uD * 0.06;
+  vec2 warp = vec2(vnoise(wr * 4.1 + uT * .02), vnoise(wr * 4.1 + 9.3 - uT * .02)) - .5;   // organic cells, not cracked glass
+  float c1 = 1. - smoothstep(0., .22, cellEdge(wr * 15. + warp * 1.6 + vec2(uT * .030, uT * .021) + n.xy * 1.2));
+  float net2 = smoothstep(5., 12., 1. / (38. * pxW));
+  float c2 = (1. - smoothstep(0., .16, cellEdge(wr * 38. + warp * 2.5 + vec2(-uT * .043, uT * .031) + 3.1))) * net2;
+  float patchy = 0.55 + 0.9 * vnoise(wr * 2.3 + 4.);               // the net is brighter in patches
+  float net = clamp((c1 * c1 + .35 * c2) * patchy, 0., 1.4);
+  vec3 bed = vec3(.90, .88, .80) * (0.90 + 0.18 * net * uNet);   // a faint net: the murk eats most of it
+
+  // silt: slow clouds that make the water dirtier and greener in places
+  float silt = vnoise(w * 1.3 + vec2(uT * .006, -uT * .004)) * .6 + vnoise(w * 3.7 - uT * .01) * .4;
+  SCAT = mix(vec3(0.03, 0.33, 0.39), vec3(0.09, 0.31, 0.28), smoothstep(.35, .85, silt)) * (0.9 + 0.2 * silt);
+
+  // 3 what is in the water: the squid target (RGB lit skin, A coverage, mipmapped) and the fish target (R)
+  vec2 uvR = vUv + n.xy * 0.004;
+  vec2 sun = vec2(0.22, -0.14);                                   // shadow drift on the floor per unit of height
+  vec2 toUv = uZoom / vec2(uAspect, 1.);
+  vec2 shUv = uvR + sun * (uD - uFishZ) * toUv;
+  float fishSh = texture(uFish, shUv).r * step(0., shUv.x) * step(shUv.x, 1.) * step(0., shUv.y) * step(shUv.y, 1.);   // no clamp-to-edge smears
+  float sqSh = textureLod(uOcc, uvR + sun * (uD - uSqZ * uD) * toUv, 4.).a * uSqA * (1. - uSqZ);
+  bed *= 1. - 0.45 * clamp(fishSh, 0., 1.) - 0.5 * sqSh;
+  vec3 col = absorb(bed, uD);
+
+  vec4 sq = textureLod(uOcc, uvR + n.xy * 0.006, mix(0.9, 6.2, uSqZ));   // more ripple warp than the floor: it is closer to the surface
+  float a = clamp(sq.a * 1.15, 0., 1.) * uSqA;
+  vec3 skin = sq.rgb / max(sq.a, 1e-3) * 1.35;                    // the GLB's own red skin, top-lit
+  vec3 sqBase = skin * (1. + 0.3 * net * uNet * (1. - uSqZ));      // a faint net falls on its back when it is shallow
+  // deep, it is a dark mass: its body shades the water above it (mood over optics) so it never melts into the murk;
+  // shallow, the red comes through because red has the least water left to cross
+  vec3 Tz = exp(-SIG * uSqZ * uD);
+  vec3 sqCol = sqBase * Tz + SCAT * (1. - Tz) * mix(0.62, 1., 1. - uSqZ);
+  col = mix(col, sqCol, a);
+
+  vec2 fs = texture(uFish, uvR).rg;                              // R how many fish overlap here, G flank flashes
+  float fish = clamp(fs.r, 0., 1.);
+  col = mix(col, absorb(vec3(.05, .08, .09), uFishZ), fish);
+  col += vec3(.55, .66, .66) * clamp(fs.g, 0., 1.) * 0.30;       // a fish turning hard shows its silver side: the startle wave reads
+  col += vec3(.20, .26, .26) * smoothstep(1.2, 2.6, fs.r);        // dense knots catch a little light
+
+  // 4 the surface
+  col += 0.025 * vec3(.85, .93, 1.);                               // sky in the water, straight down
+  vec4 wk = texture(uWake, vUv);
+  col += min(wk.g, 1.5) * vec3(.75, .92, .98) * 0.30;              // the Kelvin arms catch the sky
+  vec2 d = (vUv - vec2(0.60, 1.10)) * vec2(uAspect, 1.);           // the glint is fixed on screen, just above the top edge
+  vec3 Hh = normalize(vec3(-d * 0.30, 1.));
+  float nh = max(dot(n, Hh), 0.);
+  float ex = mix(1500., 140., rough);
+  float spark = pow(nh, ex) * sqrt(ex / 1500.) * (1. + 4. * wk.g);
+  float hot = exp(-dot(d, d) * 2.0);
+  col += uGlint * (spark * 1.5 + 0.10 * hot) * vec3(1., .97, .9);
+  float foam = clamp(wk.r, 0., 1.) * (0.75 + 0.25 * vnoise(w * 420. + uT));
+  col = mix(col, vec3(.95, .97, .97), foam * 0.85);
+
+  vec2 s = vUv - .5;
+  col *= 1. - 0.18 * dot(s, s);
+  gl_FragColor = vec4(col, 1.);
+}`,
+});
+const seaScene = new THREE.Scene();
+const seaQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), seaMat);
+seaQuad.frustumCulled = false;
+seaScene.add(seaQuad);
+
+/* ------------------------------ the boat ------------------------------ */
+const topScene = new THREE.Scene();
+const boatTex = new THREE.TextureLoader().load('assets/boat1.png');
+boatTex.colorSpace = THREE.SRGBColorSpace;
+boatTex.anisotropy = 4;
+const boatGeo = new THREE.PlaneGeometry(CONFIG.boatLen * 196 / 512, CONFIG.boatLen);
+const boatMesh = new THREE.Mesh(boatGeo, new THREE.MeshBasicMaterial({ map: boatTex, transparent: true, depthTest: false }));
+const boatShadow = new THREE.Mesh(boatGeo, new THREE.MeshBasicMaterial({ map: boatTex, color: 0x000000, transparent: true, opacity: 0.28, depthTest: false }));
+boatShadow.scale.setScalar(1.04);
+topScene.add(boatShadow, boatMesh);
+const boat = {
+  present: false, x: 0, y: 0, th: 0, thTo: 0, nextTurn: 60,
+  arrive: new Tw(0),              // 1 = still off-screen below (coming in) / above (leaving), 0 = in place
+  leaving: false, speedK: new Tw(1),
+  hist: [],                       // the stern's path: { x, y, dx, dy, t }
+};
+const camPos = new THREE.Vector2(0, 0), camVel = new THREE.Vector2(0, CONFIG.boatSpeed * 0.3);
+const zoom = new Tw(1);
+function lockOffset(z) { return new THREE.Vector2((CONFIG.boatScreen[0] - 0.5) * aspect / z, (0.5 - CONFIG.boatScreen[1]) / z); }
+function boatEnter() {
+  if (boat.present && !boat.leaving) return;
+  if (!boat.present) {
+    const off = lockOffset(zoom.v);
+    boat.x = camPos.x + off.x; boat.y = camPos.y + off.y; boat.th = boat.thTo = 0; boat.hist = [];
+    boat.arrive.set(1).to(0, 9);
+  } else boat.arrive.to(0, 6);
+  boat.present = true; boat.leaving = false;
+}
+function boatLeave() { if (boat.present && !boat.leaving) { boat.leaving = true; boat.arrive.to(-1, 9); } }
+
+/* ------------------------------ the wake: three ribbons along the path ------------------------------ */
+const MAXP = Math.ceil(CONFIG.wakeLife / 0.25) + 4;
+const wakeGeo = new THREE.BufferGeometry();
+const wPos = new Float32Array(3 * MAXP * 2 * 3), wDat = new Float32Array(3 * MAXP * 2 * 4);
+wakeGeo.setAttribute('position', new THREE.BufferAttribute(wPos, 3).setUsage(THREE.DynamicDrawUsage));
+wakeGeo.setAttribute('aW', new THREE.BufferAttribute(wDat, 4).setUsage(THREE.DynamicDrawUsage));
+{
+  const idx = [];
+  for (let r = 0; r < 3; r++) for (let i = 0; i < MAXP - 1; i++) {
+    const a = (r * MAXP + i) * 2, b = a + 1, c = a + 2, d = a + 3;
+    idx.push(a, b, c, b, d, c);
+  }
+  wakeGeo.setIndex(idx);
+}
+const wakeMat = new THREE.ShaderMaterial({
+  depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, transparent: true, side: THREE.DoubleSide,
+  vertexShader: `attribute vec4 aW; varying vec4 vW; void main(){ vW = aW; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
+  fragmentShader: `varying vec4 vW;
+    void main(){ float p = 1. - vW.x * vW.x; p *= p;
+      float crest = 0.7 + 0.3 * sin(vW.w * 120.);
+      gl_FragColor = vec4(vW.y * p, vW.z * p * crest, 0., 1.); }`,
+});
+const wakeMesh = new THREE.Mesh(wakeGeo, wakeMat);
+wakeMesh.frustumCulled = false;
+const wakeScene = new THREE.Scene();
+wakeScene.add(wakeMesh);
+const TAN_K = Math.tan(19.47 * DEG);
+function buildWake() {
+  const P = boat.present ? boat.hist : [];
+  const n = Math.min(P.length, MAXP);
+  const beam = CONFIG.boatLen * 196 / 512;
+  for (let r = 0; r < 3; r++) for (let i = 0; i < MAXP; i++) {
+    const p = P[Math.min(i, n - 1)];
+    const k = (r * MAXP + i) * 2;
+    if (!p) { wPos.fill(0, k * 3, k * 3 + 6); wDat.fill(0, k * 4, k * 4 + 8); continue; }
+    if (i >= n) {                 // unused tail: collapse onto the last point, invisible (not onto the origin)
+      wPos.copyWithin(k * 3, (k - 2) * 3, k * 3); wDat.fill(0, k * 4, k * 4 + 8); continue;
+    }
+    const age = simT - p.t, nx = -p.dy, ny = p.dx, s = age * CONFIG.boatSpeed;
+    let off = 0, hw, iR = 0, iG = 0;
+    if (r === 0) { hw = beam * 0.30 + age * 0.004; iR = Math.exp(-age / 2.2) * 0.95; }
+    else {
+      off = (r === 1 ? 1 : -1) * (beam * 0.45 + s * TAN_K);
+      hw = 0.005 + age * 0.0011;
+      iG = Math.exp(-age / 30) * ss(0, 1.2, age) * 1.6;
+    }
+    for (let j = 0; j < 2; j++) {
+      const u = j ? 1 : -1, o = off + u * hw;
+      wPos[(k + j) * 3] = p.x + nx * o; wPos[(k + j) * 3 + 1] = p.y + ny * o; wPos[(k + j) * 3 + 2] = 0;
+      wDat.set([u, iR, iG, s], (k + j) * 4);
+    }
+  }
+  wakeGeo.attributes.position.needsUpdate = true; wakeGeo.attributes.aW.needsUpdate = true;
+}
+
+/* ------------------------------ the squid ------------------------------ */
+const occScene = new THREE.Scene();
+occScene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const sunL = new THREE.DirectionalLight(0xffffff, 2.2); sunL.position.set(0.3, -0.2, 1); occScene.add(sunL);
+const squidOuter = new THREE.Group(), squidInner = new THREE.Group();
+squidOuter.add(squidInner); occScene.add(squidOuter);
+const squid = { ready: false, chains: [], alpha: new Tw(0), z: new Tw(1), script: false, T: 0 };
+const rest = new Map(), axis = new Map();
+new GLTFLoader().load('assets/colossal_squid.glb', g => {
+  const m = g.scene;
+  // its own textured skin, lit from above: RGB = colour, A = coverage (the sea pass decides how much shows through)
+  m.traverse(o => {
+    if (!o.isMesh) return;
+    const src = o.material;
+    o.material = new THREE.MeshLambertMaterial({ map: src.map ?? null, color: src.map ? 0xffffff : src.color });
+    o.frustumCulled = false;
+  });
+  m.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(m);
+  const len = box.max.x - box.min.x, sc = CONFIG.squidLen / len;
+  squid.sc = sc;
+  const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+  let head = null;
+  m.traverse(o => { if (o.isBone && /Head_1$/.test(o.name)) head = o; });
+  const wp = new THREE.Vector3();
+  for (const b of (head?.children ?? []).filter(c => c.isBone && /^(bone_|tentacle_fix)/.test(c.name))) {
+    const chain = []; let x = b;
+    while (x) {
+      rest.set(x, x.quaternion.clone());
+      x.getWorldQuaternion(q);
+      axis.set(x, up.clone().applyQuaternion(q.clone().invert()));   // "sideways in the top view", in the bone's own frame
+      chain.push(x); x = x.children.find(c => c.isBone);
+    }
+    b.getWorldPosition(wp);
+    chain.phase = Math.atan2(wp.z, wp.y) * 2.0;   // chains on the same arm start at the same spot → same phase
+    squid.chains.push(chain);
+  }
+  // lie flat (model +Y → toward the camera), arms along +X, the anchor point at the origin
+  squidInner.add(m);
+  squidInner.rotation.x = Math.PI / 2;
+  squidInner.scale.setScalar(sc);
+  const ax = box.min.x + CONFIG.squidAnchor * len, cz = (box.min.z + box.max.z) / 2, cy = (box.min.y + box.max.y) / 2;
+  m.position.set(-ax, -cy, -cz);
+  squidOuter.rotation.z = CONFIG.squidAngle;
+  squid.ready = true;
+}, undefined, e => console.warn('squid not loaded:', e));
+const qTmp = new THREE.Quaternion();
+function animateSquid() {
+  if (!squid.ready) return;
+  const t = simT;
+  for (const ch of squid.chains) ch.forEach((b, i) => {
+    const a = CONFIG.armAmp * Math.sin(2 * Math.PI * t / CONFIG.armPeriod - i * 0.45 + ch.phase) * (0.6 + 0.4 * Math.min(1, i / 6));
+    b.quaternion.copy(rest.get(b)).multiply(qTmp.setFromAxisAngle(axis.get(b), a));
+  });
+  squidInner.scale.setScalar(squid.sc * (1 + 0.018 * Math.sin(2 * Math.PI * t / CONFIG.breathe)));
+}
+
+/* ------------------------------ fish: Couzin schools + startle waves (fish.js, 研究筆記 11) ------------------------------ */
+const MAXF = 600;
+const fishMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending });
+const fishMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.5, 10), fishMat, MAXF);
+fishMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAXF * 3), 3);
+fishMesh.frustumCulled = false;
+const fishScene = new THREE.Scene();
+fishScene.add(fishMesh);
+const sim = createFishSim();
+const rnd = (a, b) => a + Math.random() * (b - a);
+function viewRect() { const w = aspect / zoom.v, h = 1 / zoom.v; return { x0: camPos.x - w / 2, x1: camPos.x + w / 2, y0: camPos.y - h / 2, y1: camPos.y + h / 2, cx: camPos.x, cy: camPos.y, w, h }; }
+const SHAPE_NAMES = Object.keys(SHAPES);
+function spawnSchool(n = Math.round(rnd(30, 120)), shape = SHAPE_NAMES[Math.floor(Math.random() * SHAPE_NAMES.length)], opt = {}) {
+  return sim.spawn({ n, shape, view: viewRect(), ...opt });
+}
+// what the fish are afraid of: thinking — something under the boat, felt as a circle spreading from it;
+// running — the omen front spreading the same way, then the squid itself (a capsule along its body)
+const fear = { r: new Tw(0) };
+function squidDir() { return { x: Math.cos(CONFIG.squidAngle), y: Math.sin(CONFIG.squidAngle) }; }
+function currentThreat() {
+  if (!boat.present) return null;
+  const d = squidDir(), rear = { x: -d.x, y: -d.y };              // escape turns toward its tail, away from the arms
+  if (stateName === 'overcast' && squid.alpha.v < 0.5) return fear.r.v > 0.01 ? { kind: 'circle', x: boat.x, y: boat.y, r: fear.r.v, rear } : null;
+  if (stateName === 'storm' && squid.script && squid.T < 14) {
+    const r = 0.95 * ss(6, 14, squid.T);
+    return r > 0.01 ? { kind: 'circle', x: boat.x, y: boat.y, r, rear } : null;
+  }
+  if ((stateName === 'storm' || stateName === 'overcast') && squid.alpha.v > 0.3) {
+    const L = CONFIG.squidLen, a = CONFIG.squidAnchor;
+    return { kind: 'capsule', ax: boat.x - d.x * a * L, ay: boat.y - d.y * a * L, bx: boat.x + d.x * (1 - a) * L, by: boat.y + d.y * (1 - a) * L, r: 0.1 * L * squid.alpha.v, rear };
+  }
+  return null;
+}
+let nextSchool = 8, nextOmen = 0, nextVisit = 12, waitT = 0;
+const M4 = new THREE.Matrix4(), Q4 = new THREE.Quaternion(), V4 = new THREE.Vector3(), S4 = new THREE.Vector3(), Z4 = new THREE.Vector3(0, 0, 1);
+function animateFish(dt) {
+  const view = viewRect();
+  const calm = (stateName === 'clear' || stateName === 'clearing') && boat.present;
+  if (calm && CONFIG.idleSchools) {                                   // idle: a school every 20–60 s, at most three
+    nextSchool -= dt;
+    if (nextSchool <= 0) { if (sim.schools.length < 3) spawnSchool(); nextSchool = rnd(20, 60); }
+  }
+  if (stateName === 'storm' && squid.script && squid.T > 6 && squid.T < 13) {   // the omen: schools keep bolting
+    nextOmen -= dt;
+    if (nextOmen <= 0) {
+      nextOmen = rnd(1.0, 1.8);
+      const a = Math.random() * 2 * Math.PI, d = 0.95 * ss(6, 14, squid.T) + rnd(0.15, 0.4);
+      const cx = boat.x + Math.cos(a) * d, cy = boat.y + Math.sin(a) * d;
+      if (cx > view.x0 && cx < view.x1 && cy > view.y0 && cy < view.y1)
+        spawnSchool(Math.round(rnd(20, 45)), Math.random() < 0.5 ? 'band' : 'ball', { cx, cy, rel: { x: (cx - view.cx) / view.w, y: (cy - view.cy) / view.h } });
+    }
+  }
+  if (stateName === 'storm' && !squid.script && squid.alpha.v > 0.9) {   // the long hold: now and then a school wanders in and shies away
+    nextVisit -= dt;
+    if (nextVisit <= 0) { nextVisit = rnd(10, 18); spawnSchool(Math.round(rnd(30, 70)), 'band'); }
+  }
+  let ring = null;
+  if (stateName === 'waiting' && boat.present) {
+    waitT += dt;
+    const wob = Math.min(waitT / 300, 1);                            // the longer you wait, the wider the ring
+    ring = { x: boat.x, y: boat.y, r: 0.30 + 0.12 * wob, w: 1 };
+  }
+  fear.r.step();
+  sim.step(Math.min(dt, 1 / 20), { view, threat: currentThreat(), ring,
+    boat: boat.present ? { x: boat.x, y: boat.y, hx: -Math.sin(boat.th), hy: Math.cos(boat.th), len: CONFIG.boatLen, beam: CONFIG.boatLen * 196 / 512 } : null });
+  const F = sim.fish, n = Math.min(F.length, MAXF), fishK = Math.pow(1 / zoom.v, 0.6);
+  for (let i = 0; i < n; i++) {
+    const f = F[i];
+    const wig = 1 + 0.06 * Math.sin(simT * (6 + f.sp / BL * 2) + f.ph);
+    Q4.setFromAxisAngle(Z4, Math.atan2(f.hy, f.hx)); V4.set(f.x, f.y, 0); S4.set(BL * 1.3 * wig * fishK, BL * 0.42 * fishK, 1);   // drawn a bit fat, fatter as the camera rises: in murky water from height they must still read
+    fishMesh.setMatrixAt(i, M4.compose(V4, Q4, S4));
+    fishMesh.instanceColor.setXYZ(i, f.alpha, f.alpha * f.flash, 0);   // R body, G flank flash
+  }
+  fishMesh.count = n;
+  fishMesh.instanceMatrix.needsUpdate = true; fishMesh.instanceColor.needsUpdate = true;
+}
+
+/* ------------------------------ state machine ------------------------------ */
+let stateName = 'none', pending = null, queued = null, debounceT = 0;
+const knob = {}; for (const p in PARAMS) knob[p] = new Tw(STATES.none[p]);
+function applyState(name) {
+  if (!STATES[name]) return;
+  if (squid.script && squid.T < CONFIG.lock) { queued = name; return; }   // the first 30 s of the rise always play out
+  enter(name);
+}
+function enter(name) {
+  const prev = stateName;
+  if (name === prev) return;
+  stateName = name;
+  const d = CONFIG.dur[name];
+  for (const p in PARAMS) knob[p].to(STATES[name][p], d);
+  zoom.to(CONFIG.zoom[name], d);
+  if (name === 'none') boatLeave(); else boatEnter();
+  boat.speedK.to(name === 'waiting' ? 0.45 : 1, 4);
+  if (name === 'overcast') fear.r.set(0).to(0.6, 3);
+  if (name === 'waiting') { waitT = 0; sim.claimRing(80, viewRect(), { x: boat.x, y: boat.y }); }
+  if (prev === 'waiting') sim.releaseRing();
+  if (name === 'storm') { nextOmen = 0; nextVisit = rnd(8, 14); }
+  // the squid: its depth is the performance (PLAN §5.5)
+  const up = squid.alpha.v > 0.5;
+  if (name !== 'storm') squid.script = false;                  // leaving mid-rise: ease from wherever it got to
+  if (name === 'storm') {
+    if (up) squid.z.to(CONFIG.squidUp, 6);                    // thinking ↔ running: no second rise, just deeper / shallower
+    else { squid.script = true; squid.T = 0; squid.z.set(1); squid.alpha.set(0); }
+  } else if (name === 'overcast') { if (up) squid.z.to(CONFIG.squidShadow, 4); }
+  else if (name === 'waiting') { squid.z.to(CONFIG.squidShadow, 4); if (!up) squid.alpha.to(1, 6); }
+  else { squid.z.to(1, 5); squid.alpha.to(0, 6, 2.5); }      // clear / clearing / none: sink, then gone
+}
+function requestState(name) {
+  if (!STATES[name]) return;
+  pending = name;
+  clearTimeout(debounceT);
+  debounceT = setTimeout(() => { if (pending !== stateName) applyState(pending); pending = null; }, DEBOUNCE_MS);
+}
+function stormScript(dt) {
+  if (!squid.script) return;
+  squid.T += dt;
+  const T = squid.T;
+  squid.alpha.set(ss(6, 14, T));                              // omen: a darker patch, the net gone under the boat
+  // the rise: depth, not opacity — to the outline, then on up until the colour comes through
+  squid.z.set(1 - (1 - CONFIG.squidOutline) * ss(14, 30, T) - (CONFIG.squidOutline - CONFIG.squidUp) * ss(30, CONFIG.riseEnd, T));
+  if (T >= CONFIG.riseEnd) squid.script = false;
+  if (T >= CONFIG.lock && queued) { const q = queued; queued = null; enter(q); }   // after the lock a new state cuts the rise short
+}
+
+/* ------------------------------ inputs ------------------------------ */
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
+addEventListener('keydown', e => {
+  if (KEYS[e.key]) requestState(KEYS[e.key]);
+  if (e.key === 'd') document.body.classList.toggle('debug');
+});
+let lastPolled = null, sessionsOverride = null;
+async function poll() {
+  if (!CONFIG.polling) return;
+  try {
+    const r = await fetch('state.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const sessions = sessionsOverride || (Array.isArray(j.sessions) ? j.sessions : []);
+    const s = sessions.some(x => x) ? j.state : 'none';
+    if (STATES[s] && s !== lastPolled) { lastPolled = s; requestState(s); }
+  } catch { /* unreadable → keep the current state */ }
+}
+if (STATES[QS.get('state')]) { CONFIG.polling = false; enter(QS.get('state')); }
+setInterval(poll, POLL_MS);
+poll();
+
+/* ------------------------------ simulation ------------------------------ */
+function update(dt) {
+  simT += dt;
+  stormScript(dt);
+  for (const p in PARAMS) knob[p].step();
+  zoom.step(); boat.arrive.step(); boat.speedK.step(); squid.alpha.step(); squid.z.step();
+  // the boat: a slow wide arc, a new heading every 2–3 minutes
+  if (boat.present) {
+    boat.nextTurn -= dt;
+    if (boat.nextTurn <= 0) { boat.thTo = rnd(-CONFIG.turnMax, CONFIG.turnMax); boat.nextTurn = rnd(...CONFIG.turnEvery); }
+    boat.th += (boat.thTo - boat.th) * Math.min(1, dt * 0.05);
+    const sp = CONFIG.boatSpeed * boat.speedK.v, dx = -Math.sin(boat.th), dy = Math.cos(boat.th);
+    boat.x += dx * sp * dt; boat.y += dy * sp * dt;
+    const sx = boat.x - dx * CONFIG.boatLen * 0.46, sy = boat.y - dy * CONFIG.boatLen * 0.46;
+    // hist[0] is the live stern point; a new one is pinned behind it every 0.25 s
+    if (!boat.hist.length || simT - (boat.hist[1]?.t ?? -1) >= 0.25) boat.hist.unshift({ x: sx, y: sy, dx, dy, t: simT });
+    else Object.assign(boat.hist[0], { x: sx, y: sy, dx, dy, t: simT });
+    while (boat.hist.length && simT - boat.hist[boat.hist.length - 1].t > CONFIG.wakeLife) boat.hist.pop();
+    // the camera rides with the boat; arriving / leaving it slides in from below / out at the top
+    const off = lockOffset(zoom.v), slide = boat.arrive.v * (0.5 + CONFIG.boatScreen[1] + 0.2) / zoom.v;
+    const cx = boat.x - off.x, cy = boat.y - off.y + slide;
+    camVel.set((cx - camPos.x) / Math.max(dt, 1e-3), (cy - camPos.y) / Math.max(dt, 1e-3));
+    camPos.set(cx, cy);
+    if (boat.leaving && boat.arrive.v <= -0.999) { boat.present = false; boat.leaving = false; camVel.set(0, CONFIG.boatSpeed * 0.3); }
+  } else {
+    camPos.addScaledVector(camVel, dt);
+    camVel.lerp(new THREE.Vector2(0, CONFIG.boatSpeed * 0.3), Math.min(1, dt * 0.2));
+  }
+  animateFish(dt);
+  animateSquid();
+}
+
+/* ------------------------------ render ------------------------------ */
+function render() {
+  const z = zoom.v, hw = aspect / 2 / z, hh = 0.5 / z;
+  cam.left = -hw; cam.right = hw; cam.top = hh; cam.bottom = -hh; cam.updateProjectionMatrix();
+  cam.position.set(camPos.x, camPos.y, 20);
+  squidOuter.position.set(boat.x, boat.y, 0);
+  squidOuter.visible = squid.ready && squid.alpha.v > 0.001;
+  boatMesh.visible = boatShadow.visible = boat.present;
+  boatMesh.position.set(boat.x, boat.y, 1); boatMesh.rotation.z = boat.th;
+  boatShadow.position.set(boat.x + 0.006, boat.y - 0.006, 0.5); boatShadow.rotation.z = boat.th;
+  buildWake();
+  Object.assign(seaU.uCam.value, { x: camPos.x, y: camPos.y });
+  seaU.uZoom.value = z; seaU.uAspect.value = aspect; seaU.uT.value = simT;
+  seaU.uD.value = knob.D.v; seaU.uNet.value = knob.net.v; seaU.uGlint.value = knob.glint.v;
+  seaU.uSqZ.value = squid.z.v; seaU.uSqA.value = squid.alpha.v;
+
+  renderer.setClearColor(0x000000, 0);
+  renderer.setRenderTarget(occRT); renderer.clear(); renderer.render(occScene, cam);
+  renderer.setRenderTarget(fishRT); renderer.clear(); renderer.render(fishScene, cam);
+  renderer.setRenderTarget(wakeRT); renderer.clear(); renderer.render(wakeScene, cam);
+  renderer.setRenderTarget(null); renderer.clear();
+  renderer.render(seaScene, cam);
+  renderer.render(topScene, cam);
+}
+
+/* ------------------------------ loop ------------------------------ */
+const FRAME_MS = 1000 / FPS;
+let raf = 0, nextFrame = 0, lastT = 0, fps = 0, fpsCount = 0, fpsT = 0;
+const now = () => performance.now() / 1000;
+function frame(ms) {
+  raf = requestAnimationFrame(frame);
+  if (ms < nextFrame) return;
+  nextFrame += FRAME_MS;
+  if (nextFrame < ms) nextFrame = ms + FRAME_MS;
+  const t = now(), dt = Math.min(0.1, t - lastT);
+  lastT = t;
+  update(dt); render();
+  fpsCount++;
+  if (t - fpsT >= 1) { fps = fpsCount / (t - fpsT); fpsCount = 0; fpsT = t; }
+  if (document.body.classList.contains('debug')) {
+    document.getElementById('hud').textContent =
+      `state ${stateName}${queued ? ' (queued ' + queued + ')' : ''}${pending ? ' (→' + pending + ')' : ''}  zoom ${zoom.v.toFixed(2)}\n` +
+      `D ${knob.D.v.toFixed(2)}  net ${knob.net.v.toFixed(2)}  glint ${knob.glint.v.toFixed(2)}\n` +
+      `squid ${squid.script ? 'rise ' + squid.T.toFixed(1) + 's ' : ''}alpha ${squid.alpha.v.toFixed(2)} z ${squid.z.v.toFixed(2)}D  fish ${sim.fish.length}/${sim.schools.length}\n` +
+      `fps ${fps.toFixed(1)}  res ${W}×${H}`;
+  }
+}
+function start() { if (!raf) { lastT = now(); raf = requestAnimationFrame(frame); } }
+function stop() { cancelAnimationFrame(raf); raf = 0; }
+let hostPaused = false;
+document.addEventListener('visibilitychange', () => (document.hidden || hostPaused ? stop() : start()));
+window.wpPause = on => { hostPaused = !!on; if (hostPaused) stop(); else if (!document.hidden) start(); };
+resize();
+if (!document.hidden) start();
+
+// testing hooks (themes/demo.html, docs/錄製/record.js look for window.theme)
+window.theme = window.seaMonster = {
+  requestState, applyState, STATES, PARAMS, CONFIG, THREE, renderer, squid, boat, knob, zoom,
+  setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; poll(); },
+  spawnSchool, view: viewRect,
+  advance(sec, dt = 1 / FPS) { for (let t = 0; t < sec; t += dt) update(dt); render(); },   // fast-forward without drawing
+  frame(dt = 1 / FPS) { update(dt); render(); },
+  get ready() { return squid.ready; },
+  get state() { return stateName; }, sim, get fish() { return sim.fish.length; }, get simT() { return simT; },
+};
+</script>
+</body>
+</html>

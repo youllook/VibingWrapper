@@ -1,0 +1,9 @@
+{
+  "name": "大海怪",
+  "order": 60,
+  "entry": "index.html",
+  "enabled": false,
+  "bundled": false,
+  "description": "正俯視的碧海，一艘漁船慢慢走、魚群來去；Claude 執行時，船底下浮現一隻比船大很多的巨魷剪影。",
+  "tags": ["海"]
+}
