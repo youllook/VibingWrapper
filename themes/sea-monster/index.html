@@ -52,6 +52,10 @@ const CONFIG = {
   boatLen: 0.30,                   // world units = 30 % of the screen height at zoom 1
   boatSpeed: 0.022,                // world units / s
   turnEvery: [120, 180], turnMax: 25 * DEG,
+  // camera pull-back per state. Off by default (user 2026-10-26, after trying both): the camera stays at the boat,
+  // so the squid is too big for the frame and passes under it as a dark mass with no end in sight. ?zoom=1 brings
+  // the pull-back (CONFIG.zoom) back
+  cameraZoom: QS.has('zoom') ? QS.get('zoom') !== '0' : false,
   zoom: { none: 1, clear: 1, overcast: 0.67, storm: 0.4, waiting: 0.5, clearing: 1 },
   dur:  { none: 4, clear: 4, overcast: 4, storm: 6, waiting: 4, clearing: 6 },   // seconds per transition
   squidLen: 6.4,                   // tail → club tips, world units: at zoom 0.4 it runs off the screen at both ends (user 2026-10-26)
@@ -537,7 +541,7 @@ function enter(name) {
   stateName = name;
   const d = CONFIG.dur[name];
   for (const p in PARAMS) knob[p].to(STATES[name][p], d);
-  zoom.to(CONFIG.zoom[name], d);
+  zoom.to(CONFIG.cameraZoom ? CONFIG.zoom[name] : 1, d);
   if (name === 'none') boatLeave(); else boatEnter();
   boat.speedK.to(name === 'waiting' ? 0.45 : 1, 4);
   if (name === 'overcast') fear.r.set(0).to(0.6, 3);
