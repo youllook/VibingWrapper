@@ -25,6 +25,7 @@ export const SHAPES = {
   band:    { zr: 1.0, dzo: 9,   dza: 12, speed: 4.5, goal: 0.45, turn: 2.0, R: 0.9 },
   scatter: { zr: 2.4, dzo: 0.8, dza: 4,  speed: 1.8, goal: 0.55, turn: 2.6, R: 1.3 },
 };
+export const SPREAD = 2;                       // spacing multiplier on every zone and school size (user 2026-10-26: twice as spread out)
 const BLIND = Math.cos(150 * Math.PI / 180);   // 60° blind cone behind
 const K_NEAR = 7;
 const ESC_ANGLE = 30 * Math.PI / 180;
@@ -54,7 +55,7 @@ export function createFishSim() {
     schools.push(sc);
     const hx0 = Math.sign(r.x * view.w + view.cx - x) || 1, a0 = Math.atan2((r.y * view.h + view.cy) - y, (r.x * view.w + view.cx) - x);
     for (let i = 0; i < n; i++) {
-      const rr = Math.sqrt(Math.random()) * Math.sqrt(n) * BL * 0.9, a = Math.random() * 2 * Math.PI;
+      const rr = Math.sqrt(Math.random()) * Math.sqrt(n) * BL * 0.9 * SPREAD, a = Math.random() * 2 * Math.PI;
       const h = a0 + rnd(-0.3, 0.3);
       fish.push({ x: x + rr * Math.cos(a), y: y + rr * Math.sin(a), hx: Math.cos(h), hy: Math.sin(h), sp: S.speed * BL,
         sc, k: shape === 'band' ? rnd(0.85, 1.18) : rnd(0.95, 1.05), fear: 0, esc: 99, pend: -1, jt: false, flash: 0, alpha: 0, ph: Math.random() * 6.28, ring: false });
@@ -126,14 +127,14 @@ export function createFishSim() {
   /* env: { view {x0,x1,y0,y1,cx,cy,w,h}, boat {x,y,hx,hy,len,beam}|null, threat|null, ring {x,y,r,w}|null } */
   function step(dt, env) {
     const { view, boat, threat, ring } = env;
-    cell = Math.max(0.12, ...schools.map(s => (s.S.zr + s.S.dzo + s.S.dza) * BL), 0.12);
+    cell = Math.max(0.12, ...schools.map(s => (s.S.zr + s.S.dzo + s.S.dza) * BL * SPREAD), 0.12);
     build();
     for (const sc of schools) { sc.n = 0; sc.cx = 0; sc.cy = 0; sc.hx = 0; sc.hy = 0; }
     for (const f of fish) if (!f.fear) { f.sc.n++; f.sc.cx += f.x; f.sc.cy += f.y; f.sc.hx += f.hx; f.sc.hy += f.hy; }
     for (const sc of schools) {
       if (sc.n) { sc.cx /= sc.n; sc.cy /= sc.n; }
       const hl = Math.hypot(sc.hx, sc.hy) || 1; sc.hx /= hl; sc.hy /= hl;
-      sc.R = Math.sqrt(Math.max(sc.n, 1)) * BL * sc.S.R;              // the school's natural radius
+      sc.R = Math.sqrt(Math.max(sc.n, 1)) * BL * sc.S.R * SPREAD;              // the school's natural radius
       sc.age += dt;
       if (!sc.leaving && sc.age > sc.life) {   // time to go: head off the far side
         sc.leaving = true;
@@ -143,7 +144,7 @@ export function createFishSim() {
       }
     }
     for (const f of fish) {
-      const S = f.sc.S, zr = S.zr * BL, zo = zr + S.dzo * BL, za = zo + S.dza * BL;
+      const S = f.sc.S, zr = S.zr * BL * SPREAD, zo = zr + S.dzo * BL * SPREAD, za = zo + S.dza * BL * SPREAD;
       scan(f, zr, za);
       const rx = res.rx, ry = res.ry, startled = res.startled;
       let ox = 0, oy = 0, ax = 0, ay = 0;
@@ -172,7 +173,7 @@ export function createFishSim() {
       if (!f.fear && sc.n > 3) {
         const cx = sc.cx - f.x, cy = sc.cy - f.y, cd = Math.hypot(cx, cy) || 1e-6;
         if (sc.shape === 'band') {                                  // a band: pulled onto the school's axis, free along it
-          const lat = -cx * sc.hy + cy * sc.hx, lon = cx * sc.hx + cy * sc.hy, W = 3 * BL;
+          const lat = -cx * sc.hy + cy * sc.hx, lon = cx * sc.hx + cy * sc.hy, W = 3 * BL * SPREAD;
           const pl = 0.9 * Math.max(-1, Math.min(1, lat / W)) * (Math.abs(lat) > W ? 1 : Math.abs(lat) / W);
           dx += -sc.hy * pl; dy += sc.hx * pl;
           const plo = 0.5 * Math.max(0, Math.abs(lon) - sc.R * 4) / sc.R * Math.sign(lon);
