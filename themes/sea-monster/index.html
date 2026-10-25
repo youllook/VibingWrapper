@@ -137,7 +137,7 @@ const WAVES = (() => {
 const seaU = {
   uCam: { value: new THREE.Vector2() }, uZoom: { value: 1 }, uAspect: { value: 16 / 9 }, uT: { value: 0 },
   uD: { value: 0.35 }, uNet: { value: 1 }, uGlint: { value: 1 },
-  uSqZ: { value: 1 }, uSqA: { value: 0 }, uFishZ: { value: 0.05 }, uMurk: { value: 0 }, uClar: { value: 0 },
+  uSqZ: { value: 1 }, uSqA: { value: 0 }, uSqP: { value: new THREE.Vector2() }, uSqU: { value: new THREE.Vector2(1, 0) }, uSqL: { value: 1 }, uFishZ: { value: 0.05 }, uMurk: { value: 0 }, uClar: { value: 0 },
   uWave: { value: WAVES.a }, uWave2: { value: WAVES.b },
   uRes: { value: new THREE.Vector2(1, 1) }, uOcc: { value: occRT.texture }, uFish: { value: fishRT.texture }, uWake: { value: wakeRT.texture },
 };
@@ -148,7 +148,8 @@ const seaMat = new THREE.ShaderMaterial({
 precision highp float;
 varying vec2 vUv;
 uniform vec4 uWave[16], uWave2[16];   // dir.xy, k, phase0 / omega, slope, gust mix, shortness
-uniform vec2 uCam, uRes; uniform float uZoom, uAspect, uT, uD, uNet, uGlint, uSqZ, uSqA, uFishZ, uMurk, uClar;
+uniform vec2 uCam, uRes; uniform float uZoom, uAspect, uT, uD, uNet, uGlint, uSqZ, uSqA, uFishZ, uMurk, uClar, uSqL;
+uniform vec2 uSqP, uSqU;   // the squid's tail (world), its axis tail → arm tips, its length
 uniform sampler2D uOcc, uFish, uWake;
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 vec2 h22(vec2 p){ vec3 a = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973)); a += dot(a, a.yzx + 33.33); return fract((a.xx + a.yz) * a.zy); }
@@ -226,18 +227,36 @@ void main(){
   vec3 col = absorb(bed, uD);
 
   if (uSqA > 0.) {
-  vec4 sq = textureLod(uOcc, uvR + n.xy * 0.003, mix(0.9, 6.2, uSqZ));   // more ripple warp than the floor: it is closer to the surface
-  // its bulk shades the water around and behind it: a wide dark halo, so the edge fades into dark, not into blue
+  // Something that big is not one flat colour (user 2026-10-26: "looks like plastic, no weight"). Where this pixel is
+  // on the body: s along it (0 tail … 1 arm tips), r across it (0 spine … 1 flank). The body is not at one depth:
+  // the arms hang down, the tail dips a little, the flanks curve away under the spine. Deeper parts take more water
+  // (darker, bluer) and more blur, the spine stays nearest the light; the wide halo still shades the water round it.
+  vec2 rel = w - uSqP;
+  float sAx = dot(rel, uSqU) / uSqL, perp = dot(rel, vec2(-uSqU.y, uSqU.x));
+  float hw = uSqL * mix(0.085, 0.30, smoothstep(0.52, 1., sAx));
+  float rr = clamp(abs(perp) / hw, 0., 1.);
+  float zf = clamp(uSqZ + 0.38 * smoothstep(0.5, 1., sAx) + 0.08 * smoothstep(0.3, 0., sAx) + 0.14 * rr * rr, 0., 1.);
+  float lod = mix(0.9, 6.2, zf);
+  vec4 sq = textureLod(uOcc, uvR + n.xy * 0.003, lod);           // more ripple warp than the floor: it is closer to the surface
   float halo = textureLod(uOcc, uvR, 6.8).a * uSqA;
   col *= 1. - 0.55 * smoothstep(0., 0.8, halo);
-  float soft = textureLod(uOcc, uvR + n.xy * 0.003, mix(0.9, 6.2, uSqZ) + 1.6).a;   // and the edge itself a little softer
+  float soft = textureLod(uOcc, uvR + n.xy * 0.003, lod + 1.6).a;   // and the edge itself a little softer
   float a = clamp(mix(sq.a, soft, 0.5) * 1.15, 0., 1.) * uSqA;
   vec3 skin = sq.rgb / max(sq.a, 1e-3) * vec3(.34, .17, .24);     // the GLB's own skin pattern, pushed to a very dark red near blue-black (user 2026-10-26)
-  vec3 sqBase = skin * (1. + 0.3 * net * uNet * (1. - uSqZ));      // a faint net falls on its back when it is shallow
+  // living skin: chromatophores at two scales, and slow dark bands passing down the body toward the arms
+  float mott = 0.72 + 0.55 * vnoise(w * 34. + uT * .05) * (0.6 + 0.8 * vnoise(w * 7.3 + 2.));
+  float band = smoothstep(0.35, 1., sin(sAx * uSqL * 9. - uT * 0.9 + perp * 6.));
+  skin *= mott * (1. - 0.45 * band * (1. - rr));
+  skin *= mix(1.15, 0.5, rr * rr);                                // round body: lit along the spine, falling away at the flanks
+  // sunlight through the ripples dapples its back when it is shallow: the strongest "just under the surface" cue
+  float caus = 1. - smoothstep(0., 0.26, cellEdge(w * 9. + vec2(uT * .05, uT * .032) + n.xy * 2.2));
+  caus *= 0.6 + 0.8 * vnoise(w * 2.1 - uT * .03);
+  float cl = caus * caus * pow(1. - zf, 2.) * (0.4 + 0.6 * uClar);   // light falling on it: a cool white, not more red
+  vec3 sqBase = skin * (1. + 0.45 * cl) + vec3(.035, .05, .06) * cl;
   // deep, it is a dark mass: its body shades the water above it (mood over optics) so it never melts into the murk;
   // shallow, the red comes through because red has the least water left to cross
-  vec3 Tz = exp(-SIG * uSqZ * uD * (1. - 0.6 * uClar));          // near the top the water over it clears
-  vec3 sqCol = (sqBase * Tz * (1. + 0.6 * uClar) + SCAT * (1. - Tz)) * mix(0.45, 1., (1. - uSqZ) * (1. - uSqZ));   // darker than the water until near the top
+  vec3 Tz = exp(-SIG * zf * uD * (1. - 0.6 * uClar));            // near the top the water over it clears
+  vec3 sqCol = (sqBase * Tz * (1. + 0.6 * uClar) + SCAT * (1. - Tz)) * mix(0.45, 1., (1. - zf) * (1. - zf));   // darker than the water until near the top
   col = mix(col, sqCol, a);
   }
 
@@ -678,7 +697,9 @@ function render() {
   Object.assign(seaU.uCam.value, { x: camPos.x, y: camPos.y });
   seaU.uZoom.value = z; seaU.uAspect.value = aspect; seaU.uT.value = simT;
   seaU.uD.value = knob.D.v; seaU.uNet.value = knob.net.v; seaU.uGlint.value = knob.glint.v;
-  seaU.uSqZ.value = squid.z.v; seaU.uSqA.value = squid.alpha.v; seaU.uMurk.value = knob.murk.v;
+  seaU.uSqZ.value = squid.z.v; seaU.uSqA.value = squid.alpha.v;
+  { const d = squidDir(), L = CONFIG.squidLen, a = CONFIG.squidAnchor;
+    seaU.uSqP.value.set(boat.x - d.x * a * L, boat.y - d.y * a * L); seaU.uSqU.value.set(d.x, d.y); seaU.uSqL.value = L; } seaU.uMurk.value = knob.murk.v;
   seaU.uClar.value = squid.alpha.v * ss(0.35, 0.12, squid.z.v);   // the water clears as it nears the surface
 
   renderer.setClearColor(0x000000, 0);
