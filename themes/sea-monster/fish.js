@@ -26,6 +26,7 @@ export const SHAPES = {
   scatter: { zr: 2.4, dzo: 0.8, dza: 4,  speed: 1.8, goal: 0.55, turn: 2.6, R: 1.3 },
 };
 export const SPREAD = 2;                       // spacing multiplier on every zone and school size (user 2026-10-26: twice as spread out)
+export const PACE = 1.6;                         // cruise-speed multiplier (user 2026-10-26: schools can swim faster)
 const BLIND = Math.cos(150 * Math.PI / 180);   // 60° blind cone behind
 const K_NEAR = 7;
 const ESC_ANGLE = 30 * Math.PI / 180;
@@ -57,7 +58,7 @@ export function createFishSim() {
     for (let i = 0; i < n; i++) {
       const rr = Math.sqrt(Math.random()) * Math.sqrt(n) * BL * 0.9 * SPREAD, a = Math.random() * 2 * Math.PI;
       const h = a0 + rnd(-0.3, 0.3);
-      fish.push({ x: x + rr * Math.cos(a), y: y + rr * Math.sin(a), hx: Math.cos(h), hy: Math.sin(h), sp: S.speed * BL,
+      fish.push({ x: x + rr * Math.cos(a), y: y + rr * Math.sin(a), hx: Math.cos(h), hy: Math.sin(h), sp: S.speed * PACE * BL,
         sc, k: shape === 'band' ? rnd(0.85, 1.18) : rnd(0.95, 1.05), fear: 0, esc: 99, pend: -1, jt: false, flash: 0, alpha: 0, ph: Math.random() * 6.28, ring: false });
     }
     void hx0;
@@ -224,7 +225,7 @@ export function createFishSim() {
       f.flash = Math.max(f.flash - dt * 2.5, Math.min(1, Math.abs(turn) / dt / 6));
     }
     for (const f of fish) {
-      const cruise = f.sc.S.speed * BL * f.k * (f.ring && f.far ? 3 : 1);                        // each fish a little faster or slower: a band strings out
+      const cruise = f.sc.S.speed * PACE * BL * f.k * (f.ring && f.far ? 3 : 1);                        // each fish a little faster or slower: a band strings out
       const burst = f.esc < 1.5 ? 1.5 + 2.5 * Math.pow(1 - f.esc / 1.5, 2) : 1 + 0.5 * f.fear;
       f.sp += (cruise * burst - f.sp) * Math.min(1, (f.esc < 0.1 ? 30 : 2) * dt);
       if (f.esc < 0.1) f.sp = cruise * burst;
