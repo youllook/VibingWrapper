@@ -219,7 +219,7 @@ void main(){
   if (uSqA > 0.) {
   vec4 sq = textureLod(uOcc, uvR + n.xy * 0.003, mix(0.9, 6.2, uSqZ));   // more ripple warp than the floor: it is closer to the surface
   float a = clamp(sq.a * 1.15, 0., 1.) * uSqA;
-  vec3 skin = sq.rgb / max(sq.a, 1e-3) * 0.95;                    // the GLB's own red skin, top-lit (dimmed for the dark water)
+  vec3 skin = sq.rgb / max(sq.a, 1e-3) * vec3(.34, .17, .24);     // the GLB's own skin pattern, pushed to a very dark red near blue-black (user 2026-10-26)
   vec3 sqBase = skin * (1. + 0.3 * net * uNet * (1. - uSqZ));      // a faint net falls on its back when it is shallow
   // deep, it is a dark mass: its body shades the water above it (mood over optics) so it never melts into the murk;
   // shallow, the red comes through because red has the least water left to cross
@@ -511,7 +511,7 @@ function animateFish(dt) {
   const F = sim.fish, n = Math.min(F.length, MAXF), fishK = Math.pow(1 / zoom.v, 0.8), far = Math.min(1, Math.max(0, (1 - zoom.v) / 0.6));
   for (let i = 0; i < n; i++) {
     const f = F[i];
-    f.tp = ((f.tp ?? f.ph) + Math.min(9, 2.5 + 1.1 * f.sp / BL) / FPS) % 1;   // tail beats: ~6 Hz cruising, up to 9 when it bolts (30 fps can't show more)
+    f.tp = ((f.tp ?? f.ph) + (f.esc < 1.5 ? 3 : 2) * (0.9 + 0.2 * ((f.ph * 7.3) % 1)) / FPS) % 1;   // tail beats: two a second (user 2026-10-26), three while bolting
     const L = BL * 1.5 * fishK * (f.size ??= 0.8 + 0.4 * Math.random());   // drawn a touch large, larger as the camera rises
     Q4.setFromAxisAngle(Z4, Math.atan2(f.hy, f.hx)); V4.set(f.x, f.y, 0); S4.set(L, L, 1);
     fishMesh.setMatrixAt(i, M4.compose(V4, Q4, S4));
