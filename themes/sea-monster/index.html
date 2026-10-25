@@ -123,7 +123,7 @@ const WAVES = (() => {
     const t = i / 15, lam = 0.09 * Math.pow(0.004 / 0.09, t) * (0.85 + 0.3 * r()), k = 2 * Math.PI / lam;
     const ang = 0.93 + (((i * 7) % 16) / 15 - 0.5) * 2.1 + (r() - 0.5) * 0.12;   // spread evenly, neighbours apart: no parallel stripes
     a.push(new THREE.Vector4(Math.cos(ang), Math.sin(ang), k, r() * 2 * Math.PI));
-    b.push(new THREE.Vector2(0.3 * Math.sqrt(k), 0.012 + (0.06 - 0.012) * t));
+    b.push(new THREE.Vector4(0.3 * Math.sqrt(k), 0.012 + (0.06 - 0.012) * t, r(), t));   // omega, slope, gust mix, shortness
   }
   return { a, b };
 })();
@@ -140,7 +140,7 @@ const seaMat = new THREE.ShaderMaterial({
   fragmentShader: `
 precision highp float;
 varying vec2 vUv;
-uniform vec4 uWave[16]; uniform vec2 uWave2[16];   // dir.xy, k, phase0 / omega, slope
+uniform vec4 uWave[16], uWave2[16];   // dir.xy, k, phase0 / omega, slope, gust mix, shortness
 uniform vec2 uCam, uRes; uniform float uZoom, uAspect, uT, uD, uNet, uGlint, uSqZ, uSqA, uFishZ;
 uniform sampler2D uOcc, uFish, uWake;
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -164,15 +164,24 @@ vec3 absorb(vec3 base, float d){ vec3 T = exp(-SIG * d); return base * T + SCAT 
 // A wave shorter than a few pixels fades out and its slope variance moves into the roughness (Toksvig), so the glint
 // turns from sparkles into a soft sheen as the camera rises (PLAN §5.6).
 const int NW = 16;
-vec2 waveSlope(vec2 p, float pxW, out float lost){
+// Two gust fields drift downwind: where the wind touches the water it roughens (cat's paws), elsewhere it lies
+// flatter. Short waves follow the gusts, long ones barely; each wave mixes the two fields in its own proportion, so the
+// interference differs from place to place instead of one woven pattern everywhere (user 2026-10-26: "too rigid").
+// From height the long waves also flatten, leaving a sheen that brightens and dims in patches.
+vec2 waveSlope(vec2 p, float pxW, float far, out float lost){
   vec2 g = vec2(0.); lost = 0.;
-  vec2 wp = p + 0.05 * vec2(vnoise(p * 1.7 + uT * .03), vnoise(p * 1.7 + 5.2 - uT * .03));   // bend the crests
+  vec2 wind = vec2(0.6, 0.8);
+  float gA = smoothstep(.15, .85, vnoise(p * 1.1 - wind * uT * .025));
+  float gB = smoothstep(.15, .85, vnoise(p * 2.6 + 3.3 - wind * uT * .04));
+  vec2 wp = p + 0.06 * (vec2(gA, gB) - .5);                      // bend the crests with the gusts (no extra noise)
   for (int i = 0; i < NW; i++){
-    vec4 W = uWave[i]; float sl = uWave2[i].y;
+    vec4 W = uWave[i], W2 = uWave2[i];
+    float m = mix(gA, gB, W2.z);
+    float sl = W2.y * mix(1., 0.2 + 1.6 * m, W2.w) * mix(1., 0.3 + 0.7 * W2.w, far);
     float fade = smoothstep(3., 7., 6.2832 / (W.z * pxW));          // its wavelength in pixels
     lost += (1. - fade) * sl * sl * 0.5;
     if (fade <= 0.) continue;                                      // too fine to draw: roughness only, skip the cos
-    g += fade * sl * W.xy * cos(W.z * dot(W.xy, wp) - uWave2[i].x * uT + W.w);
+    g += fade * sl * W.xy * cos(W.z * dot(W.xy, wp) - W2.x * uT + W.w);
   }
   return g;
 }
@@ -180,7 +189,8 @@ void main(){
   float pxW = 1. / (uRes.y * uZoom);                               // world units per pixel
   vec2 w = uCam + (vUv - .5) * vec2(uAspect, 1.) / uZoom;
   float lost;
-  vec2 g = waveSlope(w, pxW, lost);
+  float far = clamp((1. - uZoom) / 0.6, 0., 1.);                   // 0 at the idle camera, 1 at the running camera
+  vec2 g = waveSlope(w, pxW, far, lost);
   vec3 n = normalize(vec3(-g, 1.));
 
   // 1 the light net on the floor at depth D, seen through the refracting surface
@@ -200,7 +210,6 @@ void main(){
   vec2 toUv = uZoom / vec2(uAspect, 1.);
   vec2 shUv = uvR + sun * (uD - uFishZ) * toUv;
   // from height a school reads as one dark patch, not as specks: blend in its blurred coverage as the camera rises
-  float far = clamp((1. - uZoom) / 0.6, 0., 1.);                   // 0 at the idle camera, 1 at the running camera
   float inV = step(0., shUv.x) * step(shUv.x, 1.) * step(0., shUv.y) * step(shUv.y, 1.);   // no clamp-to-edge smears
   float fishSh = (far > 0. ? mix(texture(uFish, shUv).r, textureLod(uFish, shUv, 3.).r * 2.5, far) : texture(uFish, shUv).r) * inV;
   float sqSh = uSqA > 0. ? textureLod(uOcc, uvR + sun * (uD - uSqZ * uD) * toUv, 4.).a * uSqA * (1. - uSqZ) : 0.;
