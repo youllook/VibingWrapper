@@ -235,7 +235,8 @@ void main(){
   float sAx = dot(rel, uSqU) / uSqL, perp = dot(rel, vec2(-uSqU.y, uSqU.x));
   float hw = uSqL * mix(0.085, 0.30, smoothstep(0.52, 1., sAx));
   float rr = clamp(abs(perp) / hw, 0., 1.);
-  float zf = clamp(uSqZ + 0.38 * smoothstep(0.5, 1., sAx) + 0.08 * smoothstep(0.3, 0., sAx) + 0.14 * rr * rr, 0., 1.);
+  // (user 2026-10-26: "the depth spread can be bigger, the thing is huge") the arms fall away over most of D
+  float zf = clamp(uSqZ + 0.75 * smoothstep(0.42, 1., sAx) + 0.22 * smoothstep(0.32, 0., sAx) + 0.28 * rr * rr, 0., 1.);
   float lod = mix(0.9, 6.2, zf);
   vec4 sq = textureLod(uOcc, uvR + n.xy * 0.003, lod);           // more ripple warp than the floor: it is closer to the surface
   float halo = textureLod(uOcc, uvR, 6.8).a * uSqA;
