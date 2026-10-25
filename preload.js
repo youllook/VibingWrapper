@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('petAPI', {
   onUpdateState: fn => ipcRenderer.on('pet:update-state', (_e, s) => fn(s)),
   getTimeMode: () => ipcRenderer.invoke('pet:time-mode'),        // 模式: 'auto' (real clock) / 'day' / 'night'
   setTimeMode: mode => ipcRenderer.invoke('pet:set-time-mode', mode),
+  // Debug 模式: the switch, and firing one hook by hand: 'start' / 'prompt' / 'tool' / 'wait' / 'stop' / 'end'
+  getDebugMode: () => ipcRenderer.invoke('pet:debug-mode'),
+  setDebugMode: on => ipcRenderer.invoke('pet:set-debug-mode', !!on),
+  debugHook: kind => ipcRenderer.invoke('pet:debug-hook', kind),
   // 一鍵安裝 hook, agent = 'claude' (default) / 'codex': 'on' / 'partial' / 'off' / 'error' / 'none', and install → { ok, msg }
   hooksStatus: agent => ipcRenderer.invoke('pet:hooks-status', agent),
   installHooks: agent => ipcRenderer.invoke('pet:install-hooks', agent),

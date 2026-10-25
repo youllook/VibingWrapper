@@ -203,6 +203,10 @@ ipcMain.handle('pet:set-time-mode', (_e, mode) => {
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());
   return mode;
 });
+// Debug 模式 (2026-10-26): a switch under 設定; while on, the gear menu gets a page that fires hooks by hand
+ipcMain.handle('pet:debug-mode', () => !!settings.debugMode);
+ipcMain.handle('pet:set-debug-mode', (_e, on) => { settings.debugMode = !!on; saveSettings(); return settings.debugMode; });
+ipcMain.handle('pet:debug-hook', (_e, kind) => !!settings.debugMode && claudeBridge.inject(String(kind)));
 ipcMain.on('pet:record', () => recorder.toggle());
 ipcMain.handle('pet:gamebar', () => recorder.gameBar());
 ipcMain.handle('pet:rec-state', () => recorder.status());

@@ -59,7 +59,7 @@ const CODEX_KIND = { SessionStart: 'start', UserPromptSubmit: 'prompt', PreToolU
 const codexAdapter = j => ({ ...common(j), kind: CODEX_KIND[j.hook_event_name] || 'ignore' });
 
 const ADAPTERS = { claude: claudeAdapter, codex: codexAdapter };
-const SOURCE_TAG = { claude: 'cc', codex: 'cx' };   // short prefix for the log
+const SOURCE_TAG = { claude: 'cc', codex: 'cx', debug: 'db' };   // short prefix for the log
 
 /* ---- event log (2026-09-30), for observing how the weather behaves over a real session ----
    JSON lines: {t, event, tool, session, weather (this session), sky (combined), changed (sky changed)}. Only names and ids — never prompt text,
@@ -258,7 +258,16 @@ function start(opts = {}) {
   return server;
 }
 
+// Debug 模式 (2026-10-26): the gear menu fires a hook by hand. It enters onEvent like a real one, as its own
+// session ('debug:manual'), so the sky still shows the most urgent session and 收尾 still clears after 20 s.
+const DEBUG_KINDS = { start: 'SessionStart', prompt: 'UserPromptSubmit', tool: 'PreToolUse', wait: 'Notification', stop: 'Stop', end: 'SessionEnd' };
+function inject(kind) {
+  if (!Object.hasOwn(DEBUG_KINDS, kind)) return false;
+  onEvent('debug', { session: 'manual', kind, event: DEBUG_KINDS[kind], tool: kind === 'tool' ? 'Debug' : undefined });
+  return true;
+}
+
 const current = () => lastWritten || 'clear';
 const sessionStates = () => slotStates();
 const sessionSources = () => slotSources();
-module.exports = { start, current, sessionStates, sessionSources, MAX_SESSIONS, PORT, themes, themeUrl };
+module.exports = { start, current, sessionStates, sessionSources, MAX_SESSIONS, PORT, themes, themeUrl, inject };
