@@ -61,11 +61,12 @@ const CONFIG = {
   squidLen: 6.4,                   // tail → club tips, world units: at zoom 0.4 it runs off the screen at both ends (user 2026-10-26)
   squidAngle: -138.6 * DEG,        // tail → arms, world angle: arms out to the lower left
   squidAnchor: 0.40,               // how far from the tail the boat sits (0 tail … 1 arm tips)
-  squidOutline: 0.35,              // 14–30 s: rises to here, the outline reads (fraction of D)
-  squidUp: 0.12,                  // 30–44 s: on up as high as it goes, its red skin shows through a last veil of murk (never surfaces)
-  riseEnd: 44,
+  squidOutline: 0.35,              // rise.outline: rises to here, the outline reads (fraction of D)
+  squidUp: 0.12,                  // rise.peak: on up as high as it goes, its red skin shows through a last veil of murk (never surfaces)
+  // the rise, seconds into running (user 2026-10-26: faster; was 6–14 / 14–30 / 30–44 with a 30 s lock)
+  rise: { omen: [3, 8], outline: [8, 18], peak: [18, 26] },
   squidShadow: 0.8,                // the depth while waiting / thinking: a blurred shadow
-  lock: 30,                        // seconds of the rise that play out whatever the state does (PLAN §3)
+  lock: 18,                        // seconds of the rise that play out whatever the state does (= the outline is reached)
   armPeriod: 10, armAmp: 0.035, breathe: 15,
   wakeLife: 80,                    // seconds of path history
   idleSchools: true,               // false: no random schools (for formation tests)
@@ -546,8 +547,8 @@ function currentThreat() {
   if (!boat.present) return null;
   const d = squidDir(), rear = { x: -d.x, y: -d.y };              // escape turns toward its tail, away from the arms
   if (stateName === 'overcast' && squid.alpha.v < 0.5) return fear.r.v > 0.01 ? { kind: 'circle', x: boat.x, y: boat.y, r: fear.r.v, rear } : null;
-  if (stateName === 'storm' && squid.script && squid.T < 14) {
-    const r = FISH.omenR * ss(6, 14, squid.T);
+  if (stateName === 'storm' && squid.script && squid.T < CONFIG.rise.omen[1]) {
+    const r = FISH.omenR * ss(...CONFIG.rise.omen, squid.T);
     return r > 0.01 ? { kind: 'circle', x: boat.x, y: boat.y, r, rear } : null;
   }
   if ((stateName === 'storm' || stateName === 'overcast') && squid.alpha.v > 0.3) {
@@ -565,11 +566,11 @@ function animateFish(dt) {
     nextSchool -= dt;
     if (nextSchool <= 0) { if (sim.schools.length < FISH.idleMax) spawnSchool(); nextSchool = rnd(20, 60); }
   }
-  if (stateName === 'storm' && squid.script && squid.T > 6 && squid.T < 13) {   // the omen: schools keep bolting
+  if (stateName === 'storm' && squid.script && squid.T > CONFIG.rise.omen[0] && squid.T < CONFIG.rise.omen[1] - 0.5) {   // the omen: schools keep bolting
     nextOmen -= dt;
     if (nextOmen <= 0) {
       nextOmen = rnd(1.0, 1.8);
-      const front = FISH.omenR * ss(6, 14, squid.T);
+      const front = FISH.omenR * ss(...CONFIG.rise.omen, squid.T);
       for (let i = 0; i < 12; i++) {                                 // somewhere on screen, just ahead of the front
         const cx = rnd(view.x0 + 0.08, view.x1 - 0.08), cy = rnd(view.y0 + 0.08, view.y1 - 0.08), d = Math.hypot(cx - boat.x, cy - boat.y);
         if (d < front + 0.08 || d > front + 0.45) continue;
@@ -647,10 +648,11 @@ function stormScript(dt) {
   if (!squid.script) return;
   squid.T += dt;
   const T = squid.T;
-  squid.alpha.set(ss(6, 14, T));                              // omen: a darker patch, the net gone under the boat
+  const RS = CONFIG.rise;
+  squid.alpha.set(ss(...RS.omen, T));                              // omen: a darker patch, the net gone under the boat
   // the rise: depth, not opacity — to the outline, then on up until the colour comes through
-  squid.z.set(1 - (1 - CONFIG.squidOutline) * ss(14, 30, T) - (CONFIG.squidOutline - CONFIG.squidUp) * ss(30, CONFIG.riseEnd, T));
-  if (T >= CONFIG.riseEnd) squid.script = false;
+  squid.z.set(1 - (1 - CONFIG.squidOutline) * ss(...RS.outline, T) - (CONFIG.squidOutline - CONFIG.squidUp) * ss(...RS.peak, T));
+  if (T >= RS.peak[1]) squid.script = false;
   if (T >= CONFIG.lock && queued) { const q = queued; queued = null; enter(q); }   // after the lock a new state cuts the rise short
 }
 
@@ -734,7 +736,9 @@ function render() {
   seaU.uSqZ.value = squid.z.v; seaU.uSqA.value = squid.alpha.v;
   { const d = squidDir(), L = CONFIG.squidLen, a = CONFIG.squidAnchor;
     seaU.uSqP.value.set(boat.x - d.x * a * L, boat.y - d.y * a * L); seaU.uSqU.value.set(d.x, d.y); seaU.uSqL.value = L; } seaU.uMurk.value = knob.murk.v;
-  seaU.uClar.value = squid.alpha.v * ss(0.36, CONFIG.squidUp, squid.z.v);   // the water clears as it reaches its highest
+  // the water clears (and the sea stills) all the way up from half depth, so it emerges from the dark during the rise
+  // instead of popping out at the end (user 2026-10-26: it should appear faster)
+  seaU.uClar.value = squid.alpha.v * ss(0.75, CONFIG.squidUp, squid.z.v);
 
   renderer.setClearColor(0x000000, 0);
   const skip = CONFIG.skip || '';                              // bench ablation: 'occ fish wake sea top'
