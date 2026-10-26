@@ -36,6 +36,9 @@ class School:
 	var fled := false
 	var through := false
 	var emerge := false
+	var scare_after := INF   # seconds in the frame before the threat startles it anyway (running: visits)
+	var seen_t := 0.0
+	var seen := false     # its middle has been in the frame: only then does it take fright by itself
 	var dep := 0.6
 	var n := 0
 	var c := Vector2.ZERO
@@ -106,13 +109,14 @@ func off_screen(p: Vector2, m := 0.06) -> bool:
 
 # ---------------------------------------------------------------- schools
 # a school enters from just outside the frame (or appears at `at`) and heads for `target`; after `life` it leaves
-func spawn(n: int, shape: String, target = null, at = null, life := randf_range(30, 50), emerge := false) -> School:
+func spawn(n: int, shape: String, target = null, at = null, life := randf_range(30, 50), emerge := false, scare_after := INF) -> School:
 	var sc := School.new()
 	sc.shape = shape
 	sc.S = SHAPES[shape]
 	sc.life = life
 	sc.through = shape == "band"
 	sc.emerge = emerge
+	sc.scare_after = scare_after
 	sc.dep = randf_range(0.3, 1.0)
 	var rad := sqrt(n) * BL * 0.9 * SPREAD
 	var from: Vector2
@@ -229,6 +233,16 @@ func step(dt: float, env: Dictionary) -> void:
 		sc.h = sc.h.normalized() if sc.h.length() > 1e-5 else Vector2.RIGHT
 		sc.R = sqrt(maxi(sc.n, 1)) * BL * sc.S.R * SPREAD
 		sc.age += dt
+		if not sc.seen and sc.n > 0 and not off_screen(sc.c, -0.05):
+			sc.seen = true
+		if sc.seen:
+			sc.seen_t += dt
+		# a visit that never brushed the threat: it stirs and the whole school goes, a few fish first, the rest catching it
+		if threat != null and not sc.fled and sc.seen_t > sc.scare_after:
+			sc.scare_after = INF
+			for f in fish:
+				if f.sc == sc and f.esc > 2.0 and f.pend <= 0.0:
+					f.pend = randf_range(0.01, 0.08) if randf() < 0.15 else randf_range(0.15, 0.5)
 		if not sc.leaving and sc.age > sc.life:          # time to go: off the nearest side, away from the middle
 			sc.leaving = true
 			var f0 := screen_frac(sc.c)
@@ -319,7 +333,7 @@ func step(dt: float, env: Dictionary) -> void:
 			if f.pend <= 0.0 and threat != null:
 				_cstart(f, threat)
 				continue
-		elif threat != null and f.esc > 2.0:
+		elif threat != null and f.esc > 2.0 and f.sc.seen:
 			if _near(threat, f.p)[0] < 2.0 * BL:
 				_cstart(f, threat)
 				continue
@@ -362,7 +376,8 @@ func step(dt: float, env: Dictionary) -> void:
 	# gone: off the frame and done with it
 	for i in range(fish.size() - 1, -1, -1):
 		var f := fish[i]
-		if (i + frame) % 8 == 0 and (f.fear > 0.0 or f.sc.leaving or f.sc.through or f.sc.age > 20.0) and off_screen(f.p, 0.12):   # every 8th frame
+		# (a school just spawned off screen is still swimming in: a band only counts as passing through after 8 s)
+		if (i + frame) % 8 == 0 and (f.fear > 0.0 or f.sc.leaving or (f.sc.through and f.sc.age > 8.0) or f.sc.age > 20.0) and off_screen(f.p, 0.12):   # every 8th frame
 			fish.remove_at(i)
 	var alive := {}
 	for f in fish:

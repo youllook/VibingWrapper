@@ -31,6 +31,8 @@ const THINK_R := 70.0                           # the fright spreads from the bo
 const OMEN_R := 70.0
 const RING := [9.0, 13.0]                       # waiting: ring radius round the boat, wider over 5 minutes
 const RING_N := 60
+const VISIT_EVERY := [6.0, 12.0]                # running, after the rise: a school comes in this often
+const SQUID_REACH := 12.0                       # how far round its body axis the fish feel it (m)
 const DEBOUNCE := 0.3
 const BOAT_LENGTH := 5.0
 const BOAT_DRAFT := 0.25                        # how deep the hull sits
@@ -382,7 +384,7 @@ func _threat():
 		var r := OMEN_R * _ss(RISE.omen, rise_t)
 		return {"kind": "circle", "c": b2, "r": r, "rear": rear} if r > 0.5 else null
 	if (cur == "storm" or cur == "overcast") and depth.v < 25.0:
-		return {"kind": "capsule", "a": ax[0], "b": ax[1], "r": 7.0 * clampf((30.0 - depth.v) / 20.0, 0.0, 1.0), "rear": rear}
+		return {"kind": "capsule", "a": ax[0], "b": ax[1], "r": SQUID_REACH * clampf((30.0 - depth.v) / 20.0, 0.0, 1.0), "rear": rear}
 	return null
 
 func _drive_fish(dt: float, fwd: Vector2) -> void:
@@ -405,11 +407,12 @@ func _drive_fish(dt: float, fwd: Vector2) -> void:
 					continue
 				fishes.spawn(randi_range(30, 60), "band" if randf() < 0.5 else "ball", p, p, randf_range(30, 50), true)
 				break
-	if cur == "storm" and not script_on and depth.v < 3.0:   # the long hold: a school wanders in and shies away
-		next_visit -= dt
+	if cur == "storm" and not script_on and depth.v < OUTLINE:   # the long hold: now and then a school swims in toward
+		next_visit -= dt                                          # the boat, meets the squid under it and bolts
 		if next_visit <= 0.0:
-			next_visit = randf_range(10, 18)
-			fishes.spawn(randi_range(40, 80), "band" if randf() < 0.6 else "ball")
+			next_visit = randf_range(VISIT_EVERY[0], VISIT_EVERY[1])
+			fishes.spawn(randi_range(40, 80), "band" if randf() < 0.6 else "ball", b2 + Vector2.from_angle(randf() * TAU) * randf_range(0.0, 8.0),
+				null, randf_range(30, 50), false, randf_range(8, 12))
 	var ring = null
 	if cur == "waiting":
 		wait_t += dt
