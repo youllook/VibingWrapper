@@ -1,11 +1,12 @@
 // 大海怪2 water: dark open ocean seen from high up. Unshaded, everything by hand:
-// rippled normals → refraction of what is below (the squid, the boat's hull) → colour absorbed along the path
+// rippled normals (a ripple map sampled in five sliding layers, 大海怪's Water.js-style surface) → refraction of what is below (the squid, the boat's hull) → colour absorbed along the path
 // through the water → sky reflection + sun glitter → the boat's wake foam.
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled;
 
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
 uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
+uniform sampler2D ripple : filter_linear_mipmap, repeat_enable;   // textures/ripple.png (tools/make_ripple.py): RG = slope/rms/8+.5
 
 uniform float time = 0.0;
 uniform vec2 drift = vec2(0.0);           // metres the water has slid past the (stationary) boat
@@ -42,17 +43,23 @@ float fbm(vec2 p) {
 	return s;
 }
 
-// sea height (metres): a few swells + choppy noise, all moving with the water
-float sea(vec2 p) {
-	float q = 1.0 - 0.75 * calm;
-	float h = 0.0;
-	h += 0.30 * sin(dot(p, vec2(0.11, 0.05)) - time * 0.9);
-	h += 0.18 * sin(dot(p, vec2(-0.07, 0.13)) - time * 1.1);
-	h += 0.10 * sin(dot(p, vec2(0.21, -0.17)) - time * 1.6);
-	h += 0.22 * fbm(p * 0.35 + vec2(time * 0.12, -time * 0.08));
-	h += 0.07 * fbm(p * 1.3 - vec2(time * 0.3, time * 0.21));
-	h += 0.025 * fbm(p * 3.7 + vec2(time * 0.5, -time * 0.37));
-	return h * q;
+// surface slope: the ripple map sampled once per layer, each layer its own tile size (m), drift (m/s), rms slope and
+// rotation, so the layers slide across each other and the interference keeps changing (2026-10-27: replaces three
+// evaluations of 12-octave noise per pixel, which cost ~27 ms a frame on the UHD 630)
+const int NL = 5;
+const vec4 RIP_A[NL] = vec4[](vec4(43.0, 0.45, 0.55, 0.06), vec4(21.0, -0.32, 0.68, 0.08), vec4(10.0, 0.58, 0.22, 0.10),
+	vec4(5.0, -0.18, 0.50, 0.12), vec4(2.5, 0.27, -0.14, 0.12));
+const float RIP_ROT[NL] = float[](0.0, 0.6, -0.5, 1.2, -1.4);
+vec2 wave_slope(vec2 p) {
+	vec2 g = vec2(0.0);
+	for (int i = 0; i < NL; i++) {
+		vec4 A = RIP_A[i];
+		vec2 cs = vec2(cos(RIP_ROT[i]), sin(RIP_ROT[i]));
+		vec2 q = vec2(cs.x * p.x - cs.y * p.y, cs.y * p.x + cs.x * p.y);
+		vec2 sl = (texture(ripple, (q + A.yz * time) / A.x).rg - 0.5) * 8.0 * A.w;
+		g += vec2(cs.x * sl.x + cs.y * sl.y, -cs.y * sl.x + cs.x * sl.y);   // back to the world's axes
+	}
+	return g * (1.0 - 0.75 * calm);
 }
 
 void fragment() {
@@ -63,9 +70,8 @@ void fragment() {
 	float half_beam = 0.80 * sqrt(clamp((2.45 - bu) / 1.9, 0.0, 1.0));
 	if (bu > -2.35 && bu < 2.45 && abs(bv) < half_beam) { discard; }
 	vec2 p = wpos.xz + drift;
-	float e = 0.15;
-	float h0 = sea(p);
-	vec3 n = normalize(vec3((h0 - sea(p + vec2(e, 0.0))) * 2.5, e, (h0 - sea(p + vec2(0.0, e))) * 2.5));
+	vec2 g = wave_slope(p);
+	vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
 	vec3 V = normalize(CAMERA_POSITION_WORLD - wpos);
 
 	// what is below: refracted screen sample, and how far the light travels through the water to reach it
@@ -94,7 +100,7 @@ void fragment() {
 	float shade = smoothstep(2.0, 7.0, depth_below) * (1.0 - smoothstep(45.0, 58.0, depth_below));
 	col *= 1.0 - 0.7 * shade * (1.0 - clear_here);   // gone once it is up: then the water over it clears instead
 	// big slow patches of darker / lighter water
-	col *= 0.8 + 0.4 * fbm(p * 0.02 + time * 0.005);
+	col *= 0.8 + 0.4 * vnoise(p * 0.02 + time * 0.005);
 
 	// surface
 	float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
@@ -115,7 +121,7 @@ void fragment() {
 	vec2 perp = vec2(-boat_dir.y, boat_dir.x);
 	float s = -dot(d, boat_dir) - 2.8;             // metres behind the transom
 	float x = dot(d, perp);
-	if (s > -0.5) {
+	if (s > -0.5 && s < 150.0 && abs(x) < 3.0 + s * 0.32) {   // only inside the V
 		float w = 0.45 + 0.055 * s;
 		float core = 1.0 - smoothstep(0.2 * w, w, abs(x + 0.4 * sin(s * 0.25 + time)));
 		float arms = 1.0 - smoothstep(0.0, 0.6 + 0.04 * s, abs(abs(x) - s * 0.26));

@@ -28,11 +28,18 @@ $GODOT_HEAD_INCLUDE
 // Godot polls window.wpCtl through JavaScriptBridge; this page owns state.json polling, the clock, the 30 fps cap and pause.
 (() => {
   const q = new URLSearchParams(location.search);
+  const IGPU_SCALE = 0.55;
+  // which GPU the page got (WebGL's unmasked renderer string), for picking the canvas resolution
+  function gpuName() {
+    try { const gl = document.createElement('canvas').getContext('webgl2'), x = gl && gl.getExtension('WEBGL_debug_renderer_info');
+      return x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : ''; } catch (e) { return ''; }
+  }
   const CONFIG = {
     polling: true,
     clockHours: /[?&]day=1/.test(location.search) ? 10.5 : /[?&]night=1/.test(location.search) ? 22 : (q.has('hours') ? +q.get('hours') : null),
     fps: 30,
-    scale: q.has('scale') ? +q.get('scale') : 0.75,  // 3/4 resolution: the squid's skin holds up, the iGPU budget is 12 ms
+    // 3/4 resolution: the squid's skin holds up; on an Intel iGPU about half (the budget there is 12 ms a frame)
+    scale: q.has('scale') ? +q.get('scale') : (/intel|uhd|iris/i.test(gpuName()) ? IGPU_SCALE : 0.75),
   };
   const ctl = window.wpCtl = { state: q.get('state') || 'clear', sessions: [], hours: 12, rev: 0, warp: +(q.get('warp') || 0), dbg: q.get('dbg') || '' };
   const hoursNow = () => { if (CONFIG.clockHours != null) return CONFIG.clockHours; const d = new Date(); return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600; };

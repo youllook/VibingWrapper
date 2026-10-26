@@ -65,6 +65,12 @@ var pending := ""
 var debounce_t := 0.0
 var queued := ""
 var warp := 0.0
+var warped := false
+var dbg_applied := ""
+var no_squid := false
+var water_mi: MeshInstance3D
+var prof_acc := 0
+var prof_n := 0
 var dbg := ""
 var then_state := ""
 var t := 0.0
@@ -174,11 +180,13 @@ func _build_water() -> void:
 	water_mat = ShaderMaterial.new()
 	water_mat.shader = load("res://water.gdshader")
 	water_mat.set_shader_parameter("sun_dir", -sun.global_transform.basis.z)
+	water_mat.set_shader_parameter("ripple", load("res://textures/ripple.png"))
 	var mi := MeshInstance3D.new()
 	mi.mesh = plane
 	mi.material_override = water_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
+	water_mi = mi
 
 func _build_squid() -> void:
 	eye_mat = ShaderMaterial.new()
@@ -323,13 +331,40 @@ func _poll() -> void:
 		state = str(d.get("state", "clear"))
 		dbg = str(d.get("dbg", ""))
 		warp = float(d.get("warp", 0.0))
+		if dbg != dbg_applied:
+			dbg_applied = dbg
+			_apply_dbg()
+		# ?warp=N on the web (tests, bench): on the first poll jump straight into the state and run N seconds ahead
+		if warp > 0.0 and not warped:
+			warped = true
+			cur = ""
+			_enter(state, true)
+			for i in int(warp * 30.0):
+				_step(1.0 / 30.0)
+
+# ?dbg=… switches for taking the frame apart (bench): noshadow, nowater, nosquid, nofish, msaa2 (MSAA back on)
+func _apply_dbg() -> void:
+	sun.shadow_enabled = dbg.find("noshadow") < 0
+	water_mi.visible = dbg.find("nowater") < 0
+	no_squid = dbg.find("nosquid") >= 0
+	fishes.visible = dbg.find("nofish") < 0
+	get_viewport().msaa_3d = Viewport.MSAA_2X if dbg.find("msaa2") >= 0 else Viewport.MSAA_DISABLED
 
 func _process(dt: float) -> void:
 	poll_t -= dt
 	if poll_t <= 0.0:
 		poll_t = 0.5
 		_poll()
+	# ?dbg=prof: the script's own time per frame, averaged over a second, handed to the page as wpCtl.cpuMs
+	var t0 := Time.get_ticks_usec()
 	_step(dt)
+	if dbg.find("prof") >= 0 and OS.has_feature("web"):
+		prof_acc += Time.get_ticks_usec() - t0
+		prof_n += 1
+		if prof_n >= 30:
+			JavaScriptBridge.eval("window.wpCtl.cpuMs = %f" % (prof_acc / prof_n / 1000.0))
+			prof_acc = 0
+			prof_n = 0
 
 # a value easing to a target over a duration (smoothstep), optionally after a delay
 class Tw:
@@ -548,7 +583,7 @@ func _drive_pack(dt: float) -> void:
 		var d: Tw = M.depth
 		d.step(dt)
 		var node: Node3D = M.node
-		node.visible = d.v < DEEP - 0.5
+		node.visible = d.v < DEEP - 0.5 and not no_squid
 		if not node.visible:
 			continue
 		M["ang"] += TAU / c.lap * dt * (0.6 if cur == "waiting" else 1.0)
@@ -560,7 +595,7 @@ func _drive_pack(dt: float) -> void:
 		var yaw := atan2(tv.y, -tv.x)                          # its mantle (-X) leads
 		node.basis = (Basis(Vector3.UP, yaw + sin(t * 0.25 + i * 2.0) * 0.08) * Basis(Vector3.RIGHT, sin(t * 0.2 + i) * 0.12)).scaled_local(M.scale)
 		_near_eye_only(M.eyes)
-		if (Engine.get_process_frames() + i) % 2 == 0:       # their arms every other frame
+		if (Engine.get_process_frames() + i) % 3 == 0:       # their arms every third frame (they are deep and slow; script time)
 			_wave_limbs(M.skel, M.limbs, 1.8)
 
 func _step(dt: float) -> void:
@@ -585,7 +620,7 @@ func _step(dt: float) -> void:
 	var holding := (cur == "storm" and not script_on) or cur == "waiting"
 	lurk += ((1.0 if holding else 0.0) - lurk) * (1.0 - exp(-dt / 5.0))
 	squid_depth = depth.v + lurk * LURK_DIVE * _dive(0.0)
-	squid.visible = squid_depth < DEEP - 0.5
+	squid.visible = squid_depth < DEEP - 0.5 and not no_squid
 	squid.position = squid_at + Vector3(0, squid_base_y - squid_depth + sin(t * 0.21) * 0.25, 0)
 	squid.basis = (Basis(Vector3.UP, SQUID_YAW + sin(t * 0.07) * 0.02) * Basis(Vector3.RIGHT, SQUID_ROLL + sin(t * 0.13) * 0.015)).scaled_local(squid_scale)
 	_near_eye_only(eyes)

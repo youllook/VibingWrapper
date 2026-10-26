@@ -19,5 +19,5 @@ window/size/viewport_height=1080
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-anti_aliasing/quality/msaa_3d=2
+; no MSAA: on the water pass it cost ~12 ms a frame on the UHD 630 (2026-10-27); the canvas is upscaled anyway
 textures/vram_compression/import_s3tc_bptc=true
