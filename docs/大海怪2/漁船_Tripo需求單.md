@@ -30,3 +30,7 @@
 
 1. 轉成 `godot/sea-monster-2/models/boat.glb`：船首朝 +X、吃水線在原點高度（Blender 調，或交給 `main.gd` 自動縮成 5 m、底部對齊）。
 2. 船上放兩個人（現在是暫代的膠囊）、重新匯出網頁版、截圖給用戶驗收。
+
+## 5. 實際執行（2026-10-27）
+
+賈維斯用 Claude in Chrome 操作：H3.1、私有、超清幾何＋AI 補全開、紋理 2K＋PBR＋去光、三角面、**面數控制直接設 20,000**（省掉重拓撲）→ 45 點。成品 18,255 面，導出 GLB 2K（3.5 MB）→ `godot/sea-monster-2/models/boat.glb`。檢查項都過。

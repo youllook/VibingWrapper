@@ -19,6 +19,7 @@ const SQUID_ROLL := 0.55                       # rolled onto its side so the nea
 const DEPTH := {"none": 40.0, "clear": 40.0, "overcast": 22.0, "storm": 1.0, "waiting": 0.7, "clearing": 40.0}
 const BOAT_LENGTH := 5.0
 const BOAT_DRAFT := 0.35                        # how deep the hull sits
+const PEOPLE_FLOOR := 0.05                      # deck height above the water line, for the two men
 const BOAT_SPEED := 2.2                        # m/s, the water scrolls under a boat that stays put in frame
 
 var state := "clear"
@@ -152,64 +153,40 @@ func _build_boat() -> void:
 	add_child(boat)
 	boat.position = boat_pos
 	boat.rotation.y = boat_heading
-	# the Tripo boat (docs/大海怪2/漁船_Tripo需求單.md): scaled to 5 m, bow along +X, waterline at y = 0
-	if ResourceLoader.exists("res://models/boat.glb"):
-		var b: Node3D = (load("res://models/boat.glb") as PackedScene).instantiate()
-		boat.add_child(b)
-		var box := _aabb(b)
-		var k := BOAT_LENGTH / maxf(box.size.x, box.size.z)
-		b.scale = Vector3.ONE * k
-		b.position = Vector3(-box.get_center().x * k, -box.position.y * k - BOAT_DRAFT, -box.get_center().z * k)
-		return
-	# placeholder until then: a 5 m skiff, two men, an outboard
-	var hull_mat := StandardMaterial3D.new()
-	hull_mat.albedo_color = Color(0.86, 0.86, 0.82)
-	hull_mat.roughness = 0.4
-	var inner_mat := StandardMaterial3D.new()
-	inner_mat.albedo_color = Color(0.55, 0.52, 0.47)
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.08, 0.09, 0.1)
-	var shirt := StandardMaterial3D.new()
-	shirt.albedo_color = Color(0.2, 0.32, 0.5)
-	var hull := MeshInstance3D.new()
-	var hb := BoxMesh.new()
-	hb.size = Vector3(4.0, 0.7, 1.8)
-	hull.mesh = hb
-	hull.material_override = hull_mat
-	hull.position = Vector3(-0.5, 0.15, 0)
-	boat.add_child(hull)
-	var bow := MeshInstance3D.new()
-	var pm := PrismMesh.new()
-	pm.size = Vector3(1.8, 1.4, 0.7)
-	pm.left_to_right = 0.5
-	bow.mesh = pm
-	bow.material_override = hull_mat
-	bow.rotation = Vector3(-PI / 2, 0, -PI / 2)
-	bow.position = Vector3(2.2, 0.15, 0)
-	boat.add_child(bow)
-	var floor_ := MeshInstance3D.new()
-	var fb := BoxMesh.new()
-	fb.size = Vector3(3.8, 0.05, 1.5)
-	floor_.mesh = fb
-	floor_.material_override = inner_mat
-	floor_.position = Vector3(-0.4, 0.46, 0)
-	boat.add_child(floor_)
-	var motor := MeshInstance3D.new()
-	var mb := BoxMesh.new()
-	mb.size = Vector3(0.45, 0.7, 0.4)
-	motor.mesh = mb
-	motor.material_override = dark
-	motor.position = Vector3(-2.7, 0.55, 0)
-	boat.add_child(motor)
-	for p in [Vector3(-1.6, 0.85, 0.25), Vector3(0.2, 0.85, -0.2)]:
-		var man := MeshInstance3D.new()
+	# the Tripo boat (docs/大海怪2/漁船_Tripo需求單.md): its bow points +Z, turned to +X, scaled to 5 m, sunk to its draft
+	var b: Node3D = (load("res://models/boat.glb") as PackedScene).instantiate()
+	var pivot := Node3D.new()
+	pivot.rotation.y = PI / 2
+	boat.add_child(pivot)
+	pivot.add_child(b)
+	var box := _aabb(b)
+	var k := BOAT_LENGTH / box.size.z
+	b.scale = Vector3.ONE * k
+	b.position = Vector3(-box.get_center().x * k, -box.position.y * k - BOAT_DRAFT, -box.get_center().z * k)
+	# two men: one standing at the console, one sitting aft by the outboard
+	var shirts := [Color(0.18, 0.3, 0.48), Color(0.42, 0.4, 0.36)]
+	var skin := StandardMaterial3D.new()
+	skin.albedo_color = Color(0.55, 0.4, 0.3)
+	var spots := [[Vector3(-0.75, 0.0, 0.0), 0.95], [Vector3(-1.95, 0.0, 0.25), 0.6]]
+	for i in 2:
+		var m := StandardMaterial3D.new()
+		m.albedo_color = shirts[i]
+		var body := MeshInstance3D.new()
 		var cm := CapsuleMesh.new()
-		cm.radius = 0.24
-		cm.height = 0.9
-		man.mesh = cm
-		man.material_override = shirt
-		man.position = p
-		boat.add_child(man)
+		cm.radius = 0.2
+		cm.height = spots[i][1]
+		body.mesh = cm
+		body.material_override = m
+		body.position = spots[i][0] + Vector3(0, PEOPLE_FLOOR + cm.height / 2.0, 0)
+		boat.add_child(body)
+		var head := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.12
+		sm.height = 0.24
+		head.mesh = sm
+		head.material_override = skin
+		head.position = spots[i][0] + Vector3(0, PEOPLE_FLOOR + cm.height + 0.1, 0)
+		boat.add_child(head)
 
 func _aabb(n: Node) -> AABB:
 	var box := AABB()
