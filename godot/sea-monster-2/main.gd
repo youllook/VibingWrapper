@@ -38,10 +38,10 @@ const OMEN_R := 70.0
 const RING := [9.0, 13.0]                       # waiting: ring radius round the boat, wider over 5 minutes
 const RING_N := 60
 # the pack: size (× the 72 m model), where it patrols (centre relative to the boat, m — the open water the big one
-# leaves in the frame: upper left, left, above), loop radius, seconds per loop, start angle, depth while
+# leaves in the frame: lower right, left, above — user 2026-10-27 moved the upper-left one down right), loop radius, seconds per loop, start angle, depth while
 # thinking / running / waiting (m below the surface). The frame covers about x −51…43, z −33…18 on the water.
 const PACK := [
-	{"k": 0.40, "c": Vector2(-30.0, -20.0), "r": 12.0, "lap": 70.0, "a0": 0.0, "think": 26.0, "storm": 10.0, "wait": 8.0},
+	{"k": 0.40, "c": Vector2(27.0, 6.0), "r": 5.0, "lap": 70.0, "a0": 0.0, "think": 26.0, "storm": 8.0, "wait": 7.0},
 	{"k": 0.35, "c": Vector2(-36.0, 4.0), "r": 9.0, "lap": 55.0, "a0": 2.2, "think": 30.0, "storm": 12.0, "wait": 10.0},
 	{"k": 0.45, "c": Vector2(-4.0, -30.0), "r": 10.0, "lap": 85.0, "a0": 4.1, "think": 34.0, "storm": 14.0, "wait": 12.0},
 ]
