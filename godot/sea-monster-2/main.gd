@@ -46,6 +46,10 @@ const PACK := [
 	{"k": 0.35, "c": Vector2(-36.0, 4.0), "r": 9.0, "lap": 55.0, "a0": 2.2, "think": 30.0, "storm": 12.0, "wait": 10.0},
 	{"k": 0.45, "c": Vector2(-4.0, -30.0), "r": 10.0, "lap": 85.0, "a0": 4.1, "think": 34.0, "storm": 14.0, "wait": 12.0},
 ]
+# once it is up it does not stay put (user 2026-10-27: 忽隱忽現更可怕): now and then it sinks back into the dark,
+# down to this many metres more, and comes up again — the pack too, each on its own beat
+const LURK_DIVE := 12.0
+const LURK_DIVE_PACK := 8.0
 const EYE_K := 0.9                              # glass eye size (× the model scale), sitting in the socket
 const PACK_REACH := 7.0
 const VISIT_EVERY := [6.0, 12.0]                # running, after the rise: a school comes in this often
@@ -86,6 +90,7 @@ var next_school := 8.0
 var next_omen := 0.0
 var next_visit := 12.0
 var wait_t := 0.0
+var lurk := 0.0               # 0 … 1: how much the hold's sinking-and-rising plays (eases in once it is up)
 var flinch_t := 99.0           # seconds since a school bolted in front of it (its pupil snaps tight, then eases open)
 var fishes: Node
 var env_res: Environment
@@ -255,6 +260,8 @@ func _wave_limbs(sk: Skeleton3D, lb: Array, amp: float) -> void:
 			var u := float(j) / float(n)
 			var a := sin(t * L["rate"] * TAU / 4.0 - u * 5.0 + L["phase"]) * 0.05 * amp * (0.3 + u)
 			var b := sin(t * 0.11 - u * 3.0 + L["phase"] * 1.7) * 0.025 * amp
+			# up and down (user 2026-10-27): a slow swell running out along the arm, each arm on its own beat
+			b += sin(TAU * t / (8.0 + fmod(L["phase"] * 3.1, 4.0)) - u * 3.5 + L["phase"]) * 0.03 * (0.3 + u)
 			sk.set_bone_pose_rotation(bones[j], L["rest"][j] * Quaternion(Vector3(0, 0, 1), a) * Quaternion(Vector3(1, 0, 0), b))
 
 func _build_boat() -> void:
@@ -356,6 +363,11 @@ class Tw:
 			return
 		e = minf(e + dt, d)
 		v = lerpf(a, b, smoothstep(0.0, 1.0, e / d))
+
+# 0 … 1, mostly near 0: two slow waves out of step, so it sinks at uneven times and for uneven lengths
+func _dive(ph: float) -> float:
+	var n := 0.65 * sin(TAU * t / 41.0 + ph) + 0.35 * sin(TAU * t / 17.0 + 1.7 + ph * 2.3)
+	return pow(smoothstep(-0.1, 1.0, n), 1.5)
 
 func _ss(r: Array, x: float) -> float:
 	return smoothstep(r[0], r[1], x)
@@ -551,7 +563,8 @@ func _drive_pack(dt: float) -> void:
 		var a: float = M.ang
 		var tv := Vector2(-sin(a), cos(a))                     # direction of travel on the water (x, z)
 		var c0 := boat_pos + Vector3(c.c.x, 0.0, c.c.y)
-		node.position = c0 + Vector3(cos(a), 0.0, sin(a)) * c.r + Vector3(0, M.base_y - d.v + sin(t * 0.3 + i) * 0.4, 0)
+		var dv: float = d.v + lurk * LURK_DIVE_PACK * _dive(1.9 + i * 2.6)
+		node.position = c0 + Vector3(cos(a), 0.0, sin(a)) * c.r + Vector3(0, M.base_y - dv + sin(t * 0.3 + i) * 0.4, 0)
 		var yaw := atan2(tv.y, -tv.x)                          # its mantle (-X) leads
 		node.basis = (Basis(Vector3.UP, yaw + sin(t * 0.25 + i * 2.0) * 0.08) * Basis(Vector3.RIGHT, sin(t * 0.2 + i) * 0.12)).scaled_local(M.scale)
 		_fit_eyes(M.eyes, SQUID_SCALE * c.k * EYE_K, false)
@@ -577,7 +590,9 @@ func _step(dt: float) -> void:
 	boat_k.step(dt)
 	if not script_on and cur != "waiting":
 		pupil.step(dt)
-	squid_depth = depth.v
+	var holding := (cur == "storm" and not script_on) or cur == "waiting"
+	lurk += ((1.0 if holding else 0.0) - lurk) * (1.0 - exp(-dt / 5.0))
+	squid_depth = depth.v + lurk * LURK_DIVE * _dive(0.0)
 	squid.visible = squid_depth < DEEP - 0.5
 	squid.position = squid_at + Vector3(0, squid_base_y - squid_depth + sin(t * 0.21) * 0.25, 0)
 	squid.basis = (Basis(Vector3.UP, SQUID_YAW + sin(t * 0.07) * 0.02) * Basis(Vector3.RIGHT, SQUID_ROLL + sin(t * 0.13) * 0.015)).scaled_local(squid_scale)
