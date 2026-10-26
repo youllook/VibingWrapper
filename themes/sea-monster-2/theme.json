@@ -1,0 +1,9 @@
+{
+  "name": "大海怪2",
+  "order": 61,
+  "entry": "index.html",
+  "enabled": false,
+  "bundled": false,
+  "description": "高空斜俯視的深海（Godot 4 網頁匯出）：一艘小艇拖著白浪駛過；Claude 執行時，一隻比船大幾十倍的巨魷浮上水面，大眼睛就在船旁邊。原始碼在 godot/sea-monster-2/。",
+  "tags": ["海"]
+}

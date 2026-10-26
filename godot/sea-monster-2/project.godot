@@ -1,0 +1,23 @@
+config_version=5
+
+[application]
+
+config/name="SeaMonster2"
+config/description="大海怪2 — oblique aerial: a giant squid at the surface beside a small boat (VibingWrapper theme)"
+run/main_scene="res://main.tscn"
+; 0 on purpose: on the web a max_fps cap busy-waits inside the frame; the HTML shell throttles rAF to 30 fps instead
+run/max_fps=0
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.02, 0.05, 0.09, 1)
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+anti_aliasing/quality/msaa_3d=2
+textures/vram_compression/import_s3tc_bptc=true
