@@ -6,12 +6,14 @@
 // Mesh: kraken.glb's eye_L / eye_R, radius 0.27, local +Y out through the pupil (Blender's +Z). The eye frame E used
 // below is the original's: unit ball, +Z through the pupil — E = (L.x, -L.z, L.y) / 0.27.
 shader_type spatial;
-render_mode unshaded, cull_back;
+render_mode cull_back, specular_schlick_ggx;
 
 uniform sampler2D iris_tex : source_color, filter_linear_mipmap;
 uniform float pupil = 0.45;                 // pupil radius as a share of the iris (0.3 tight … 0.8 wide)
 uniform float lit = 1.0;                    // how much light is about (the sun's energy, dimmed with the murk)
 uniform vec3 sun_to = vec3(-0.70, 0.45, -0.55);   // world direction toward the sun
+// only the cornea is drawn: the ball round it is left out so the body's own socket shows, and the cornea's rim
+// darkens into it — no pasted-on disc (user 2026-10-27: 剝離感)
 
 const float R_MESH = 0.27;
 const float ZI = 0.60;   // iris plane
@@ -85,13 +87,12 @@ void fragment() {
 		}
 		inside = mix(inside, vec3(0.05, 0.09, 0.12), smoothstep(0.45, 0.7, length(hC.xy)) * 0.35);
 		col = mix(inside, refl, F) + refl * 0.02;
+		col = mix(col, vec3(0.012, 0.006, 0.006), 1.0 - smoothstep(0.74, 0.86, hC.z));   // the rim darkens into the socket
+		ALBEDO = vec3(0.0);
+		SPECULAR = 0.0;
+		ROUGHNESS = 1.0;
+		EMISSION = col * lit;
 	} else {
-		float tE = sphT(ro, rd, vec3(0.0), 1.0);
-		if (tE <= 0.0) { discard; }
-		vec3 h = ro + rd * tE, nE = normalize(h);                    // round the cornea: wet dark skin
-		float F = 0.04 + 0.96 * pow(1.0 - max(dot(-rd, nE), 0.0), 5.0);
-		vec3 sk = vec3(0.06, 0.015, 0.02) * mix(0.25, 1.0, smoothstep(0.55, 0.78, h.z));
-		col = sk + eyeSky(toWorld * fromE(reflect(rd, nE))) * F * 0.6;
+		discard;
 	}
-	ALBEDO = col * lit;
 }

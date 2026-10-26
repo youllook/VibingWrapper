@@ -45,7 +45,7 @@ const PACK := [
 	{"k": 0.35, "c": Vector2(-36.0, 4.0), "r": 9.0, "lap": 55.0, "a0": 2.2, "think": 30.0, "storm": 12.0, "wait": 10.0},
 	{"k": 0.45, "c": Vector2(-4.0, -30.0), "r": 10.0, "lap": 85.0, "a0": 4.1, "think": 34.0, "storm": 14.0, "wait": 12.0},
 ]
-const EYE_K := 0.7                              # glass eye size (× the model scale), sitting in the socket
+const EYE_K := 0.9                              # glass eye size (× the model scale), sitting in the socket
 const PACK_REACH := 7.0
 const VISIT_EVERY := [6.0, 12.0]                # running, after the rise: a school comes in this often
 const SQUID_REACH := 30.0                       # how far round its body axis the fish feel it (m)
@@ -111,9 +111,10 @@ func _ready() -> void:
 	cam.near = 1.0
 	cam.far = 2000.0
 	add_child(cam)
-	# high and to the south, looking down about 60°: the squid fills the right two thirds, the boat dead centre
+	# high and to the south, looking down 40° (user 2026-10-27, picked over 58°, straight down and turned 30°):
+	# the squid fills the right two thirds, the boat dead centre
 	# (user 2026-10-27: the squid stays put, the boat moves to the middle of the frame)
-	cam.position = Vector3(-4.0, 52.0, 30.0)
+	cam.position = Vector3(-4.0, 39.0, 45.0)
 	cam.look_at(boat_pos, Vector3.UP)
 	if dbg.find("cam=") >= 0:
 		var v := dbg.get_slice("cam=", 1).get_slice(";", 0).split_floats(",")
