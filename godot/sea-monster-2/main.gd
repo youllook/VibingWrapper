@@ -33,7 +33,7 @@ const RING := [9.0, 13.0]                       # waiting: ring radius round the
 const RING_N := 60
 const DEBOUNCE := 0.3
 const BOAT_LENGTH := 5.0
-const BOAT_DRAFT := 0.35                        # how deep the hull sits
+const BOAT_DRAFT := 0.25                        # how deep the hull sits
 const PEOPLE_FLOOR := 0.05                      # deck height above the water line, for the two men
 const BOAT_SPEED := 2.2                        # m/s, the water scrolls under a boat that stays put in frame
 

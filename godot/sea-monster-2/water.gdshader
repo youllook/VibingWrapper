@@ -56,6 +56,12 @@ float sea(vec2 p) {
 }
 
 void fragment() {
+	// no water inside the hull (user 2026-10-27: the boat looked flooded — its deck sits below the flat water plane):
+	// the 5 m × 1.85 m footprint, the bow tapering over its front 1.9 m, inset so the hull's outside still meets the sea
+	vec2 bd = wpos.xz - boat_pos;
+	float bu = dot(bd, boat_dir), bv = dot(bd, vec2(-boat_dir.y, boat_dir.x));
+	float half_beam = 0.80 * sqrt(clamp((2.45 - bu) / 1.9, 0.0, 1.0));
+	if (bu > -2.35 && bu < 2.45 && abs(bv) < half_beam) { discard; }
 	vec2 p = wpos.xz + drift;
 	float e = 0.15;
 	float h0 = sea(p);
