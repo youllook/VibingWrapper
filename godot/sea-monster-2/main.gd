@@ -17,7 +17,7 @@ extends Node3D
 
 const SQUID_SCALE := 10.0                      # kraken.glb is 8 m long → 72 m (the pack is sized from this)
 const CAM_DIR := Vector3(0.0, 0.85, 0.52)        # roughly toward the camera, for picking the near eye
-const HERO_K := 5.0                            # the big one: five times that (user 2026-10-27), far bigger than the frame;
+const HERO_K := 1.4                            # the big one: 1.4× (user 2026-10-27: 5× hid the pack), bigger than the frame;
                                                # it grows about its near eye, so the eye stays beside the boat
 const SQUID_FLAT := 0.42                       # squashed top to bottom so it lies on the surface, arms just under it
 const SQUID_POS := Vector3(5.0, 0.0, -5.0)      # body origin on the water plane
@@ -37,12 +37,13 @@ const THINK_R := 70.0                           # the fright spreads from the bo
 const OMEN_R := 70.0
 const RING := [9.0, 13.0]                       # waiting: ring radius round the boat, wider over 5 minutes
 const RING_N := 60
-# the pack: size (× the big one), orbit radius round the boat (m), seconds per lap, start angle, depth while
-# thinking / running / waiting (m below the surface)
+# the pack: size (× the 72 m model), where it patrols (centre relative to the boat, m — the open water the big one
+# leaves in the frame: upper left, left, above), loop radius, seconds per loop, start angle, depth while
+# thinking / running / waiting (m below the surface). The frame covers about x −51…43, z −33…18 on the water.
 const PACK := [
-	{"k": 0.55, "r": 30.0, "lap": 110.0, "a0": 0.0, "think": 34.0, "storm": 24.0, "wait": 20.0},
-	{"k": 0.45, "r": 42.0, "lap": 150.0, "a0": 2.2, "think": 38.0, "storm": 28.0, "wait": 24.0},
-	{"k": 0.60, "r": 24.0, "lap": 95.0, "a0": 4.1, "think": 42.0, "storm": 32.0, "wait": 28.0},
+	{"k": 0.40, "c": Vector2(-30.0, -20.0), "r": 12.0, "lap": 70.0, "a0": 0.0, "think": 26.0, "storm": 10.0, "wait": 8.0},
+	{"k": 0.35, "c": Vector2(-36.0, 4.0), "r": 9.0, "lap": 55.0, "a0": 2.2, "think": 30.0, "storm": 12.0, "wait": 10.0},
+	{"k": 0.45, "c": Vector2(-4.0, -30.0), "r": 10.0, "lap": 85.0, "a0": 4.1, "think": 34.0, "storm": 14.0, "wait": 12.0},
 ]
 const PACK_REACH := 7.0
 const VISIT_EVERY := [6.0, 12.0]                # running, after the rise: a school comes in this often
@@ -508,9 +509,8 @@ func _drive_fish(dt: float, fwd: Vector2) -> void:
 	fishes.step(minf(dt, 1.0 / 20.0), {"threat": _threat(), "ring": ring, "murk": murk.v,
 		"boat": {"p": b2, "h": fwd, "len": BOAT_LENGTH, "beam": 2.0}})
 
-# the pack circles the boat mantle first (jetting), arms trailing; slower while it waits
+# the pack loops in the open water round the big one, mantle first (jetting), arms trailing; slower while it waits
 func _drive_pack(dt: float) -> void:
-	var c0 := Vector3(boat_pos.x, 0.0, boat_pos.z)
 	for i in pack.size():
 		var M: Dictionary = pack[i]
 		var c: Dictionary = M.cfg
@@ -523,6 +523,7 @@ func _drive_pack(dt: float) -> void:
 		M["ang"] += TAU / c.lap * dt * (0.6 if cur == "waiting" else 1.0)
 		var a: float = M.ang
 		var tv := Vector2(-sin(a), cos(a))                     # direction of travel on the water (x, z)
+		var c0 := boat_pos + Vector3(c.c.x, 0.0, c.c.y)
 		node.position = c0 + Vector3(cos(a), 0.0, sin(a)) * c.r + Vector3(0, M.base_y - d.v + sin(t * 0.3 + i) * 0.4, 0)
 		var yaw := atan2(tv.y, -tv.x)                          # its mantle (-X) leads
 		node.basis = (Basis(Vector3.UP, yaw + sin(t * 0.25 + i * 2.0) * 0.08) * Basis(Vector3.RIGHT, sin(t * 0.2 + i) * 0.12)).scaled_local(M.scale)
