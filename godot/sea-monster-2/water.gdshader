@@ -85,13 +85,14 @@ void fragment() {
 	vec3 seen = texture(screen_tex, ruv).rgb;   // no mip blur: the web build has no mipmaps on the screen copy
 	vec3 deep_col = mix(deep_clear, deep_murk, murk);
 	vec3 scatter_col = mix(scatter_clear, scatter_murk, murk);
-	vec3 trans = exp(-absorb * (1.0 - 0.85 * calm) * path);
+	float clear_here = calm * (1.0 - smoothstep(14.0, 26.0, depth_below));   // only the top ~20 m clears
+	vec3 trans = exp(-absorb * (1.0 - 0.6 * clear_here) * path);
 	vec3 col = seen * trans + scatter_col * (1.0 - exp(-0.08 * path)) * (1.0 - trans.g * 0.5);
 	col = mix(deep_col, col, clamp(trans.b * 1.25, 0.0, 1.0));
 	// something big below shades the water over it (mood over optics): while the squid is deep it reads as a dark
 	// mass, not as nothing; near the surface its own colour takes over
-	float shade = smoothstep(2.0, 7.0, depth_below) * (1.0 - smoothstep(30.0, 42.0, depth_below));
-	col *= 1.0 - 0.7 * shade * (1.0 - calm);   // gone once it is up: then the water over it clears instead
+	float shade = smoothstep(2.0, 7.0, depth_below) * (1.0 - smoothstep(45.0, 58.0, depth_below));
+	col *= 1.0 - 0.7 * shade * (1.0 - clear_here);   // gone once it is up: then the water over it clears instead
 	// big slow patches of darker / lighter water
 	col *= 0.8 + 0.4 * fbm(p * 0.02 + time * 0.005);
 

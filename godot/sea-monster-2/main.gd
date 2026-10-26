@@ -11,14 +11,20 @@ extends Node3D
 #             then now and then a school wanders in and shies away. The first 9 s always play out.
 #   waiting   the squid stays up, its pupil opening over two minutes; calm fish ring the boat, wider the longer you wait
 #   clearing  the ring breaks up, the squid sinks, the sea brightens again over 10 s
+# The pack (user 2026-10-27: 一群大魷魚): three smaller squid circle the boat far below it — dark shapes while it thinks,
+# closing in at their own depths while it runs, drawing nearer while it waits, sinking one by one at the end.
 # Native tests: godot --path godot/sea-monster-2 -- state=storm warp=20
 
-const SQUID_SCALE := 10.0                      # kraken.glb is 8 m long → 72 m; its eye ≈ the boat's length
+const SQUID_SCALE := 10.0                      # kraken.glb is 8 m long → 72 m (the pack is sized from this)
+const CAM_DIR := Vector3(0.0, 0.85, 0.52)        # roughly toward the camera, for picking the near eye
+const HERO_K := 5.0                            # the big one: five times that (user 2026-10-27), far bigger than the frame;
+                                               # it grows about its near eye, so the eye stays beside the boat
 const SQUID_FLAT := 0.42                       # squashed top to bottom so it lies on the surface, arms just under it
 const SQUID_POS := Vector3(5.0, 0.0, -5.0)      # body origin on the water plane
 const SQUID_YAW := deg_to_rad(-146.0)
-const SQUID_ROLL := 0.55                       # rolled onto its side so the near eye looks up at the camera          # mantle to the upper right of the screen, arms to the lower left
-const DEEP := 40.0                              # out of sight
+const SQUID_ROLL := 0.0                        # lies flat: at five times the size a roll lifts its far arms 100 m out of the
+                                               # sea (was 0.55 to turn the near eye up); its eyes turn to the camera instead
+const DEEP := 60.0                              # out of sight
 const SHADOW := 22.0                            # thinking with the squid already up: a dark shape far below
 const OUTLINE := 8.0                            # rise.outline reaches here
 const UP := 3.0                                 # its highest point under the surface: the boat (dead centre) floats over its head
@@ -31,8 +37,16 @@ const THINK_R := 70.0                           # the fright spreads from the bo
 const OMEN_R := 70.0
 const RING := [9.0, 13.0]                       # waiting: ring radius round the boat, wider over 5 minutes
 const RING_N := 60
+# the pack: size (× the big one), orbit radius round the boat (m), seconds per lap, start angle, depth while
+# thinking / running / waiting (m below the surface)
+const PACK := [
+	{"k": 0.55, "r": 30.0, "lap": 110.0, "a0": 0.0, "think": 34.0, "storm": 24.0, "wait": 20.0},
+	{"k": 0.45, "r": 42.0, "lap": 150.0, "a0": 2.2, "think": 38.0, "storm": 28.0, "wait": 24.0},
+	{"k": 0.60, "r": 24.0, "lap": 95.0, "a0": 4.1, "think": 42.0, "storm": 32.0, "wait": 28.0},
+]
+const PACK_REACH := 7.0
 const VISIT_EVERY := [6.0, 12.0]                # running, after the rise: a school comes in this often
-const SQUID_REACH := 12.0                       # how far round its body axis the fish feel it (m)
+const SQUID_REACH := 30.0                       # how far round its body axis the fish feel it (m)
 const DEBOUNCE := 0.3
 const BOAT_LENGTH := 5.0
 const BOAT_DRAFT := 0.25                        # how deep the hull sits
@@ -72,8 +86,11 @@ var wait_t := 0.0
 var fishes: Node
 var env_res: Environment
 var eye_mat: ShaderMaterial
+var skin_mat: StandardMaterial3D
+var pack := []                 # [{node, skel, limbs, eyes, base_y, scale, k, depth: Tw, ang, cfg}]
 var squid_scale := Vector3.ONE
 var squid_base_y := 0.0      # body origin height that puts its highest point at the water line
+var squid_at := Vector3.ZERO  # its body origin on the water (SQUID_POS moved so the near eye stays put)
 var boat: Node3D
 var boat_pos := Vector3(-4.0, 0.0, -2.0)        # where the camera looks: the middle of the frame
 var boat_heading := deg_to_rad(-28.0)        # bow toward the lower right of the screen
@@ -155,47 +172,85 @@ func _build_water() -> void:
 	add_child(mi)
 
 func _build_squid() -> void:
-	squid = (load("res://models/kraken.glb") as PackedScene).instantiate()
-	squid_scale = Vector3(SQUID_SCALE, SQUID_SCALE * SQUID_FLAT, SQUID_SCALE * 1.2)   # a little stouter than the model
-	add_child(squid)
-	skel = squid.find_child("Skeleton3D", true, false)
-	var body := squid.find_child("kraken", true, false) as MeshInstance3D
-	# the body's real highest point once squashed and rolled onto its side (rest pose), so depth 0 = touching the surface
-	var top := -INF
-	var pose0 := (Basis(Vector3.UP, SQUID_YAW) * Basis(Vector3.RIGHT, SQUID_ROLL)).scaled_local(squid_scale)
-	for v in body.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
-		top = maxf(top, (pose0 * v).y)
-	squid_base_y = -top
-	# wet skin: the GLB's colour/normal/roughness, a little glossier, plus a clear wet film
-	var m := body.mesh.surface_get_material(0) as StandardMaterial3D
-	if m:
-		m = m.duplicate()
-		m.roughness = 0.55
-		m.clearcoat_enabled = true
-		m.clearcoat = 0.6
-		m.clearcoat_roughness = 0.18
-		body.material_override = m
 	eye_mat = ShaderMaterial.new()
 	eye_mat.shader = load("res://eye.gdshader")
 	eye_mat.set_shader_parameter("iris_tex", load("res://models/iris.png"))
+	var base_scale := Vector3(SQUID_SCALE, SQUID_SCALE * SQUID_FLAT, SQUID_SCALE * 1.2)   # a little stouter than the model
+	squid_scale = base_scale * HERO_K
+	var K := _make_kraken(squid_scale, Basis(Vector3.UP, SQUID_YAW) * Basis(Vector3.RIGHT, SQUID_ROLL))
+	squid = K.node
+	skel = K.skel
+	limbs = K.limbs
+	eyes = K.eyes
+	squid_base_y = K.base_y
+	# grow it about its near eye (the one rolled up toward the camera): find that eye in the model's own space
+	var pose := Basis(Vector3.UP, SQUID_YAW) * Basis(Vector3.RIGHT, SQUID_ROLL)
+	var hb := skel.find_bone("head")
+	var near_eye := Vector3.ZERO
+	for e in eyes:
+		var el: Vector3 = skel.get_bone_global_rest(hb) * (e as Node3D).transform.origin
+		if near_eye == Vector3.ZERO or (pose * el).dot(CAM_DIR) > (pose * near_eye).dot(CAM_DIR):
+			near_eye = el
+	var shift := pose.scaled_local(base_scale) * near_eye - pose.scaled_local(squid_scale) * near_eye
+	squid_at = SQUID_POS + Vector3(shift.x, 0.0, shift.z)
+	for c in PACK:
+		var sc: Vector3 = base_scale * c.k
+		var M := _make_kraken(sc, Basis.IDENTITY)
+		M.merge({"scale": sc, "k": c.k, "depth": Tw.new(DEEP), "ang": c.a0, "cfg": c})
+		M.node.visible = false
+		pack.append(M)
+
+# one kraken.glb: wet skin, the glassy eyes, its limbs found for the travelling wave, and the height that puts its
+# highest point (squashed, in `pose`) at the water line
+func _make_kraken(scale_v: Vector3, pose: Basis) -> Dictionary:
+	var node: Node3D = (load("res://models/kraken.glb") as PackedScene).instantiate()
+	add_child(node)
+	var sk: Skeleton3D = node.find_child("Skeleton3D", true, false)
+	var body := node.find_child("kraken", true, false) as MeshInstance3D
+	var top := -INF
+	var pose0 := pose.scaled_local(scale_v)
+	for v in body.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+		top = maxf(top, (pose0 * v).y)
+	# wet skin: the GLB's colour/normal/roughness, a little glossier, plus a clear wet film (one material for all of them)
+	if skin_mat == null:
+		skin_mat = (body.mesh.surface_get_material(0) as StandardMaterial3D).duplicate()
+		skin_mat.roughness = 0.55
+		skin_mat.clearcoat_enabled = true
+		skin_mat.clearcoat = 0.6
+		skin_mat.clearcoat_roughness = 0.18
+	body.material_override = skin_mat
+	var ey := []
 	for n in ["eye_L", "eye_R"]:
-		var e := squid.find_child(n, true, false) as MeshInstance3D
+		var e := node.find_child(n, true, false) as MeshInstance3D
 		if e:
 			e.material_override = eye_mat
-			eyes.append(e)
+			ey.append(e)
 	# limbs: arm_1..7_00..17, tentacle_1..2_00..21 — each gets a slow travelling wave
+	var lb := []
 	for prefix in ["arm_%d_", "tentacle_%d_"]:
 		for k in range(1, 8):
 			var bones := []
 			var rest := []
 			for j in 22:
-				var bi := skel.find_bone((prefix % k) + ("%02d" % j))
+				var bi := sk.find_bone((prefix % k) + ("%02d" % j))
 				if bi < 0:
 					break
 				bones.append(bi)
-				rest.append(skel.get_bone_pose_rotation(bi))
+				rest.append(sk.get_bone_pose_rotation(bi))
 			if bones.size() > 0:
-				limbs.append({"bones": bones, "rest": rest, "phase": randf() * TAU, "rate": randf_range(0.18, 0.3)})
+				lb.append({"bones": bones, "rest": rest, "phase": randf() * TAU, "rate": randf_range(0.18, 0.3)})
+	return {"node": node, "skel": sk, "limbs": lb, "eyes": ey, "base_y": -top}
+
+# the travelling wave down every arm; amp scales it (the pack swims, so theirs is larger)
+func _wave_limbs(sk: Skeleton3D, lb: Array, amp: float) -> void:
+	for L in lb:
+		var bones: Array = L["bones"]
+		var n := bones.size()
+		for j in n:
+			var u := float(j) / float(n)
+			var a := sin(t * L["rate"] * TAU / 4.0 - u * 5.0 + L["phase"]) * 0.05 * amp * (0.3 + u)
+			var b := sin(t * 0.11 - u * 3.0 + L["phase"] * 1.7) * 0.025 * amp
+			sk.set_bone_pose_rotation(bones[j], L["rest"][j] * Quaternion(Vector3(0, 0, 1), a) * Quaternion(Vector3(1, 0, 0), b))
 
 func _build_boat() -> void:
 	boat = Node3D.new()
@@ -351,6 +406,25 @@ func _enter(name: String, now := false) -> void:
 	if now and not script_on:
 		depth.set_now(depth.b)
 		pupil.set_now(pupil.b)
+	# the pack: each at its own depth, a beat after the one before
+	for i in pack.size():
+		var M: Dictionary = pack[i]
+		var c: Dictionary = M.cfg
+		var d: Tw = M.depth
+		match name:
+			"storm":
+				if script_on:
+					d.set_now(DEEP).to(c.storm, 6.0, 5.0 + i * 1.5)   # they come in behind the big one's rise
+				else:
+					d.to(c.storm, 4.0, i * 0.5)
+			"overcast":
+				d.to(c.think, 6.0, i * 1.5)
+			"waiting":
+				d.to(c.wait, 5.0, i * 1.0)
+			_:
+				d.to(DEEP, 10.0, i * 3.0)             # sinking one by one
+		if now and not script_on:
+			d.set_now(d.b)
 
 func _storm_script(dt: float) -> void:
 	if not script_on:
@@ -383,9 +457,20 @@ func _threat():
 	if cur == "storm" and script_on and rise_t < RISE.omen[1]:
 		var r := OMEN_R * _ss(RISE.omen, rise_t)
 		return {"kind": "circle", "c": b2, "r": r, "rear": rear} if r > 0.5 else null
-	if (cur == "storm" or cur == "overcast") and depth.v < 25.0:
-		return {"kind": "capsule", "a": ax[0], "b": ax[1], "r": SQUID_REACH * clampf((30.0 - depth.v) / 20.0, 0.0, 1.0), "rear": rear}
-	return null
+	if cur != "storm" and cur != "overcast":
+		return null
+	var caps := []
+	if depth.v < 25.0:
+		caps.append({"kind": "capsule", "a": ax[0], "b": ax[1], "r": SQUID_REACH * clampf((30.0 - depth.v) / 20.0, 0.0, 1.0)})
+	for M in pack:
+		var dv: float = M.depth.v
+		if dv < 25.0:
+			var tl: Vector3 = M.node.global_transform * Vector3(-4.0, 0.0, 0.0)
+			var tp: Vector3 = M.node.global_transform * Vector3(4.0, 0.0, 0.0)
+			caps.append({"kind": "capsule", "a": Vector2(tl.x, tl.z), "b": Vector2(tp.x, tp.z), "r": PACK_REACH * clampf((30.0 - dv) / 20.0, 0.0, 1.0)})
+	if caps.is_empty():
+		return null
+	return {"kind": "multi", "list": caps, "rear": rear}
 
 func _drive_fish(dt: float, fwd: Vector2) -> void:
 	var b2 := Vector2(boat_pos.x, boat_pos.z)
@@ -423,6 +508,29 @@ func _drive_fish(dt: float, fwd: Vector2) -> void:
 	fishes.step(minf(dt, 1.0 / 20.0), {"threat": _threat(), "ring": ring, "murk": murk.v,
 		"boat": {"p": b2, "h": fwd, "len": BOAT_LENGTH, "beam": 2.0}})
 
+# the pack circles the boat mantle first (jetting), arms trailing; slower while it waits
+func _drive_pack(dt: float) -> void:
+	var c0 := Vector3(boat_pos.x, 0.0, boat_pos.z)
+	for i in pack.size():
+		var M: Dictionary = pack[i]
+		var c: Dictionary = M.cfg
+		var d: Tw = M.depth
+		d.step(dt)
+		var node: Node3D = M.node
+		node.visible = d.v < DEEP - 0.5
+		if not node.visible:
+			continue
+		M["ang"] += TAU / c.lap * dt * (0.6 if cur == "waiting" else 1.0)
+		var a: float = M.ang
+		var tv := Vector2(-sin(a), cos(a))                     # direction of travel on the water (x, z)
+		node.position = c0 + Vector3(cos(a), 0.0, sin(a)) * c.r + Vector3(0, M.base_y - d.v + sin(t * 0.3 + i) * 0.4, 0)
+		var yaw := atan2(tv.y, -tv.x)                          # its mantle (-X) leads
+		node.basis = (Basis(Vector3.UP, yaw + sin(t * 0.25 + i * 2.0) * 0.08) * Basis(Vector3.RIGHT, sin(t * 0.2 + i) * 0.12)).scaled_local(M.scale)
+		for e in M.eyes:
+			e.global_basis = e.global_basis.orthonormalized().scaled(Vector3.ONE * SQUID_SCALE * c.k * 0.85)
+		if (Engine.get_process_frames() + i) % 2 == 0:       # their arms every other frame
+			_wave_limbs(M.skel, M.limbs, 1.8)
+
 func _step(dt: float) -> void:
 	t += dt
 	# a new state from the page settles for DEBOUNCE before it plays
@@ -444,19 +552,16 @@ func _step(dt: float) -> void:
 		pupil.step(dt)
 	squid_depth = depth.v
 	squid.visible = squid_depth < DEEP - 0.5
-	squid.position = SQUID_POS + Vector3(0, squid_base_y - squid_depth + sin(t * 0.21) * 0.25, 0)
+	squid.position = squid_at + Vector3(0, squid_base_y - squid_depth + sin(t * 0.21) * 0.25, 0)
 	squid.basis = (Basis(Vector3.UP, SQUID_YAW + sin(t * 0.07) * 0.02) * Basis(Vector3.RIGHT, SQUID_ROLL + sin(t * 0.13) * 0.015)).scaled_local(squid_scale)
-	# the eyes stay round although the body is squashed
+	# the eyes stay round although the body is squashed, and turn their pupils (+Y) up to the camera: it watches you
 	for e in eyes:
-		e.global_basis = e.global_basis.orthonormalized().scaled(Vector3.ONE * SQUID_SCALE * 0.85)
-	for L in limbs:
-		var bones: Array = L["bones"]
-		var n := bones.size()
-		for j in n:
-			var u := float(j) / float(n)
-			var a := sin(t * L["rate"] * TAU / 4.0 - u * 5.0 + L["phase"]) * 0.05 * (0.3 + u)
-			var b := sin(t * 0.11 - u * 3.0 + L["phase"] * 1.7) * 0.025
-			skel.set_bone_pose_rotation(bones[j], L["rest"][j] * Quaternion(Vector3(0, 0, 1), a) * Quaternion(Vector3(1, 0, 0), b))
+		var y: Vector3 = (cam.global_position - e.global_position).normalized()
+		var x := y.cross(Vector3.BACK).normalized()
+		e.global_basis = Basis(x, y, x.cross(y)).scaled(Vector3.ONE * SQUID_SCALE * HERO_K * 0.85)
+	if squid.visible:
+		_wave_limbs(skel, limbs, 1.0)
+	_drive_pack(dt)
 	# the boat rocks; the sea slides under it
 	var fwd := Vector2(cos(boat_heading), -sin(boat_heading))
 	drift += fwd * BOAT_SPEED * boat_k.v * dt

@@ -179,7 +179,15 @@ func release_ring() -> void:
 		sc.life = sc.age + randf_range(6, 14)
 
 # ---------------------------------------------------------------- threats: {kind: "circle", c, r, rear} / {kind: "capsule", a, b, r, rear}
+# / {kind: "multi", list: [circle|capsule…], rear}
 func _near(th: Dictionary, p: Vector2) -> Array:      # [distance past the edge, unit direction away]
+	if th.kind == "multi":                               # several squid: the nearest one
+		var best := [INF, Vector2.RIGHT]
+		for one in th.list:
+			var r := _near(one, p)
+			if r[0] < best[0]:
+				best = r
+		return best
 	var q: Vector2
 	if th.kind == "circle":
 		q = th.c
