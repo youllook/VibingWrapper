@@ -45,6 +45,7 @@ const PACK := [
 	{"k": 0.35, "c": Vector2(-36.0, 4.0), "r": 9.0, "lap": 55.0, "a0": 2.2, "think": 30.0, "storm": 12.0, "wait": 10.0},
 	{"k": 0.45, "c": Vector2(-4.0, -30.0), "r": 10.0, "lap": 85.0, "a0": 4.1, "think": 34.0, "storm": 14.0, "wait": 12.0},
 ]
+const EYE_K := 0.7                              # glass eye size (× the model scale), sitting in the socket
 const PACK_REACH := 7.0
 const VISIT_EVERY := [6.0, 12.0]                # running, after the rise: a school comes in this often
 const SQUID_REACH := 30.0                       # how far round its body axis the fish feel it (m)
@@ -509,6 +510,24 @@ func _drive_fish(dt: float, fwd: Vector2) -> void:
 	fishes.step(minf(dt, 1.0 / 20.0), {"threat": _threat(), "ring": ring, "murk": murk.v,
 		"boat": {"p": b2, "h": fwd, "len": BOAT_LENGTH, "beam": 2.0}})
 
+# the glass eyes: round although the body is squashed, so only the one facing the camera is shown — lying flat,
+# the far one would poke out through the top of its squashed head (user 2026-10-27: "two extra black balls");
+# watch = turn the pupil (+Y) up to the camera
+func _fit_eyes(ey: Array, size: float, watch: bool) -> void:
+	if ey.size() < 2:
+		return
+	var a: Node3D = ey[0]
+	var b: Node3D = ey[1]
+	var near: Node3D = a if a.global_position.distance_to(cam.global_position) < b.global_position.distance_to(cam.global_position) else b
+	for e in ey:
+		(e as Node3D).visible = e == near
+	if watch:
+		var y: Vector3 = (cam.global_position - near.global_position).normalized()
+		var x := y.cross(Vector3.BACK).normalized()
+		near.global_basis = Basis(x, y, x.cross(y)).scaled(Vector3.ONE * size)
+	else:
+		near.global_basis = near.global_basis.orthonormalized().scaled(Vector3.ONE * size)
+
 # the pack loops in the open water round the big one, mantle first (jetting), arms trailing; slower while it waits
 func _drive_pack(dt: float) -> void:
 	for i in pack.size():
@@ -527,8 +546,7 @@ func _drive_pack(dt: float) -> void:
 		node.position = c0 + Vector3(cos(a), 0.0, sin(a)) * c.r + Vector3(0, M.base_y - d.v + sin(t * 0.3 + i) * 0.4, 0)
 		var yaw := atan2(tv.y, -tv.x)                          # its mantle (-X) leads
 		node.basis = (Basis(Vector3.UP, yaw + sin(t * 0.25 + i * 2.0) * 0.08) * Basis(Vector3.RIGHT, sin(t * 0.2 + i) * 0.12)).scaled_local(M.scale)
-		for e in M.eyes:
-			e.global_basis = e.global_basis.orthonormalized().scaled(Vector3.ONE * SQUID_SCALE * c.k * 0.85)
+		_fit_eyes(M.eyes, SQUID_SCALE * c.k * EYE_K, false)
 		if (Engine.get_process_frames() + i) % 2 == 0:       # their arms every other frame
 			_wave_limbs(M.skel, M.limbs, 1.8)
 
@@ -555,11 +573,7 @@ func _step(dt: float) -> void:
 	squid.visible = squid_depth < DEEP - 0.5
 	squid.position = squid_at + Vector3(0, squid_base_y - squid_depth + sin(t * 0.21) * 0.25, 0)
 	squid.basis = (Basis(Vector3.UP, SQUID_YAW + sin(t * 0.07) * 0.02) * Basis(Vector3.RIGHT, SQUID_ROLL + sin(t * 0.13) * 0.015)).scaled_local(squid_scale)
-	# the eyes stay round although the body is squashed, and turn their pupils (+Y) up to the camera: it watches you
-	for e in eyes:
-		var y: Vector3 = (cam.global_position - e.global_position).normalized()
-		var x := y.cross(Vector3.BACK).normalized()
-		e.global_basis = Basis(x, y, x.cross(y)).scaled(Vector3.ONE * SQUID_SCALE * HERO_K * 0.85)
+	_fit_eyes(eyes, SQUID_SCALE * HERO_K * EYE_K, true)
 	if squid.visible:
 		_wave_limbs(skel, limbs, 1.0)
 	_drive_pack(dt)
