@@ -19,7 +19,8 @@ const SQUID_SCALE := 10.0                      # kraken.glb is 8 m long → 72 m
 const CAM_DIR := Vector3(0.0, 0.85, 0.52)        # roughly toward the camera, for picking the near eye
 const HERO_K := 1.4                            # the big one: 1.4× (user 2026-10-27: 5× hid the pack), bigger than the frame;
                                                # it grows about its near eye, so the eye stays beside the boat
-const SQUID_FLAT := 0.42                       # squashed top to bottom so it lies on the surface, arms just under it
+const SQUID_FLAT := 1.0                        # its own thickness (user 2026-10-27: unsquashed reads rounder and the arms
+                                               # sink into the dark; at 0.42 the eye sockets went oval round a round eye)
 const SQUID_POS := Vector3(5.0, 0.0, -5.0)      # body origin on the water plane
 const SQUID_YAW := deg_to_rad(-146.0)
 const SQUID_ROLL := 0.0                        # lies flat: at five times the size a roll lifts its far arms 100 m out of the
