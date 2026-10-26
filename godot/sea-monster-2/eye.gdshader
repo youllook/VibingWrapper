@@ -3,8 +3,10 @@
 // the iris shifts with the angle like a real one; the pupil's edge wavers and the fibres are squeezed outward as it
 // opens; behind the pupil a lens with its own faint glint; round the cornea wet dark-red skin. Highlights stay weak
 // (user 2026-10-26: just enough to show it is round).
-// Mesh: kraken.glb's eye_L / eye_R, radius 0.27, local +Y out through the pupil (Blender's +Z). The eye frame E used
-// below is the original's: unit ball, +Z through the pupil — E = (L.x, -L.z, L.y) / 0.27.
+// Mesh: kraken.glb's eye_L / eye_R, radius 0.27, local +Y out through the pupil (Blender's +Z), left exactly where the
+// rig fitted it in the head (user 2026-10-27: the eye belongs inside the model's own eye). The eye frame E used below
+// is the original's: unit ball, +Z through the pupil — E = (L.x, -L.z, L.y) / 0.27. To watch the camera the eye
+// turns inside its socket: the cornea, iris and pupil rotate part of the way toward the viewer (`gaze`).
 shader_type spatial;
 render_mode cull_back, specular_schlick_ggx;
 
@@ -12,6 +14,7 @@ uniform sampler2D iris_tex : source_color, filter_linear_mipmap;
 uniform float pupil = 0.45;                 // pupil radius as a share of the iris (0.3 tight … 0.8 wide)
 uniform float lit = 1.0;                    // how much light is about (the sun's energy, dimmed with the murk)
 uniform vec3 sun_to = vec3(-0.70, 0.45, -0.55);   // world direction toward the sun
+uniform float gaze = 0.45;                  // how far the eye turns in its socket toward the camera (0 … 1)
 // only the cornea is drawn: the ball round it is left out so the body's own socket shows, and the cornea's rim
 // darkens into it — no pasted-on disc (user 2026-10-27: 剝離感)
 
@@ -46,8 +49,8 @@ float sphT(vec3 ro, vec3 rd, vec3 c, float r) {
 // world direction → the light the wet eye mirrors: dark water below, a dim window of sky above, the sun
 vec3 eyeSky(vec3 d) {
 	vec3 c = mix(vec3(0.005, 0.012, 0.02), vec3(0.08, 0.13, 0.17), smoothstep(-0.1, 0.9, d.y));
-	c += vec3(1.0, 0.96, 0.88) * 6.0 * pow(max(dot(d, normalize(sun_to)), 0.0), 400.0);
-	c += vec3(0.75, 0.85, 0.95) * 1.2 * smoothstep(0.965, 0.985, dot(d, normalize(vec3(-0.35, 1.0, -0.45))));
+	c += vec3(1.0, 0.96, 0.88) * 1.5 * pow(max(dot(d, normalize(sun_to)), 0.0), 150.0);   // a soft, weak sun glint
+	c += vec3(0.75, 0.85, 0.95) * 0.45 * smoothstep(0.965, 0.985, dot(d, normalize(vec3(-0.35, 1.0, -0.45))));
 	return c;
 }
 
@@ -57,6 +60,13 @@ void fragment() {
 	vec3 ro_l = (inv * vec4(CAMERA_POSITION_WORLD, 1.0)).xyz;
 	vec3 ro = toE(ro_l) / R_MESH;
 	vec3 rd = normalize(toE(lp - ro_l));
+	// turn the eye in its socket toward the camera: work in a frame G whose +Z leans `gaze` of the way to the viewer
+	vec3 gz = normalize(mix(vec3(0.0, 0.0, 1.0), normalize(ro), gaze));
+	vec3 gx = normalize(cross(vec3(0.0, 1.0, 0.0), gz));
+	vec3 gy = cross(gz, gx);
+	mat3 G = mat3(gx, gy, gz);                 // G's columns in E; transpose(G) takes E → G
+	ro = transpose(G) * ro;
+	rd = transpose(G) * rd;
 	mat3 toWorld = mat3(normalize(MODEL_MATRIX[0].xyz), normalize(MODEL_MATRIX[1].xyz), normalize(MODEL_MATRIX[2].xyz));
 	vec3 col;
 	float tC = sphT(ro, rd, CC, RC);
@@ -64,7 +74,7 @@ void fragment() {
 	if (tC > 0.0 && hC.z > 0.74) {
 		vec3 nC = normalize(hC - CC);
 		float F = 0.025 + 0.975 * pow(1.0 - max(dot(-rd, nC), 0.0), 5.0);
-		vec3 refl = eyeSky(toWorld * fromE(reflect(rd, nC)));
+		vec3 refl = eyeSky(toWorld * fromE(G * reflect(rd, nC)));
 		vec3 rr = refract(rd, nC, 1.0 / 1.336);
 		float ti = (ZI - hC.z) / rr.z;
 		vec3 hi = hC + rr * ti;
@@ -81,7 +91,7 @@ void fragment() {
 			if (tl > 0.0) {                                           // the lens behind the pupil
 				vec3 nl = normalize(hi + rr * tl - CL);
 				float Fl = pow(1.0 - max(dot(-rr, nl), 0.0), 3.0);
-				deep += eyeSky(toWorld * fromE(reflect(rr, nl))) * 0.015 * (0.3 + Fl) + vec3(0.0, 0.02, 0.025) * pow(1.0 - Fl, 3.0) * 0.12;
+				deep += eyeSky(toWorld * fromE(G * reflect(rr, nl))) * 0.015 * (0.3 + Fl) + vec3(0.0, 0.02, 0.025) * pow(1.0 - Fl, 3.0) * 0.12;
 			}
 			inside = mix(ic * 1.1, deep, pup);   // twice the original: it is seen through 3 m of dark water
 		}

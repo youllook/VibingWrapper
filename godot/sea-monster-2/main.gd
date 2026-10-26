@@ -50,7 +50,6 @@ const PACK := [
 # down to this many metres more, and comes up again — the pack too, each on its own beat
 const LURK_DIVE := 12.0
 const LURK_DIVE_PACK := 8.0
-const EYE_K := 0.9                              # glass eye size (× the model scale), sitting in the socket
 const PACK_REACH := 7.0
 const VISIT_EVERY := [6.0, 12.0]                # running, after the rise: a school comes in this often
 const SQUID_REACH := 30.0                       # how far round its body axis the fish feel it (m)
@@ -405,7 +404,7 @@ func _enter(name: String, now := false) -> void:
 		"storm":
 			if up:
 				depth.to(UP, 3.0)
-				pupil.to(0.7, 3.0)
+				pupil.to(0.55, 3.0)
 			else:
 				script_on = true
 				rise_t = 0.0
@@ -449,7 +448,7 @@ func _storm_script(dt: float) -> void:
 	rise_t += dt
 	var T := rise_t
 	depth.set_now(DEEP - (DEEP - OUTLINE) * _ss(RISE.outline, T) - (OUTLINE - UP) * _ss(RISE.peak, T))
-	pupil.set_now(0.45 + 0.25 * _ss(RISE.peak, T))      # at the top: it sees the boat
+	pupil.set_now(0.4 + 0.15 * _ss(RISE.peak, T))       # at the top: it sees the boat
 	if T >= RISE.peak[1]:
 		script_on = false
 	if T >= LOCK and queued != "":
@@ -520,7 +519,7 @@ func _drive_fish(dt: float, fwd: Vector2) -> void:
 		wait_t += dt
 		ring = {"c": b2, "r": lerpf(RING[0], RING[1], minf(wait_t / 300.0, 1.0))}
 		if wait_t > 5.0:                                # the pupil opens slowly over two minutes, hunting a little
-			pupil.set_now(0.5 + 0.35 * minf((wait_t - 5.0) / 120.0, 1.0) + 0.03 * sin(t * 0.7))
+			pupil.set_now(0.5 + 0.25 * minf((wait_t - 5.0) / 120.0, 1.0) + 0.03 * sin(t * 0.7))
 	fear_r.step(dt)
 	fishes.bolts = 0
 	fishes.step(minf(dt, 1.0 / 20.0), {"threat": _threat(), "ring": ring, "murk": murk.v,
@@ -530,23 +529,16 @@ func _drive_fish(dt: float, fwd: Vector2) -> void:
 	if fishes.bolts >= 6 and squid.visible and depth.v < 15.0 and flinch_t > 2.5:
 		flinch_t = 0.0
 
-# the glass eyes: round although the body is squashed, so only the one facing the camera is shown — lying flat,
-# the far one would poke out through the top of its squashed head (user 2026-10-27: "two extra black balls");
-# watch = turn the pupil (+Y) up to the camera
-func _fit_eyes(ey: Array, size: float, watch: bool) -> void:
+# the eyes stay exactly where the rig fitted them; only the one nearer the camera is shown — lying flat, the far
+# one's cornea peeks over the top of its head (user 2026-10-27)
+func _near_eye_only(ey: Array) -> void:
 	if ey.size() < 2:
 		return
 	var a: Node3D = ey[0]
 	var b: Node3D = ey[1]
-	var near: Node3D = a if a.global_position.distance_to(cam.global_position) < b.global_position.distance_to(cam.global_position) else b
-	for e in ey:
-		(e as Node3D).visible = e == near
-	if watch:
-		var y: Vector3 = (cam.global_position - near.global_position).normalized()
-		var x := y.cross(Vector3.BACK).normalized()
-		near.global_basis = Basis(x, y, x.cross(y)).scaled(Vector3.ONE * size)
-	else:
-		near.global_basis = near.global_basis.orthonormalized().scaled(Vector3.ONE * size)
+	var a_near := a.global_position.distance_to(cam.global_position) < b.global_position.distance_to(cam.global_position)
+	a.visible = a_near
+	b.visible = not a_near
 
 # the pack loops in the open water round the big one, mantle first (jetting), arms trailing; slower while it waits
 func _drive_pack(dt: float) -> void:
@@ -567,7 +559,7 @@ func _drive_pack(dt: float) -> void:
 		node.position = c0 + Vector3(cos(a), 0.0, sin(a)) * c.r + Vector3(0, M.base_y - dv + sin(t * 0.3 + i) * 0.4, 0)
 		var yaw := atan2(tv.y, -tv.x)                          # its mantle (-X) leads
 		node.basis = (Basis(Vector3.UP, yaw + sin(t * 0.25 + i * 2.0) * 0.08) * Basis(Vector3.RIGHT, sin(t * 0.2 + i) * 0.12)).scaled_local(M.scale)
-		_fit_eyes(M.eyes, SQUID_SCALE * c.k * EYE_K, false)
+		_near_eye_only(M.eyes)
 		if (Engine.get_process_frames() + i) % 2 == 0:       # their arms every other frame
 			_wave_limbs(M.skel, M.limbs, 1.8)
 
@@ -596,7 +588,7 @@ func _step(dt: float) -> void:
 	squid.visible = squid_depth < DEEP - 0.5
 	squid.position = squid_at + Vector3(0, squid_base_y - squid_depth + sin(t * 0.21) * 0.25, 0)
 	squid.basis = (Basis(Vector3.UP, SQUID_YAW + sin(t * 0.07) * 0.02) * Basis(Vector3.RIGHT, SQUID_ROLL + sin(t * 0.13) * 0.015)).scaled_local(squid_scale)
-	_fit_eyes(eyes, SQUID_SCALE * HERO_K * EYE_K, true)
+	_near_eye_only(eyes)
 	if squid.visible:
 		_wave_limbs(skel, limbs, 1.0)
 	_drive_pack(dt)
