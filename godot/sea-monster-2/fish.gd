@@ -72,6 +72,7 @@ class Fish:
 var fish: Array[Fish] = []
 var schools: Array[School] = []
 var frame := 0
+var bolts := 0                 # C-starts this step (main.gd: the squid's pupil flinches)
 var buf := PackedFloat32Array()
 var cam: Camera3D
 var t := 0.0
@@ -213,6 +214,7 @@ func _cstart(f: Fish, th: Dictionary) -> void:
 	f.pend = -1.0
 	f.ring = false
 	f.flash = minf(1.0, absf(turn) / 1.2 + 0.3)
+	bolts += 1
 
 # env: {threat: Dictionary|null, ring: {c, r}|null, boat: {p, h, len, beam}|null, murk}
 func step(dt: float, env: Dictionary) -> void:

@@ -85,6 +85,7 @@ var next_school := 8.0
 var next_omen := 0.0
 var next_visit := 12.0
 var wait_t := 0.0
+var flinch_t := 99.0           # seconds since a school bolted in front of it (its pupil snaps tight, then eases open)
 var fishes: Node
 var env_res: Environment
 var eye_mat: ShaderMaterial
@@ -507,8 +508,13 @@ func _drive_fish(dt: float, fwd: Vector2) -> void:
 		if wait_t > 5.0:                                # the pupil opens slowly over two minutes, hunting a little
 			pupil.set_now(0.5 + 0.35 * minf((wait_t - 5.0) / 120.0, 1.0) + 0.03 * sin(t * 0.7))
 	fear_r.step(dt)
+	fishes.bolts = 0
 	fishes.step(minf(dt, 1.0 / 20.0), {"threat": _threat(), "ring": ring, "murk": murk.v,
 		"boat": {"p": b2, "h": fwd, "len": BOAT_LENGTH, "beam": 2.0}})
+	# a school bolting in front of it: the pupil snaps tight (user 2026-10-27), but not again while it is still easing
+	flinch_t += dt
+	if fishes.bolts >= 6 and squid.visible and depth.v < 15.0 and flinch_t > 2.5:
+		flinch_t = 0.0
 
 # the glass eyes: round although the body is squashed, so only the one facing the camera is shown — lying flat,
 # the far one would poke out through the top of its squashed head (user 2026-10-27: "two extra black balls");
@@ -594,6 +600,9 @@ func _step(dt: float) -> void:
 	sun.light_energy = lerpf(1.7, 0.6, m) + 0.3 * clar
 	env_res.ambient_light_energy = lerpf(0.5, 0.18, m)
 	env_res.tonemap_exposure = lerpf(1.1, 0.95, m)
-	eye_mat.set_shader_parameter("pupil", pupil.v)
+	var flinch := smoothstep(0.0, 0.15, flinch_t) * (1.0 - smoothstep(0.6, 3.5, flinch_t))
+	eye_mat.set_shader_parameter("pupil", pupil.v * (1.0 - 0.45 * flinch))
+	eye_mat.set_shader_parameter("lit", 0.25 + sun.light_energy / 1.7)
+	eye_mat.set_shader_parameter("sun_to", sun.global_transform.basis.z)
 	water_mat.set_shader_parameter("murk", m)
 	water_mat.set_shader_parameter("calm", clar)

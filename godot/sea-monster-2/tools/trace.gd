@@ -17,5 +17,5 @@ func _init() -> void:
 				on += 1
 			if f.fear > 0.0:
 				scared += 1
-		print("t=%2d cur=%s depth=%.1f script=%s visit_in=%.1f fish=%d on_screen=%d scared=%d schools=%d" % [sec + 1, main.cur, main.depth.v, main.script_on, main.next_visit, F.size(), on, scared, main.fishes.schools.size()])
+		print("t=%2d cur=%s depth=%.1f script=%s visit_in=%.1f fish=%d on_screen=%d scared=%d schools=%d flinch_t=%.1f" % [sec + 1, main.cur, main.depth.v, main.script_on, main.next_visit, F.size(), on, scared, main.fishes.schools.size(), main.flinch_t])
 	quit()
