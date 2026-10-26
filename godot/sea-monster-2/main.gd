@@ -21,8 +21,8 @@ const SQUID_ROLL := 0.55                       # rolled onto its side so the nea
 const DEEP := 40.0                              # out of sight
 const SHADOW := 22.0                            # thinking with the squid already up: a dark shape far below
 const OUTLINE := 8.0                            # rise.outline reaches here
-const UP := 1.0                                 # its back just under the surface
-const UP_WAIT := 0.7
+const UP := 3.0                                 # its highest point under the surface: the boat (dead centre) floats over its head
+const UP_WAIT := 2.5
 const RISE := {"omen": [1.5, 4.0], "outline": [4.0, 9.0], "peak": [9.0, 13.0]}
 const LOCK := 9.0                               # seconds of the rise that play out whatever the state does
 const MURK := {"none": 0.0, "clear": 0.0, "overcast": 1.0, "storm": 1.0, "waiting": 0.85, "clearing": 0.0}
@@ -73,7 +73,7 @@ var eye_mat: ShaderMaterial
 var squid_scale := Vector3.ONE
 var squid_base_y := 0.0      # body origin height that puts its highest point at the water line
 var boat: Node3D
-var boat_pos := Vector3(-15.0, 0.0, -25.0)
+var boat_pos := Vector3(-4.0, 0.0, -2.0)        # where the camera looks: the middle of the frame
 var boat_heading := deg_to_rad(-28.0)        # bow toward the lower right of the screen
 var drift := Vector2.ZERO                    # how far the water has slid past the boat
 
@@ -89,9 +89,10 @@ func _ready() -> void:
 	cam.near = 1.0
 	cam.far = 2000.0
 	add_child(cam)
-	# high and to the south, looking down about 60°: the squid fills the right two thirds, the boat sits top left
+	# high and to the south, looking down about 60°: the squid fills the right two thirds, the boat dead centre
+	# (user 2026-10-27: the squid stays put, the boat moves to the middle of the frame)
 	cam.position = Vector3(-4.0, 52.0, 30.0)
-	cam.look_at(Vector3(-4.0, 0.0, -2.0), Vector3.UP)
+	cam.look_at(boat_pos, Vector3.UP)
 	if dbg.find("cam=") >= 0:
 		var v := dbg.get_slice("cam=", 1).get_slice(";", 0).split_floats(",")
 		if v.size() == 6:
@@ -157,7 +158,12 @@ func _build_squid() -> void:
 	add_child(squid)
 	skel = squid.find_child("Skeleton3D", true, false)
 	var body := squid.find_child("kraken", true, false) as MeshInstance3D
-	squid_base_y = -body.get_aabb().end.y * SQUID_SCALE * SQUID_FLAT
+	# the body's real highest point once squashed and rolled onto its side (rest pose), so depth 0 = touching the surface
+	var top := -INF
+	var pose0 := (Basis(Vector3.UP, SQUID_YAW) * Basis(Vector3.RIGHT, SQUID_ROLL)).scaled_local(squid_scale)
+	for v in body.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+		top = maxf(top, (pose0 * v).y)
+	squid_base_y = -top
 	# wet skin: the GLB's colour/normal/roughness, a little glossier, plus a clear wet film
 	var m := body.mesh.surface_get_material(0) as StandardMaterial3D
 	if m:
