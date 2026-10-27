@@ -88,6 +88,8 @@ var debounce_t := 0.0
 var warp := 0.0
 var warped := false
 var then_state := ""
+var seq := PackedStringArray()
+var seq_t := 0.0
 var dbg := ""
 var t := 0.0
 var poll_t := 0.0
@@ -167,6 +169,7 @@ func _read_args() -> void:
 				"warp": warp = float(kv[1])
 				"dbg": dbg = kv[1]
 				"then": then_state = kv[1]
+				"seq": seq = kv[1].split(",")   # recordings: state:seconds,state:seconds,… played in order
 
 # ---------------------------------------------------------------- scene
 func _build_environment() -> void:
@@ -590,6 +593,13 @@ func _storm(dt: float) -> void:
 func _step(dt: float) -> void:
 	t += dt
 	st_t += dt
+	if seq.size() > 0:
+		seq_t -= dt
+		if seq_t <= 0.0:
+			var kv := seq[0].split(":")
+			seq.remove_at(0)
+			state = kv[0]
+			seq_t = float(kv[1]) if kv.size() > 1 else 10.0
 	if state != pending:
 		pending = state
 		debounce_t = DEBOUNCE
