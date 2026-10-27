@@ -77,6 +77,7 @@ var buf := PackedFloat32Array()
 var cam: Camera3D
 var t := 0.0
 var fish_mat: ShaderMaterial
+var surface: Callable          # (x, z) → the swell's height there (main.gd): depths are under the moving surface
 
 func setup(camera: Camera3D) -> void:
 	cam = camera
@@ -416,7 +417,7 @@ func _draw(dt: float, murk: float) -> void:
 		var o := i * 16
 		# rows of [X Y Z | origin]: X = (hx, 0, hz), Y = (-hz·sr, cr, hx·sr), Z = (-hz·cr, -sr, hx·cr) … ×L
 		buf[o] = hx * L;        buf[o + 1] = -hz * sr * L; buf[o + 2] = -hz * cr * L; buf[o + 3] = f.p.x
-		buf[o + 4] = 0.0;       buf[o + 5] = cr * L;       buf[o + 6] = -sr * L;      buf[o + 7] = -(f.dep + 6.0 * f.rise * f.rise)
+		buf[o + 4] = 0.0;       buf[o + 5] = cr * L;       buf[o + 6] = -sr * L;      buf[o + 7] = (surface.call(f.p) if surface.is_valid() else 0.0) - (f.dep + 6.0 * f.rise * f.rise)
 		buf[o + 8] = hz * L;    buf[o + 9] = hx * sr * L;  buf[o + 10] = hx * cr * L; buf[o + 11] = f.p.y
 		buf[o + 12] = f.tp;     buf[o + 13] = f.flash;     buf[o + 14] = 0.0;         buf[o + 15] = 0.0
 	multimesh.buffer = buf      # one upload instead of two calls per fish

@@ -57,7 +57,8 @@ const DEBOUNCE := 0.3
 const BOAT_LENGTH := 5.0
 const BOAT_DRAFT := 0.25                        # how deep the hull sits
 const PEOPLE_FLOOR := 0.05                      # deck height above the water line, for the two men
-const BOAT_SPEED := 2.2                        # m/s, the water scrolls under a boat that stays put in frame
+const SWELL_N := 10
+const BOAT_SPEED := 2.2                       # m/s, the water scrolls under a boat that stays put in frame
 
 var state := "clear"           # what state.json says
 var cur := ""                  # the state being played
@@ -73,6 +74,10 @@ var prof_acc := 0
 var prof_n := 0
 var dbg := ""
 var then_state := ""
+var seq := PackedStringArray()   # recordings: state:seconds,… played in order
+var seq_t := 0.0
+var shot := ""                   # recordings: a moving camera (god / low / vertigo), timed from the start
+var shot_t := 0.0
 var t := 0.0
 var poll_t := 0.0
 
@@ -109,6 +114,8 @@ var boat: Node3D
 var boat_pos := Vector3(-4.0, 0.0, -2.0)        # where the camera looks: the middle of the frame
 var boat_heading := deg_to_rad(-28.0)        # bow toward the lower right of the screen
 var drift := Vector2.ZERO                    # how far the water has slid past the boat
+var swell_k := 1.0                           # how much of it plays
+var swell := []                              # [{d, k, a, q, w, ph}]: the Gerstner waves, as water.gdshader has them
 
 func _ready() -> void:
 	seed(7)
@@ -135,6 +142,9 @@ func _ready() -> void:
 	fishes = load("res://fish.gd").new()
 	add_child(fishes)
 	fishes.setup(cam)
+	fishes.surface = func(p: Vector2) -> float: return _swell_at(p + drift).x * swell_k
+	if dbg != "":
+		_apply_dbg()      # natively the switches come from the command line (on the web, from the page)
 	_enter(state, true)
 	if then_state != "":
 		state = then_state
@@ -150,6 +160,8 @@ func _read_args() -> void:
 				"warp": warp = float(kv[1])
 				"dbg": dbg = kv[1]
 				"then": then_state = kv[1]    # tests: a second state after the first, as if state.json changed
+				"seq": seq = kv[1].split(",")
+				"shot": shot = kv[1]
 
 # ---------------------------------------------------------------- scene
 func _build_environment() -> void:
@@ -175,14 +187,42 @@ func _build_environment() -> void:
 	sun.look_at_from_position(Vector3.ZERO, Vector3(0.75, -0.42, 0.55), Vector3.UP)
 
 func _build_water() -> void:
+	# the swell from themes/_lib/sea3d (user 2026-10-27: 移植 sea3d 的長浪、陣風和反光): Gerstner waves round the wind,
+	# 48 m down to 3 m, shorter ones steeper; the grid is fine enough for the 3 m ones (1.25 m quads) and stays on the
+	# boat, the waves slide past with the drift
+	var seed_v := [11]                 # sea3d's Lehmer generator, same seed: the same waves (boxed: lambdas copy locals)
+	var rnd := func() -> float:
+		seed_v[0] = (seed_v[0] * 16807) % 2147483647
+		return seed_v[0] / 2147483647.0
+	var wa := PackedVector4Array()
+	var wb := PackedVector4Array()
+	for i in SWELL_N:
+		var f := float(i) / (SWELL_N - 1)
+		var lam: float = 48.0 * pow(3.0 / 48.0, f) * (0.85 + 0.3 * rnd.call())
+		var ang: float = -1.9 + (rnd.call() - 0.5) * 1.6
+		var k := TAU / lam
+		var steep := lerpf(0.05, 0.11, f)
+		var w := {"d": Vector2(cos(ang), sin(ang)), "k": k, "a": steep / k, "q": 0.55, "w": sqrt(9.81 * k), "ph": rnd.call() * 6.283}
+		swell.append(w)
+		wa.append(Vector4(w.d.x, w.d.y, k, w.a))
+		wb.append(Vector4(w.q, w.w, w.ph, 0.0))
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(900, 900)
+	plane.size = Vector2(700, 700)
+	plane.subdivide_width = 560
+	plane.subdivide_depth = 560
 	water_mat = ShaderMaterial.new()
 	water_mat.shader = load("res://water.gdshader")
 	water_mat.set_shader_parameter("sun_dir", -sun.global_transform.basis.z)
 	water_mat.set_shader_parameter("ripple", load("res://textures/ripple.png"))
+	water_mat.set_shader_parameter("wa", wa)
+	water_mat.set_shader_parameter("wb", wb)
+	# sea3d's glint is 0.9 under a 55° camera; looking down 40° from 60 m the Fresnel term is a few per cent, and the
+	# sparkle the user liked went flat — stronger here (mood over optics)
+	water_mat.set_shader_parameter("glint", Vector2(0.0008, 5.0))
 	var mi := MeshInstance3D.new()
 	mi.mesh = plane
+	mi.position = Vector3(boat_pos.x, 0.0, boat_pos.z)
+	mi.extra_cull_margin = 4.0
 	mi.material_override = water_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
@@ -600,6 +640,16 @@ func _drive_pack(dt: float) -> void:
 
 func _step(dt: float) -> void:
 	t += dt
+	if seq.size() > 0:
+		seq_t -= dt
+		if seq_t <= 0.0:
+			var kv := seq[0].split(":")
+			seq.remove_at(0)
+			state = kv[0]
+			seq_t = float(kv[1]) if kv.size() > 1 else 10.0
+	if shot != "":
+		shot_t += dt
+		_shot_cam(shot_t)
 	# a new state from the page settles for DEBOUNCE before it plays
 	if state != cur and state != pending and pending == "":
 		pending = state
@@ -627,11 +677,16 @@ func _step(dt: float) -> void:
 	if squid.visible:
 		_wave_limbs(skel, limbs, 1.0)
 	_drive_pack(dt)
-	# the boat rocks; the sea slides under it
+	# the sea slides under the boat; it rides the swell (a 5 m hull averages the short waves out: their slope halved)
 	var fwd := Vector2(cos(boat_heading), -sin(boat_heading))
 	drift += fwd * BOAT_SPEED * boat_k.v * dt
-	boat.position = boat_pos + Vector3(0, sin(t * 1.3) * 0.06 - 0.12, 0)
-	boat.rotation = Vector3(sin(t * 1.1) * 0.025, boat_heading, sin(t * 0.9 + 1.0) * 0.035)
+	swell_k = 1.0 - 0.5 * smoothstep(14.0, 1.5, squid_depth)   # the swell settles with the calm over the squid
+	var sw := swell_k
+	var wv := _swell_at(Vector2(boat_pos.x, boat_pos.z) + drift)
+	var up := Vector3(-wv.y * 0.5 * sw, 1.0, -wv.z * 0.5 * sw).normalized()
+	boat.position = boat_pos + Vector3(0, wv.x * sw - 0.12, 0)
+	boat.basis = Basis(Quaternion(Vector3.UP, up)) * Basis(Vector3.UP, boat_heading)
+	water_mat.set_shader_parameter("swell", sw)
 	water_mat.set_shader_parameter("time", t)
 	water_mat.set_shader_parameter("drift", drift)
 	water_mat.set_shader_parameter("boat_pos", Vector2(boat_pos.x, boat_pos.z))
@@ -650,3 +705,40 @@ func _step(dt: float) -> void:
 	eye_mat.set_shader_parameter("sun_to", sun.global_transform.basis.z)
 	water_mat.set_shader_parameter("murk", m)
 	water_mat.set_shader_parameter("calm", clar)
+
+# the swell at a point of the (drifting) water: Vector3(height, slope x, slope z), as water.gdshader displaces it
+func _swell_at(q: Vector2) -> Vector3:
+	var r := Vector3.ZERO
+	for w in swell:
+		var th: float = w.k * w.d.dot(q) - w.w * t + w.ph
+		var c: float = w.k * w.a * cos(th)
+		r += Vector3(w.a * sin(th), w.d.x * c, w.d.y * c)
+	return r
+
+# ---------------------------------------------------------------- recording cameras
+# shot=… moves the camera for the storyboard (timed for seq=clear:4,overcast:6,storm:20,waiting:6,clearing:12):
+#   god      straight down from 190 m, sinking to 105 m and turning 25°: the whole squid under a boat the size of a grain
+#   low      5 m off the water beside the boat, drifting round it and closing in: the dark mass rises under the camera
+#   vertigo  a dolly zoom on the boat as the squid comes up (it keeps its size, the sea below stretches), out again at the end
+func _shot_cam(s: float) -> void:
+	match shot:
+		"god":
+			var k := smoothstep(0.0, 48.0, s)
+			var at := Vector3(2.0, 0.0, -8.0)
+			var a := deg_to_rad(25.0) * k
+			cam.fov = 38.0
+			cam.position = at + Vector3(0.0, lerpf(190.0, 105.0, k), 0.0)
+			cam.look_at(at, Vector3(sin(a), 0.0, -cos(a)))
+		"low":
+			var k := smoothstep(0.0, 48.0, s)
+			var az := atan2(18.0, -12.0) - deg_to_rad(28.0) * k
+			var r := lerpf(24.0, 15.0, k)
+			cam.fov = 42.0
+			cam.position = boat_pos + Vector3(cos(az) * r, lerpf(6.0, 3.5, k), sin(az) * r)
+			cam.look_at(Vector3(0.0, -3.0, -10.0).lerp(Vector3(-2.0, -4.0, -7.0), k), Vector3.UP)
+		"vertigo":
+			var u := Vector3(0.0, 39.0, 47.0).normalized()
+			var d := lerpf(120.0, 28.0, smoothstep(10.0, 26.0, s) - smoothstep(37.0, 48.0, s))
+			cam.fov = rad_to_deg(2.0 * atan(21.0 / d))     # the boat keeps the 21 m half-height it has at 61 m and 38°
+			cam.position = boat_pos + u * d
+			cam.look_at(boat_pos, Vector3.UP)
