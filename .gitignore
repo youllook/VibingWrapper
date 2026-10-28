@@ -9,4 +9,5 @@ prototype/vendor/
 godot/*/.godot/
 godot/*/textures/previews/
 themes/crossing/index.*
+themes/sandworm/index.*
 themes/crossing/*.worklet.js
