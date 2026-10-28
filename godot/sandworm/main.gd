@@ -25,7 +25,7 @@ extends Node3D
 # the arch's legs stand at (−22.6, 16.0) and (21.9, −15.8): turn that line square to the view, then stretch it along
 # the line — its own opening is tall and narrow (≈ 28 × 47 m), the target's is wide; the strata run level, so a
 # sideways stretch doesn't show
-@export_range(-3.15, 3.15, 0.01, "radians_as_degrees") var ARCH_YAW := -0.62
+@export_range(-180.0, 180.0, 0.5, "radians_as_degrees") var ARCH_YAW := -0.62
 @export_range(0.5, 4.0, 0.05) var ARCH_STRETCH := 2.1
 # layout (Fable's pass, 2026-10-28): behind the arch so its legs touch the frame's sides and its span the top,
 # horizon a little above the middle
@@ -44,7 +44,7 @@ extends Node3D
 @export_range(-0.3, 0.6, 0.005) var BEND_UP := 0.1
 # up, it stays this deep in the sand: only the upper body comes out, so its head sits inside the frame
 @export_range(0.0, 250.0, 1.0) var UP_SINK := 135.0
-@export_range(-3.15, 3.15, 0.01, "radians_as_degrees") var WORM_YAW := -0.14   # its mouth (local +Z) square to the camera
+@export_range(-180.0, 180.0, 0.5, "radians_as_degrees") var WORM_YAW := -0.14   # its mouth (local +Z) square to the camera
 # rad on each lip bone, + opens
 @export_range(-0.6, 1.2, 0.01) var LIP_CLOSED := -0.15   # down in the sand, and where the storm's peel starts
 @export_range(-0.6, 1.2, 0.01) var LIP_STORM := 0.55     # open in the storm
