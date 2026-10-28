@@ -179,11 +179,9 @@ func _ready() -> void:
 		_gray()
 	if dbg.find("red") >= 0:
 		for p in [plume, burst] + devils:
-			var m := (p as CPUParticles3D).mesh.surface_get_material(0) as StandardMaterial3D
-			m.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-			m.albedo_texture = null
-			m.vertex_color_use_as_albedo = false
-			m.albedo_color = Color(1, 0, 0)
+			var m := (p as CPUParticles3D).mesh.surface_get_material(0) as ShaderMaterial
+			m.set_shader_parameter("tint", Vector3(1, 0, 0))
+			m.set_shader_parameter("alpha_k", 50.0)
 	_enter(state, true)
 	if then_state != "":
 		state = then_state
@@ -415,12 +413,19 @@ func _build_dust() -> void:
 		p.tangential_accel_max = 10.0
 		p.position = Vector3(d.x, ground_at(Vector2(d.x, d.z)), d.z)
 		devils.append(p)
-	# the dust is lit from behind by the low sun and glows; at albedo 1 it sat under the filmic curve while the hazy sky
-	# round it went brighter, so the thick billows at the base read as a dark boulder
+	# the billows take their colour from dust.gdshader, only the fade from the particle colour (the stock material
+	# turned some of them near-black at the worm's base: a dark boulder in the dust)
+	var dust_sh: Shader = load("res://dust.gdshader")
 	for p in [plume, burst, drift] + devils:
-		var m := (p as CPUParticles3D).mesh.surface_get_material(0) as StandardMaterial3D
-		m.albedo_color = Color(DUST_GLOW, DUST_GLOW, DUST_GLOW, 1.0)
-		m.disable_fog = dbg.find("dustfog") < 0
+		var c := (p as CPUParticles3D).color_ramp.get_color(0)
+		var sm := ShaderMaterial.new()
+		sm.shader = dust_sh
+		sm.set_shader_parameter("tex", puff)
+		sm.set_shader_parameter("tint", Vector3(c.r, c.g, c.b))
+		sm.set_shader_parameter("glow", DUST_GLOW)
+		if p == burst:
+			sm.set_shader_parameter("alpha_k", 1.5)   # the wall has to read as a wall
+		((p as CPUParticles3D).mesh as QuadMesh).material = sm
 
 func _particles(tex: Texture2D, n: int, life: float, size: Vector2, col: Color) -> CPUParticles3D:
 	var p := CPUParticles3D.new()
@@ -678,7 +683,7 @@ func _step(dt: float) -> void:
 	plume.position = base
 	plume.emission_ring_radius = WORM_R * 2.4
 	plume.emission_ring_inner_radius = WORM_R * 0.8
-	(plume.mesh.surface_get_material(0) as StandardMaterial3D).albedo_color.a = clampf(0.25 + plume_k.v, 0.0, 1.0)
+	(plume.mesh.surface_get_material(0) as ShaderMaterial).set_shader_parameter("alpha_k", clampf(0.25 + plume_k.v, 0.0, 1.0))
 	# the dust wall goes out for a few seconds at the break-out and at the dive
 	wall_t += dt
 	burst.emitting = wall_t >= 0.0 and wall_t < 2.5
@@ -701,7 +706,7 @@ func _step(dt: float) -> void:
 	bodyfall.position = Vector3(mid_p.x, maxf(mid_p.y, 5.0), mid_p.z)
 	bodyfall.emission_box_extents = Vector3(WORM_R * 0.9, 6.0, WORM_R * 0.9)
 	(bodyfall.mesh.surface_get_material(0) as StandardMaterial3D).albedo_color.a = pour * 0.8
-	(drift.mesh.surface_get_material(0) as StandardMaterial3D).albedo_color.a = clampf(0.3 + wind.v, 0.0, 1.0)
+	(drift.mesh.surface_get_material(0) as ShaderMaterial).set_shader_parameter("alpha_k", clampf(0.3 + wind.v, 0.0, 1.0))
 	for p in devils:
 		(p as CPUParticles3D).emitting = wind.v > 0.55
 
