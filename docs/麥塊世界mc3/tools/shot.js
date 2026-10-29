@@ -9,7 +9,7 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const args = process.argv.slice(process.argv.findIndex(a => a.endsWith('shot.js')) + 1);
 const [url, out, W = '1280', H = '720'] = args;
 const THEMES = path.resolve(__dirname, '../../../themes');
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
 
 const server = http.createServer((req, res) => {
   const rel = decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '');

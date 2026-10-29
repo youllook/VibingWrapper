@@ -9,7 +9,8 @@ import { ATM, makeUniforms, patchMaterial, makeHalos, makeMotes, makeTrail, sync
 import { makeCreeper, setCreeperSkin } from './assets/creeper.js';
 import { makeBridge, makeForeCliff } from './assets/terrain.js';
 import { makeChorus } from './assets/flora.js';
-import { createStates } from './states.js';
+import { createStates, PARAMS } from './states.js';
+import { BG, makeBackdrop } from './lib/backdrop.js';
 
 const q = new URLSearchParams(location.search);
 // ?tex=pp：方塊與苦力怕改用 Pixel Perfection CE 的圖案（CC BY-SA 4.0，textures/pp/），乘上本主題色票
@@ -139,12 +140,18 @@ walkK.forEach(([p, k], i) => {
 }
 
 // 中景、遠景不做 3D（2026-10-29 用戶定：全 3D 很耗資源、效果不明顯）：背景是目標圖的中遠景扣圖合成的
-// textures/backdrop.jpg（docs/麥塊世界mc3/tools/backdrop.py），只有近景＋中近景是 3D
-{ const t = new THREE.TextureLoader().load('textures/backdrop.jpg'); t.colorSpace = THREE.SRGBColorSpace; scene.background = t; }
+// 背景圖（docs/麥塊世界mc3/tools/backdrop.py），只有近景＋中近景是 3D
+// 2026-10-29 背景拆中景／遠景兩片看板（lib/backdrop.js）：鏡頭微晃有視差、吃同一盞主光、跟著狀態變色；?still=1 鏡頭與主光不動（截圖對照用）
+const STILL = !!q.get('still');
+const SWAY = q.get('sway') && q.get('sway').split(',').map(Number);   // ?sway=x,y 把鏡頭固定在某個晃動位移（檢查露邊用）
+const KEYYAW = q.get('keyyaw') == null ? null : +q.get('keyyaw');   // ?keyyaw=度 主光固定轉到某個角度
+if (q.get('bg')) Object.assign(BG, JSON.parse(q.get('bg')));
+const backdrop = makeBackdrop(refCam);
+scene.add(backdrop.group);
 
 // ── 材質（階段 4）：?flat=1 回到灰模固有色
 const LOOK = !q.get('flat') && !q.get('layers') && !q.get('top');
-let U = null, halos = null, motes = null, trail = null;
+let U = null, halos = null, motes = null, trail = null, shadowC = null;
 if (LOOK) {
   const mats = makeMaterials({ pp: PP });
   window.__mats = applyMaterials(scene, mats);
@@ -166,7 +173,7 @@ if (LOOK) {
       Object.assign(sun.shadow.camera, { left: -R, right: R, top: R, bottom: -R, near: 0.1, far: R * 4 });
       sun.shadow.mapSize.set(ENV.shadowMap, ENV.shadowMap); sun.shadow.bias = -0.0002; sun.shadow.normalBias = R * 0.0008; sun.shadow.radius = ENV.shadowSoft || 1;
       sun.shadow.camera.updateProjectionMatrix(); sun.castShadow = true;
-      window.__shadowR = R;
+      window.__shadowR = R; shadowC = c;
       for (const k of ['near', 'midnear']) layers[k].traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     } else sun.position.copy(sd).multiplyScalar(100);
     halos = makeHalos(scene); scene.add(halos);
@@ -214,7 +221,7 @@ if (q.get('layers')) {
     const m = new THREE.MeshBasicMaterial({ color: LAYER_COLORS[k] });   // 不吃光：色調映射與光向不會把顏色偏掉，IoU 才準
     g.traverse(o => { if (o.isMesh) o.material = m; });
   }
-  scene.background = new THREE.Color('#202028');
+  scene.background = new THREE.Color('#202028'); backdrop.group.visible = false;
 }
 if (q.get('ref')) {
   const img = document.getElementById('ref');
@@ -222,7 +229,7 @@ if (q.get('ref')) {
 }
 let view = cam;
 if (q.get('top')) {   // 俯視結構圖：正交相機從上往下，畫出鏡頭位置與視線
-  scene.background = new THREE.Color('#202028');
+  scene.background = new THREE.Color('#202028'); backdrop.group.visible = false;
   const bb = new THREE.Box3(); for (const k of ['near', 'midnear', 'mid']) bb.expandByObject(layers[k]);
   bb.expandByPoint(cam.position);
   const c = bb.getCenter(new THREE.Vector3()), sz = bb.getSize(new THREE.Vector3()), asp = innerWidth / innerHeight;
@@ -275,6 +282,33 @@ tickers.push((dt, t) => {
     trail.material.uniforms.uScale.value = sc; trail.update(t, trailOn);
   }
 });
+// 鏡頭微晃（視差）＋主光慢慢左右擺（前景影子、背景亮面一起轉）＋狀態色調；主光倍率與色偏也乘到前景的燈上
+{
+  const key0 = new THREE.Vector3(...(ENV.keyDir || ATM.sunDir)).normalize(), key = key0.clone(), up = V(0, 1, 0);
+  const view = (d, c) => d.clone().transformDirection(c.matrixWorldInverse);
+  const keyView0 = view(key0, refCam), hemi0 = hemi.color.clone(), fill0 = fill.intensity;
+  let swayK = 1; const camOff = V(0, 0, 0);
+  tickers.push((dt, t) => {
+    const s = STILL ? 0 : 1;
+    const cur = backdrop.update({ dt, t, keyView: view(key, cam), keyView0, state: states.state, flash: waitFlash(), camOff: camOff.set(cam.position.x, cam.position.y - CAM.h, 0) });
+    swayK = cur.sway;
+    const w = 2 * Math.PI;
+    if (SWAY) cam.position.set(SWAY[0], CAM.h + SWAY[1], 0); else cam.position.set(s * swayK * BG.sway[0] * Math.sin(t * w * BG.swayHz[0]), CAM.h + s * swayK * BG.sway[1] * Math.sin(t * w * BG.swayHz[1] + 1.3), 0);
+    cam.updateMatrixWorld();
+    key.copy(key0).applyAxisAngle(up, KEYYAW != null ? THREE.MathUtils.degToRad(KEYYAW) : s * THREE.MathUtils.degToRad(BG.keySway) * Math.sin(t * w * BG.keyHz));
+    if (shadowC) { sun.position.copy(shadowC).addScaledVector(key, window.__shadowR * 2); sun.target.position.copy(shadowC); sun.target.updateMatrixWorld(); }
+    else sun.position.copy(key).multiplyScalar(100);
+    sun.intensity = ENV.sunI * cur.key; fill.intensity = fill0 * (0.6 + 0.4 * cur.key);
+    hemi.color.copy(hemi0).multiply(new THREE.Color(...cur.grade));
+  });
+  // 等你：和主角閃白同一個節拍（states.js 的 flashPeriod）
+  function waitFlash() {
+    if (states.state !== 'waiting') return 0;
+    const ph = (states.tState / PARAMS.flashPeriod) % 1, f = ph < 0.5 ? Math.sin(ph / 0.5 * Math.PI) : 0;
+    return f * f;
+  }
+}
+window.theme.backdrop = backdrop; window.theme.BG = BG;
 window.theme.ATM = ATM; window.theme.syncAtm = () => U && syncUniforms(U, ATM);
 renderer.setAnimationLoop(now => {
   if (paused || document.hidden) { clock.last = now; return; }
