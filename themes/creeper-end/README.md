@@ -1,0 +1,35 @@
+# 麥塊世界・末地（creeper-end）
+
+末地浮島上，一隊苦力怕過窄橋，近處那隻回頭望你。Three.js 體素場景（`vendor/three.module.min.js`）。
+製作過程與對照圖在 `docs/麥塊世界mc3/`（01 拆景 → 05 燈光特效氛圍）。
+
+## 狀態（`states.js`）
+
+| state.json | 演出 | 按鍵 |
+|---|---|---|
+| sessions 全空 | 不在：全隊靜止，主角看正前方 | 0 |
+| clear | 待命：站定、輕晃，主角回望鏡頭 | 1 |
+| overcast | 思考：主角轉頭，綠光由近到遠接力 | 2 |
+| storm | 執行：隊伍原地踏步 | 3 |
+| clearing | 收尾：由近到遠依序停步 | 4 |
+| waiting | 等你：主角回望、柔和閃白 | 5 |
+
+## 網址參數
+
+| 參數 | 作用 |
+|---|---|
+| `?state=<名稱>` | 固定某個狀態（六態名或 state.json 的值） |
+| `?full=1` | 全解析度（預設半解析度） |
+| `?noatm=1` / `?atm={…}` | 關掉／臨時調整霧與光（`lib/atmosphere.js` 的 `ATM`） |
+| `?env={…}` | 臨時調整環境光（`scene.js` 的 `ENV`） |
+| `?tex=pp` | 方塊與苦力怕改用 Pixel Perfection CE 圖案（見下） |
+| `?flat=1` / `?layers=1` / `?top=1` / `?ref=ref-mc3.png&a=0.5` | 製作用：灰模、分層上色、俯視結構圖、疊目標圖 |
+| `?tune={…}` / `?cam=…` | 製作用：臨時覆寫擺位 `LAYOUT`、鏡頭 |
+
+測試介面：`window.theme`（`states`、`actors`、`ATM`、`syncAtm()`、`LAYOUT`、`ENV`）。
+
+## 授權
+
+- 程式與自畫貼圖：本 repo 授權。
+- `textures/pp/`（只在 `?tex=pp` 時載入）：Textures based on Pixel Perfection CE by XSSheep and contributors, CC BY-SA 4.0 — https://github.com/Athemis/PixelPerfectionCE
+- `ref-mc3.png`：製作用目標圖（Codex 生成），發布前移除。

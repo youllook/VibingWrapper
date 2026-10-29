@@ -2,6 +2,7 @@
 // 用法（在 repo 根目錄）：npx electron "docs/麥塊世界mc3/tools/shot.js" "<themes 底下的網址>" <out.png> [寬 高]
 // 例：npx electron "docs/麥塊世界mc3/tools/shot.js" "creeper-end/assets.html?m=creeper" E:/tmp/a.png 1280 720
 // 頁面設 window.__ready = true 就拍；20 秒沒好也拍。頁面的 console 錯誤會印出來。
+// 環境變數 PERF=1：另外量平均每格毫秒（需要 window.theme.renderer、render）。
 const { app, BrowserWindow } = require('electron');
 const http = require('http'), fs = require('fs'), path = require('path');
 
@@ -29,6 +30,11 @@ app.whenReady().then(async () => {
   await new Promise(r => setTimeout(r, 300));
   const info = await win.webContents.executeJavaScript('JSON.stringify(window.theme ? { tris: window.theme.tris, calls: window.theme.calls } : null)').catch(() => null);
   if (info && info !== 'null') console.log('theme', info);
+  if (process.env.PERF) {   // PERF=1：連畫 60 格、每格 gl.finish()，印平均毫秒（含 CPU 送指令＋GPU 完成）
+    const ms = await win.webContents.executeJavaScript(`(() => { const r = window.theme.renderer, gl = r.getContext(); window.theme.render(); gl.finish();
+      const t0 = performance.now(); for (let i = 0; i < 60; i++) { window.theme.render(); gl.finish(); } return (performance.now() - t0) / 60; })()`).catch(e => 'err ' + e);
+    console.log('perf ms/frame', typeof ms === 'number' ? ms.toFixed(2) : ms);
+  }
   const img = await win.webContents.capturePage();
   fs.writeFileSync(out, img.toPNG());
   console.log('saved', out, Date.now() - t0, 'ms');

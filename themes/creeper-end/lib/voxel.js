@@ -81,3 +81,45 @@ export function rng(seed = 1) {
   let s = seed >>> 0 || 1;
   return () => ((s = Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 0x9e3779b9 >>> 0) / 4294967296);
 }
+
+// 把 root 底下所有靜態 merged mesh（非 instanced）依 userData.slot 合併成一個 mesh 一個 slot，座標烘成 root 局部。
+// 回傳新的 Group（原 root 不動）。一座島＋上面幾十株植物 → 4–5 個 draw call。
+export function mergeBySlot(root) {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert(), M = new THREE.Matrix4(), N = new THREE.Matrix3();
+  const bins = new Map(), keep = [];
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.isInstancedMesh || !o.geometry.index || !o.geometry.attributes.color) { keep.push(o); return; }
+    const s = o.userData.slot || 'default';
+    if (!bins.has(s)) bins.set(s, []);
+    bins.get(s).push(o);
+  });
+  const out = new THREE.Group();
+  for (const [slot, list] of bins) {
+    const pos = [], nor = [], col = [], uv = [], idx = [];
+    const p = new THREE.Vector3(), n = new THREE.Vector3();
+    for (const o of list) {
+      M.multiplyMatrices(inv, o.matrixWorld); N.getNormalMatrix(M);
+      const g = o.geometry, P = g.attributes.position, Nn = g.attributes.normal, C = g.attributes.color, U = g.attributes.uv, base = pos.length / 3;
+      for (let i = 0; i < P.count; i++) {
+        p.fromBufferAttribute(P, i).applyMatrix4(M); pos.push(p.x, p.y, p.z);
+        n.fromBufferAttribute(Nn, i).applyMatrix3(N).normalize(); nor.push(n.x, n.y, n.z);
+        col.push(C.getX(i), C.getY(i), C.getZ(i)); uv.push(U.getX(i), U.getY(i));
+      }
+      const I = g.index.array; for (let i = 0; i < I.length; i++) idx.push(I[i] + base);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
+    g.computeBoundingSphere();
+    const m = new THREE.Mesh(g, list[0].material);
+    m.userData = { slot, tris: idx.length / 3 };
+    out.add(m);
+  }
+  for (const o of keep) { const c = o.clone(); M.multiplyMatrices(inv, o.matrixWorld); c.matrix.copy(M); c.matrix.decompose(c.position, c.quaternion, c.scale); out.add(c); }
+  return out;
+}

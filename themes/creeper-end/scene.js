@@ -2,13 +2,15 @@
 // 對位工具：?ref=ref-mc3.png&a=0.5 疊目標圖；?layers=1 依景上色（對 01-分層標註.png）；?top=1 俯視結構圖；
 // ?cam=x,y,z,tx,ty,tz,fov 臨時改鏡頭。
 import * as THREE from './vendor/three.module.min.js';
-import { countTris } from './lib/voxel.js';
+import { countTris, mergeBySlot } from './lib/voxel.js';
 import { applyMaterials, makeMaterials } from './lib/materials.js';
 import { loadPP } from './lib/textures.js';
+import { ATM, makeUniforms, patchMaterial, makeSky, makeHalos, makeMotes, syncUniforms } from './lib/atmosphere.js';
 import { makeCreeper, setCreeperSkin } from './assets/creeper.js';
 import { makeIsland, makeBridge, makeForeCliff } from './assets/terrain.js';
 import { makeChorus, makePillar, scatter } from './assets/flora.js';
 import { makeFarField, makeVoid } from './assets/far.js';
+import { createStates } from './states.js';
 
 const q = new URLSearchParams(location.search);
 // ?tex=pp：方塊與苦力怕改用 Pixel Perfection CE 的圖案（CC BY-SA 4.0，textures/pp/），乘上本主題色票
@@ -113,7 +115,9 @@ function islandAt(spec, seed, opts, density) {
   }
   const p = onPlane(...spec.px, spec.y), k = spec.halfW / pxPerUnit(p) / isl.userData.radius;
   if (density) plant(isl, seed * 3, density);
-  return at(isl, p, seed, k);
+  const merged = mergeBySlot(isl);   // 島＋柱＋植物合成每個材質一個 mesh（draw call 從幾十降到 4–5）
+  merged.userData = isl.userData;
+  return at(merged, p, seed, k);
 }
 
 // 近景：平台＋主角＋大株紫頌（平台和主角同一個縮放，方塊格對得上）
@@ -148,9 +152,11 @@ const bridgeK = walkK.reduce((s, w) => s + w[1], 0) / walkK.length;
 const bp = LAYOUT.bridge.map(([x, y]) => onPlane(x, y + LAYOUT.bridgeDy, LAYOUT.bridgeY)), b0 = bp[0];
 const bridge = makeBridge({ seed: 3, width: LAYOUT.bridgeW, gap: 1, hang: LAYOUT.bridgeHang, depth: LAYOUT.bridgeDepth, points: bp.map(p => [(p.x - b0.x) / bridgeK, (p.z - b0.z) / bridgeK]) });
 layers.midnear.add(at(bridge, b0, 0, bridgeK));
+const walkers = [];
 walkK.forEach(([p, k], i) => {
   const n = bp[Math.min(bp.length - 1, i + 2)];
-  layers.midnear.add(at(makeCreeper({ seed: 20 + i, pose: 'walk' }), p, Math.atan2(n.x - p.x, n.z - p.z), k));
+  const w = at(makeCreeper({ seed: 20 + i, pose: 'walk' }), p, Math.atan2(n.x - p.x, n.z - p.z), k);
+  walkers.push(w); layers.midnear.add(w);
 });
 layers.mid.add(islandAt(LAYOUT.islandSmall, 4, { radius: 5, terraces: 2, depth: 14 }));
 
@@ -166,12 +172,31 @@ const voidBg = makeVoid();
 scene.add(voidBg);
 
 // ── 材質（階段 4）：?flat=1 回到灰模固有色
-if (!q.get('flat') && !q.get('layers')) window.__mats = applyMaterials(scene, makeMaterials({ pp: PP }));
+const LOOK = !q.get('flat') && !q.get('layers') && !q.get('top');
+let U = null, halos = null, motes = null;
+if (LOOK) {
+  const mats = makeMaterials({ pp: PP });
+  window.__mats = applyMaterials(scene, mats);
+  // ── 氛圍（階段 5）：?atm={…} 臨時覆寫 ATM；?noatm=1 關掉看階段 4 ──
+  if (!q.get('noatm')) {
+    if (q.get('atm')) Object.assign(ATM, JSON.parse(q.get('atm')));
+    U = makeUniforms(ATM);
+    for (const [slot, m] of Object.entries(mats)) patchMaterial(m, U, { under: slot === 'endstone' });
+    voidBg.visible = false;
+    scene.add(makeSky(U));
+    // 背光：太陽在畫面右上後方，給朝右、朝後的面一道金邊（目標圖橋與台地上緣的金光）
+    const rim = new THREE.DirectionalLight(ATM.sunCol, ENV.rimI ?? 1.6);
+    rim.position.set(ATM.sunDir[0] * 10, ATM.sunDir[1] * 10 + 2, ATM.sunDir[2] * 10);
+    scene.add(rim);
+    halos = makeHalos(scene); scene.add(halos);
+    motes = makeMotes(cam); scene.add(motes);
+  }
+}
 
 // ── 對位工具 ──────────────────────────────────────────────────────────
 if (q.get('layers')) {
   for (const [k, g] of Object.entries(layers)) {
-    const m = new THREE.MeshLambertMaterial({ color: LAYER_COLORS[k] });
+    const m = new THREE.MeshBasicMaterial({ color: LAYER_COLORS[k] });   // 不吃光：色調映射與光向不會把顏色偏掉，IoU 才準
     g.traverse(o => { if (o.isMesh) o.material = m; });
   }
   voidBg.visible = false;
@@ -198,9 +223,34 @@ if (q.get('top')) {   // 俯視結構圖：正交相機從上往下，畫出鏡�
 
 let tris = 0;
 scene.traverse(o => { if (o.userData && o.userData.tris) tris += o.userData.tris; });
-window.theme = { scene, cam, layers, LAYOUT, CAM, ENV, hemi, sun, setCam, tris, render: () => renderer.render(scene, view) };
+window.theme = { scene, cam, layers, LAYOUT, CAM, ENV, hemi, sun, setCam, tris, renderer, render: () => renderer.render(scene, view) };
 
-addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); cam.aspect = innerWidth / innerHeight; setCam(CAM); });
-renderer.setAnimationLoop(() => renderer.render(scene, view));
-requestAnimationFrame(() => requestAnimationFrame(() => { window.theme.calls = renderer.info.render.calls; window.__ready = true; }));
+addEventListener('resize', () => { renderer.setPixelRatio(RES); renderer.setSize(innerWidth, innerHeight); cam.aspect = innerWidth / innerHeight; setCam(CAM); });
+// ── 渲染迴圈：30 fps 上限、半解析度（?full=1 全解析，截圖對照用）、wpPause／分頁隱藏時停 ──
+const RES = q.get('full') || q.get('ref') || q.get('layers') || q.get('top') ? 1 : 0.5;
+renderer.setPixelRatio(RES); renderer.setSize(innerWidth, innerHeight);
+const clock = { t: 0, last: performance.now(), acc: 0, frames: 0 };
+let paused = false;
+window.wpPause = on => { paused = !!on; };
+const tickers = [];   // (dt, t) => void；動畫、特效掛這裡
+window.theme.tickers = tickers;
+// 狀態機（states.js）：讀 state.json、驅動苦力怕動作；?state=<名稱> 固定某個狀態
+const states = createStates({ hero, walkers, scene, q });
+window.theme.states = states; window.theme.actors = { hero, walkers };
+tickers.push((dt, t) => states.update(dt, t));
+// 光暈與粒子：時間、點大小換算（gl_PointSize = 世界大小 × uScale ÷ 深度）
+tickers.push((dt, t) => {
+  const sc = renderer.getDrawingBufferSize(new THREE.Vector2()).y / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2));
+  for (const o of [halos, motes]) if (o) { o.material.uniforms.uT.value = t; o.material.uniforms.uScale.value = sc; }
+});
+window.theme.ATM = ATM; window.theme.syncAtm = () => U && syncUniforms(U, ATM);
+renderer.setAnimationLoop(now => {
+  if (paused || document.hidden) { clock.last = now; return; }
+  const dt = Math.min(0.1, (now - clock.last) / 1000); clock.last = now;
+  clock.acc += dt; if (clock.acc < 1 / 30 - 0.002) return;
+  const step = clock.acc; clock.acc = 0; clock.t += step;
+  for (const f of tickers) f(step, clock.t);
+  renderer.render(scene, view);
+  if (!window.__ready && ++clock.frames > 1) { window.theme.calls = renderer.info.render.calls; window.__ready = true; }
+});
 console.log('tris', tris, 'calls', renderer.info.render.calls, 'countTris', countTris(scene));
