@@ -63,12 +63,42 @@ export function creeperCrowd(parent, spots, seed = 5) {
     tint.setRGB(0.86 + r * 0.22, 0.9 + r * 0.16, 0.86 + r * 0.2);
     for (const [m, k] of [[torso, 1], [heads, 1], [legs, 4]]) for (let j = 0; j < k; j++) m.setColorAt(i * k + j, tint);
     s.ph = r * 10; s.ph2 = Math.cos(i * 37.1) * 5;                          // idle phases
+    // idle moves (clear): eased [from, to, t0, duration] for a body turn, a step along x (near ones), a head look
+    s.idle = { next: 2 + r * 6, yaw: [0, 0, 0, 1], off: [0, 0, 0, 1], hy: [0, 0, 0, 1], hx: [0, 0, 0, 1], back: 0, step: 0 };
   });
 
   const M = new THREE.Matrix4(), R = new THREE.Matrix4(), B = new THREE.Matrix4(), Hd = new THREE.Matrix4(), T = new THREE.Matrix4();
   const S = new THREE.Matrix4(), E = new THREE.Euler(), Q = new THREE.Quaternion(), P = new THREE.Vector3(), V = new THREE.Vector3(1, 1, 1);
   const HIDE = new THREE.Matrix4().makeScale(0, 0, 0);
   const LEGS = [[-2, 4], [2, 4], [-2, -4], [2, -4]];
+  const ev = (o, t) => o[0] + (o[1] - o[0]) * ss(0, 1, (t - o[2]) / o[3]);
+  const go = (o, t, b, d, delay = 0) => { o[0] = ev(o, t); o[1] = b; o[2] = t + delay; o[3] = d; };
+  // idle (clear): each creeper on its own clock turns its head to look about, shifts round on the spot, and the near
+  // ones now and then pace a short step along the deck and turn back to the window
+  function idle(s, t, roam) {
+    const d = s.idle;
+    if (roam < 0.5) {                                                        // other states: settle back
+      if (d.back >= 0) { for (const k of ['yaw', 'off', 'hy', 'hx']) go(d[k], t, 0, 0.8); d.back = -1; d.step = t + 0.8; }
+      return;
+    }
+    if (d.back < 0) { d.back = 0; d.next = t + 1 + Math.random() * 4; }
+    if (d.back > 0 && t > d.back) { go(d.yaw, t, (Math.random() - 0.5) * 0.3, 0.6); d.back = 0; d.step = t + 0.6; }
+    if (t < d.next) return;
+    const k = Math.random();
+    if (s.near && k < 0.3) {                                                 // pace: side-on, a step along x, then back
+      let x; do x = (Math.random() * 2 - 1) * 0.3; while (Math.abs(x - d.off[1]) < 0.15);
+      const dir = Math.sign(x - d.off[1]), dur = Math.abs(x - d.off[1]) / 0.5 + 0.3;
+      go(d.hy, t, 0, 0.5); go(d.yaw, t, -dir * 1.3, 0.5); go(d.off, t, x, dur, 0.4);
+      d.back = t + 0.4 + dur; d.step = d.back; d.next = d.back + 2 + Math.random() * 4;
+    } else if (k < 0.5) {                                                    // shift round on the spot
+      go(d.yaw, t, (Math.random() - 0.5) * (s.near ? 0.8 : 1.2), 0.7); d.step = t + 0.7;
+      d.next = t + 2 + Math.random() * 5;
+    } else {                                                                 // look about
+      const y = Math.random() < 0.25 ? 0 : (Math.random() * 2 - 1) * 0.8;
+      go(d.hy, t, y, 0.5 + Math.random() * 0.6); go(d.hx, t, y ? -0.06 + Math.random() * 0.18 : 0, 0.7);
+      d.next = t + 1.5 + Math.random() * 4.5;
+    }
+  }
 
   // t: seconds since the crowd was called out (counts down when sent away); cam: camera position in layout space;
   // pose: { tilt, lean, look, fuse } 0..1 eased by the theme; simT: time; groundAt(x, z): ground height
@@ -81,13 +111,15 @@ export function creeperCrowd(parent, spots, seed = 5) {
         return;
       }
       const moving = p > 0 && p < 1;
-      P.set(s.start[0] + (s.pos[0] - s.start[0]) * p, 0, s.start[2] + (s.pos[2] - s.start[2]) * p);
+      if (!moving) idle(s, simT, pose.roam || 0);
+      const off = moving ? 0 : ev(s.idle.off, simT), stepping = !moving && simT < s.idle.step;
+      P.set(s.start[0] + (s.pos[0] - s.start[0]) * p + off, 0, s.start[2] + (s.pos[2] - s.start[2]) * p);
       P.y = moving ? groundAt(P.x, P.z) : s.pos[1];
       // facing: along the run while running, then round to the window
       const runYaw = Math.atan2(s.pos[0] - s.start[0], s.pos[2] - s.start[2]);
       const lookYaw = Math.atan2(cam.x - s.pos[0], cam.z - s.pos[2]);
       let dy = lookYaw - runYaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-      const yaw = runYaw + dy * ss(0.85, 1, p);
+      const yaw = runYaw + dy * ss(0.85, 1, p) + (moving ? 0 : ev(s.idle.yaw, simT));
       const hop = moving ? Math.abs(Math.sin(simT * 14 + s.ph)) * 0.06 * s.scale : 0;
       M.compose(P.setY(P.y + hop), Q.setFromEuler(E.set(0, yaw, 0)), V.setScalar(s.scale));
       // torso: pivots at the hips; leans towards the glass while Claude runs tools (the near ones more)
@@ -98,11 +130,11 @@ export function creeperCrowd(parent, spots, seed = 5) {
       // head: tilts (thinking: each at its own pace), turns to the camera (waiting)
       const tilt = pose.tilt * Math.sin(simT * 0.6 + s.ph) * 0.25 + Math.sin(simT * 0.37 + s.ph2) * 0.03;
       let toCam = lookYaw - yaw; toCam = Math.atan2(Math.sin(toCam), Math.cos(toCam));
-      const turn = pose.look * toCam * 0.85 + (1 - pose.look) * Math.sin(simT * 0.21 + s.ph) * 0.12;
-      Hd.copy(B).multiply(T.makeTranslation(0, 12 * PX, 0)).multiply(R.makeRotationFromEuler(E.set(-pose.look * 0.08, turn, tilt, 'YXZ')));
+      const turn = pose.look * toCam * 0.85 + (1 - pose.look) * (Math.sin(simT * 0.21 + s.ph) * 0.12 + ev(s.idle.hy, simT));
+      Hd.copy(B).multiply(T.makeTranslation(0, 12 * PX, 0)).multiply(R.makeRotationFromEuler(E.set(-pose.look * 0.08 + ev(s.idle.hx, simT), turn, tilt, 'YXZ')));
       heads.setMatrixAt(i, Hd.multiply(T.makeTranslation(0, 4 * PX, 0)));
       // legs: diagonal pairs swing while running
-      const sw = moving ? Math.sin(simT * 14 + s.ph) * 0.7 : 0;
+      const sw = moving ? Math.sin(simT * 14 + s.ph) * 0.7 : stepping ? Math.sin(simT * 8 + s.ph) * 0.4 : 0;
       LEGS.forEach(([lx, lz], j) => {
         S.copy(M).multiply(T.makeTranslation(lx * PX, 6 * PX, lz * PX)).multiply(R.makeRotationX((j === 0 || j === 3) ? sw : -sw));
         legs.setMatrixAt(i * 4 + j, S.multiply(T.makeTranslation(0, -3 * PX, 0)));

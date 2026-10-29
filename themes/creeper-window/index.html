@@ -408,7 +408,10 @@ const act = {                                    // the creeper's performance, a
   here: new Tw(0),                               // 0 away … 1 at the window (walks)
   tilt: new Tw(0), lean: new Tw(0), look: new Tw(0), fuse: new Tw(0), breath: new Tw(1), flare: new Tw(0),
   ctilt: new Tw(0),                              // the crowd's head-tilting (thinking), each at its own pace
+  roam: new Tw(0),                               // idle (clear): now and then pacing a step or looking about
+  paceX: new Tw(0), paceYaw: new Tw(0), lookY: new Tw(0), lookX: new Tw(0),   // the main creeper's idle moves
 };
+let idleT = 3, paceBack = 0;
 let walkFrom = 0, walking = 0, nextBolt = 8, bolt = 0, tiltT = 0;
 function enter(name) {
   const prev = stateName; if (name === prev) return;
@@ -424,6 +427,9 @@ function enter(name) {
   act.breath.to(name === 'clear' || name === 'none' ? 1 : 0.5, 2);
   if (name !== 'overcast') act.tilt.to(0, 1.2); else tiltT = 0;
   act.ctilt.to(name === 'overcast' ? 1 : 0, 1.5);
+  act.roam.to(name === 'clear' ? 1 : 0, 1.5);
+  if (name !== 'clear') { act.paceX.to(0, 1.2); act.paceYaw.to(0, 0.8); act.lookY.to(0, 0.8); act.lookX.to(0, 0.8); paceBack = 0; }
+  else idleT = 2 + Math.random() * 3;
   if (name === 'clearing') { act.flare.set(0).to(1, 0.6); setTimeout(() => act.flare.to(0, 3), 900); }
   if (name === 'storm') nextBolt = 4 + Math.random() * 6;
 }
@@ -468,17 +474,37 @@ function update(dt) {
   crowdGlow.setRGB(0.001, 0.004, 0.0012).multiplyScalar(tod.night);   // barely: they read by the light on them, not their own
   for (const m of crowd.materials) m.emissive.copy(crowdGlow);
   crowd.update({ t: crowdT, cam: camLayout, simT, groundAt,
-    pose: { tilt: act.ctilt.v, lean: act.lean.v, look: act.look.v, fuse: act.fuse.v } });
+    pose: { tilt: act.ctilt.v, lean: act.lean.v, look: act.look.v, fuse: act.fuse.v, roam: act.roam.v } });
 
   // walk in / out along the porch; legs swing while it moves
   const h = act.here.v;
   cr.position.lerpVectors(CREEP_AWAY, CREEP_HOME, h);
+  cr.position.x += act.paceX.v;
   cr.visible = h > 0.001;
   const moving = Math.abs(act.here.b - h) > 0.002 && act.here.d && simT - act.here.t0 < act.here.d;
-  walking += ((moving ? 1 : 0) - walking) * Math.min(1, dt * 4);
+  // idle (clear, at the window): at odd moments it paces a step or two along the porch (turns side-on, walks, turns
+  // back to the glass), or turns its head to look about: up the porch, out over the lake, back in
+  if (stateName === 'clear' && h > 0.99) {
+    if (paceBack && simT > paceBack) { act.paceYaw.to(0, 0.6); paceBack = 0; }
+    if ((idleT -= dt) <= 0) {
+      if (Math.random() < 0.35) {
+        let x; do x = (Math.random() * 2 - 1) * 0.55; while (Math.abs(x - act.paceX.b) < 0.25);
+        const dir = Math.sign(x - act.paceX.b), d = Math.abs(x - act.paceX.b) / 0.6 + 0.3;
+        act.lookY.to(0, 0.5); act.lookX.to(0, 0.5);
+        act.paceYaw.to(-dir * 1.3, 0.5); act.paceX.to(x, d, 0.4);
+        paceBack = simT + 0.4 + d; idleT = 0.4 + d + 2 + Math.random() * 3;
+      } else {
+        let y = 0; if (Math.random() > 0.25) do y = (Math.random() * 2 - 1) * 0.8; while (Math.abs(y - act.lookY.b) < 0.3);
+        act.lookY.to(y, 0.5 + Math.random() * 0.6); act.lookX.to(y ? -0.06 + Math.random() * 0.18 : 0, 0.7);
+        idleT = 1.5 + Math.random() * 4;
+      }
+    }
+  }
+  const pacing = Math.abs(act.paceX.b - act.paceX.v) > 0.01 && simT > act.paceX.t0;
+  walking += ((moving || pacing ? 1 : 0) - walking) * Math.min(1, dt * 4);
   const sw = Math.sin(simT * 7) * 0.5 * walking;
   CU.legs[0].rotation.x = sw; CU.legs[3].rotation.x = sw; CU.legs[1].rotation.x = -sw; CU.legs[2].rotation.x = -sw;
-  cr.rotation.y = Math.PI + (moving ? (act.here.b > h ? 1 : -1) * 0.9 * walking : 0);    // side-on while walking
+  cr.rotation.y = Math.PI + (moving ? (act.here.b > h ? 1 : -1) * 0.9 * walking : 0) + act.paceYaw.v;    // side-on while walking
   // thinking: the head goes over to one side, holds, comes back, the other side
   if (stateName === 'overcast') {
     tiltT -= dt;
@@ -490,8 +516,8 @@ function update(dt) {
   // waiting: the head turns to the camera
   V2.copy(cam.position); world.root.worldToLocal(V2); V2.sub(cr.position);
   const yawToCam = Math.atan2(V2.x, V2.z) - cr.rotation.y;
-  CU.head.rotation.y = act.look.v * Math.atan2(Math.sin(yawToCam), Math.cos(yawToCam)) * 0.85;
-  CU.head.rotation.x = -act.look.v * 0.08;
+  CU.head.rotation.y = act.look.v * Math.atan2(Math.sin(yawToCam), Math.cos(yawToCam)) * 0.85 + act.lookY.v;
+  CU.head.rotation.x = -act.look.v * 0.08 + act.lookX.v;
   // the fuse: swell and flash white on a ~1.6 s beat while waiting — it never goes off
   const beat = Math.pow(Math.max(0, Math.sin(simT * Math.PI / 0.8)), 6);
   const flash = act.fuse.v * beat;
