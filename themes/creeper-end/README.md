@@ -1,6 +1,6 @@
 # 麥塊世界・末地（creeper-end）
 
-末地浮島上，一隊苦力怕過窄橋，近處那隻回頭望你。Three.js 體素場景（`vendor/three.module.min.js`）。
+末地浮島上，一隊苦力怕過窄橋，近處那隻回頭望你。Three.js 體素場景（`vendor/three.module.min.js`）：只有近景（平台、主角、紫頌）與中近景（橋＋六隻）是 3D，中景遠景是背景圖 `textures/backdrop.jpg`（`docs/麥塊世界mc3/tools/backdrop.py` 從 Codex 扣圖合成）。
 製作過程與對照圖在 `docs/麥塊世界mc3/`（01 拆景 → 05 燈光特效氛圍）。
 
 ## 狀態（`states.js`）
@@ -20,7 +20,6 @@
 |---|---|
 | `?state=<名稱>` | 固定某個狀態（六態名或 state.json 的值） |
 | `?full=1` | 全解析度（預設半解析度） |
-| `?bg=0` | 全 3D（預設是前景 3D＋中遠景貼圖 `textures/backdrop.jpg`，由 `docs/麥塊世界mc3/tools/backdrop.py` 從 Codex 扣圖合成） |
 | `?noatm=1` / `?atm={…}` | 關掉／臨時調整霧與光（`lib/atmosphere.js` 的 `ATM`） |
 | `?env={…}` | 臨時調整環境光（`scene.js` 的 `ENV`） |
 | `?tex=pp` | 方塊與苦力怕改用 Pixel Perfection CE 圖案（見下） |

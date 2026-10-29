@@ -2,14 +2,13 @@
 // 對位工具：?ref=ref-mc3.png&a=0.5 疊目標圖；?layers=1 依景上色（對 01-分層標註.png）；?top=1 俯視結構圖；
 // ?cam=x,y,z,tx,ty,tz,fov 臨時改鏡頭。
 import * as THREE from './vendor/three.module.min.js';
-import { countTris, mergeBySlot } from './lib/voxel.js';
+import { countTris } from './lib/voxel.js';
 import { applyMaterials, makeMaterials } from './lib/materials.js';
 import { loadPP } from './lib/textures.js';
-import { ATM, makeUniforms, patchMaterial, makeSky, makeHalos, makeMotes, makeTrail, syncUniforms } from './lib/atmosphere.js';
+import { ATM, makeUniforms, patchMaterial, makeHalos, makeMotes, makeTrail, syncUniforms } from './lib/atmosphere.js';
 import { makeCreeper, setCreeperSkin } from './assets/creeper.js';
-import { makeIsland, makeBridge, makeForeCliff } from './assets/terrain.js';
-import { makeChorus, makePillar, scatter } from './assets/flora.js';
-import { makeFarField, makeVoid } from './assets/far.js';
+import { makeBridge, makeForeCliff } from './assets/terrain.js';
+import { makeChorus } from './assets/flora.js';
 import { createStates } from './states.js';
 
 const q = new URLSearchParams(location.search);
@@ -34,17 +33,6 @@ const LAYOUT = {
   bridgeY: -3, bridgeDy: 0, bridgeW: 3, bridgeHang: 0, bridgeDepth: 1,
   bridge: [[420, 625], [470, 600], [560, 545], [660, 480], [760, 430], [830, 395], [880, 340], [960, 300], [1050, 290]],
   walkers: [[525, 585, 500], [603, 512, 435], [722, 455, 392], [826, 418, 358], [886, 338, 287], [977, 305, 255]],
-  islandSmall: { px: [1150, 318], y: -3, halfW: 80 },
-  islandBig: { px: [420, 210], y: -40, halfW: 330, depth: 24, pillars: 4, pillarH: [9, 6], plantH: 0.35, squash: 0.5, jag: 0.9 },   // 階段 6：柱、紫頌縮小，露出台地
-  islandsMid: [{ px: [820, 185], y: -90, halfW: 160, pillars: 3 }, { px: [90, 150], y: -90, halfW: 170, pillars: 2 }],   // 上方中央那座（Codex 判中景）
-  islandsLower: [   // 中景下層：下方中央大塊、往右下變小變深（右下角 Codex 判遠景）
-    { px: [860, 740], y: -110, halfW: 150 }, { px: [1090, 790], y: -110, halfW: 150 }, { px: [1200, 700], y: -120, halfW: 60 },
-    { px: [960, 620], y: -130, halfW: 55 }, { px: [740, 900], y: -100, halfW: 80 }, { px: [1300, 870], y: -120, halfW: 60 },
-    { px: [1450, 600], y: -170, halfW: 35 }, { px: [700, 690], y: -110, halfW: 70 }, { px: [1100, 600], y: -140, halfW: 60 },
-    { px: [1560, 820], y: -220, halfW: 70, far: true }, { px: [1620, 700], y: -240, halfW: 45, far: true },
-  ],
-  lowerPillars: [1, 1, 0], lowerPillarH: [20, 12],   // 下層島每座幾根柱（循環）、柱高（基本＋變化）
-  far: { pos: [-220, -120, -950], area: 320, k: 2 },          // 遠景直接給世界座標：要整片落在大島後面
 };
 // ?tune={"bridgeDy":-20} 臨時覆寫 LAYOUT 頂層欄位（掃參數用）
 if (q.get('tune')) Object.assign(LAYOUT, JSON.parse(q.get('tune')));
@@ -59,8 +47,7 @@ const scene = new THREE.Scene();
 // 環境光（階段 4）：紫色天光當補光、暖金主光從右前上方打（目標圖朝右、朝鏡頭的面都是亮金色），紫色天光補側面
 // 2026-10-29 改：主光＝強背光、接近地平線（和天空太陽暈同方向 ATM.sunDir），逆光面靠前方淡紫補光（fill）
 // fill：前方暖補光，照亮島底方塊柱朝鏡頭的面（背光下仍看得出方塊明暗）
-const ENV = { sky: '#e2c6f2', ground: '#7a5a98', amb: 0.7, sun: '#ffd49a', sunI: 8, fill: '#ffd8a8', fillI: 2.0, fillDir: [-2, 3, 6], exposure: 0.88, keyDir: [0.6, 0.9, -1], shadow: 1, shadowMap: 4096, shadowMid: 0, shadowAll: 1,   // shadowAll：一張陰影圖連中景一起罩（4096 下近景仍夠銳利）；shadowMid：改用兩盞各半強度的光分開罩（較淡）
-   shadowSoft: 0, blob: 0.3 };   // 2026-10-29 用戶：陰影要銳利、光要強 → 主光加強、補光減弱，影子才有對比   // shadow：即時投影（近景＋中近景）；shadowMap：解析度；shadowSoft：0＝銳利 PCF、>0＝軟影半徑；blob：苦力怕腳下接觸陰影濃度   // ?env={…} 臨時覆寫
+const ENV = { sky: '#e2c6f2', ground: '#7a5a98', amb: 0.7, sun: '#ffd49a', sunI: 8, fill: '#ffd8a8', fillI: 2.0, fillDir: [-2, 3, 6], exposure: 0.88, keyDir: [0.6, 0.9, -1], shadow: 1, shadowMap: 4096, shadowSoft: 0, blob: 0.3 };   // 2026-10-29 用戶：陰影要銳利、光要強 → 主光加強、補光減弱，影子才有對比   // shadow：即時投影（近景＋中近景）；shadowMap：解析度；shadowSoft：0＝銳利 PCF、>0＝軟影半徑；blob：苦力怕腳下接觸陰影濃度   // ?env={…} 臨時覆寫
 if (q.get('env')) Object.assign(ENV, JSON.parse(q.get('env')));
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = ENV.exposure;
 const hemi = new THREE.HemisphereLight(ENV.sky, ENV.ground, ENV.amb);
@@ -101,33 +88,6 @@ for (const g of Object.values(layers)) scene.add(g);
 const at = (obj, p, yaw = 0, k = 1) => { obj.position.copy(p); obj.rotation.y = yaw; obj.scale.setScalar(k); return obj; };
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
-function plant(island, seed, density, hScale = 0.6) {   // hScale：植物高度倍率（島放得越大，植物要越矮才和目標圖比例相符）
-  const g = new THREE.Group();
-  for (const s of scatter(island.userData.surface, { seed, density, minGap: 3 })) {
-    const o = s.kind === 'pillar' ? makePillar({ seed: seed + s.x * 7 + s.z, height: s.height, width: 2 + (s.x & 1) }) : makeChorus({ seed: seed + s.x * 13 + s.z, height: Math.max(3, Math.round(s.height * hScale)) });
-    g.add(at(o, V(s.x, s.y, s.z)));
-  }
-  island.add(g);
-  return island;
-}
-// 一座島：頂面中心落在目標像素、寬度照目標半寬（像素）縮放
-function islandAt(spec, seed, opts, density) {
-  const isl = makeIsland({ seed, ...opts });
-  // 指定數量的黑曜石柱（目標圖的垂直節奏），挑離島緣較遠的頂面格
-  const sf = isl.userData.surface.filter(([x, , z]) => Math.hypot(x, z) < isl.userData.radius * 0.6);
-  for (let i = 0; i < (spec.pillars || 0); i++) {
-    const [x, y, z] = sf[Math.floor((i + 0.5) / spec.pillars * sf.length * 0.97 + seed) % sf.length];
-    isl.add(at(makePillar({ seed: seed + i, height: spec.pillarH ? spec.pillarH[0] + (seed * 7 + i * 13) % spec.pillarH[1] : 14 + (seed * 7 + i * 13) % 10, width: 2 }), V(x, y, z)));
-  }
-  const p = onPlane(...spec.px, spec.y), k = spec.halfW / pxPerUnit(p) / isl.userData.radius;
-  if (density) plant(isl, seed * 3, density, spec.plantH);
-  const merged = mergeBySlot(isl);   // 島＋柱＋植物合成每個材質一個 mesh（draw call 從幾十降到 4–5）
-  merged.userData = isl.userData;
-  at(merged, p, spec.squash ? 0 : seed, k);
-  if (spec.squash) merged.scale.z *= spec.squash;   // 縱深壓扁（不轉向，才壓在視線方向上）：島的遠緣不會一路延伸到畫面頂
-  return merged;
-}
-
 // 近景：平台＋主角＋大株紫頌（平台和主角同一個縮放，方塊格對得上）
 const H = LAYOUT.hero, heroP = onPlane(...H.px, LAYOUT.cliffY);
 const heroK = (H.px[1] - H.top) / pxPerUnit(heroP) / 1.625;
@@ -154,7 +114,7 @@ for (const c of LAYOUT.nearChorus) {
   layers.near.add(at(makeChorus({ seed: c.seed, height: c.h }), p, c.seed, (c.px[1] - c.top) / pxPerUnit(p) / (c.h + 1)));
 }
 
-// 中近景：橋（沿目標圖橋中線）＋6 隻（依目標像素高度縮放）＋小圓島
+// 中近景：橋（沿目標圖橋中線）＋6 隻（依目標像素高度縮放）
 const walkK = LAYOUT.walkers.map(([x, y, top]) => { const p = onPlane(x, y, LAYOUT.bridgeY); return [p, (y - top) / pxPerUnit(p) / 1.625]; });
 const bridgeK = walkK.reduce((s, w) => s + w[1], 0) / walkK.length;
 const bp = LAYOUT.bridge.map(([x, y]) => onPlane(x, y + LAYOUT.bridgeDy, LAYOUT.bridgeY)), b0 = bp[0];
@@ -166,7 +126,6 @@ walkK.forEach(([p, k], i) => {
   const w = at(makeCreeper({ seed: 20 + i, pose: 'walk' }), p, Math.atan2(n.x - p.x, n.z - p.z), k);
   walkers.push(w); layers.midnear.add(w);
 });
-layers.mid.add(islandAt(LAYOUT.islandSmall, 4, { radius: 5, terraces: 2, depth: 14 }));
 
 // 角色貼地：從頭頂往下打射線，腳底放到平台／橋的實際頂面（斜擺平台各格高度不同，不能假設 y=0）
 {
@@ -179,19 +138,11 @@ layers.mid.add(islandAt(LAYOUT.islandSmall, 4, { radius: 5, terraces: 2, depth: 
   }
 }
 
-// 中景：大島＋下層島群（含植物）
-layers.mid.add(islandAt(LAYOUT.islandBig, 6, { radius: 28, terraces: 3, depth: LAYOUT.islandBig.depth ?? 16, jag: LAYOUT.islandBig.jag ?? 0 }, 0.025));
-LAYOUT.islandsLower.forEach((s, i) => layers[s.far ? 'far' : 'mid'].add(islandAt({ pillars: LAYOUT.lowerPillars[i % LAYOUT.lowerPillars.length], pillarH: LAYOUT.lowerPillarH, ...s }, 30 + i, { radius: 12, terraces: 2, depth: 16, jag: 0.7 }, 0.03)));
-
-LAYOUT.islandsMid.forEach((s, i) => layers.mid.add(islandAt(s, 50 + i, { radius: 14, terraces: 2, depth: 10 }, 0.03)));
-
-// 遠景
-layers.far.add(at(makeFarField({ seed: 8, count: 50, area: LAYOUT.far.area }), V(...LAYOUT.far.pos), 0, LAYOUT.far.k));
-const voidBg = makeVoid();
-scene.add(voidBg);
+// 中景、遠景不做 3D（2026-10-29 用戶定：全 3D 很耗資源、效果不明顯）：背景是目標圖的中遠景扣圖合成的
+// textures/backdrop.jpg（docs/麥塊世界mc3/tools/backdrop.py），只有近景＋中近景是 3D
+{ const t = new THREE.TextureLoader().load('textures/backdrop.jpg'); t.colorSpace = THREE.SRGBColorSpace; scene.background = t; }
 
 // ── 材質（階段 4）：?flat=1 回到灰模固有色
-const BG = q.get('bg') !== '0';   // 預設：前景 3D＋中遠景貼圖（2026-10-29 用戶定）；?bg=0 回全 3D
 const LOOK = !q.get('flat') && !q.get('layers') && !q.get('top');
 let U = null, halos = null, motes = null, trail = null;
 if (LOOK) {
@@ -202,37 +153,23 @@ if (LOOK) {
     if (q.get('atm')) Object.assign(ATM, JSON.parse(q.get('atm')));
     U = makeUniforms(ATM);
     for (const [slot, m] of Object.entries(mats)) patchMaterial(m, U, { under: slot === 'endstone', rim: slot === 'creeper' });
-    voidBg.visible = false;
-    // ?bg=1（2026-10-29 用戶點子）：只留前景（近景＋中近景）3D，中景遠景藏起來，背景換成目標圖的中遠景扣圖（textures/backdrop.jpg）
-    if (BG) {
-      layers.mid.visible = false; layers.far.visible = false;
-      const t = new THREE.TextureLoader().load('textures/backdrop.jpg'); t.colorSpace = THREE.SRGBColorSpace;
-      scene.background = t;
-    } else scene.add(makeSky(U));
     // 背光：太陽在畫面右上後方，給朝右、朝後的面一道金邊（目標圖橋與台地上緣的金光）
     // 主光＝背光：從天空太陽暈的方向打過來；近景＋中近景投影（低角度，影子往鏡頭方向拉長）
     // 主光方向：同天空太陽暈的方位（右上後方）但抬高到約 35°，影子才會是目標圖那種約一個身長、往左下
     const sd = new THREE.Vector3(...(ENV.keyDir || ATM.sunDir)).normalize();
     if (ENV.shadow) {
       renderer.shadowMap.enabled = true; renderer.shadowMap.type = ENV.shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-      const bb = new THREE.Box3().expandByObject(layers.near).expandByObject(layers.midnear); if (ENV.shadowAll) bb.expandByObject(layers.mid);
+      const bb = new THREE.Box3().expandByObject(layers.near).expandByObject(layers.midnear);
       const c = bb.getCenter(new THREE.Vector3());
       const R = bb.getSize(new THREE.Vector3()).length() / 2;
       sun.position.copy(c).addScaledVector(sd, R * 2); sun.target.position.copy(c);
       Object.assign(sun.shadow.camera, { left: -R, right: R, top: R, bottom: -R, near: 0.1, far: R * 4 });
       sun.shadow.mapSize.set(ENV.shadowMap, ENV.shadowMap); sun.shadow.bias = -0.0002; sun.shadow.normalBias = R * 0.0008; sun.shadow.radius = ENV.shadowSoft || 1;
       sun.shadow.camera.updateProjectionMatrix(); sun.castShadow = true;
-      if (ENV.shadowMid) sun.intensity = ENV.sunI / 2;
       window.__shadowR = R;
-      for (const k of ENV.shadowAll ? ['near', 'midnear', 'mid'] : ['near', 'midnear']) layers[k].traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      // 中景用第二盞「只投影」的光：同方向，近景那盞的陰影範圍不放大（近景影子才保持銳利）
-      if (ENV.shadowMid) {
-        const sun2 = makeShadowSun(layers.mid, sd, ENV.shadowMap / 2);
-        scene.add(sun2, sun2.target); window.theme_sun2 = sun2;
-        layers.mid.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      }
+      for (const k of ['near', 'midnear']) layers[k].traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     } else sun.position.copy(sd).multiplyScalar(100);
-    halos = makeHalos(BG ? new THREE.Group().add(...[layers.near, layers.midnear].map(g => g.clone(true))) : scene); scene.add(halos);
+    halos = makeHalos(scene); scene.add(halos);
     // 花苞＝發光晶塊（2026-10-29 用戶圈的目標圖：小而亮的粉白方塊＋光暈）：每個方塊往自己中心縮成 0.55 大、不受霧、不吃色調映射
     scene.traverse(o => { if (o.isMesh && (o.userData.slot === 'chorusFlower' || o.userData.slot === 'obsidianGlow')) shrinkCubes(o, 0.55); });
     // 接觸陰影：每隻苦力怕腳下一片柔和暗影，往左前方（背光的反方向）略拉長
@@ -241,18 +178,6 @@ if (LOOK) {
     // 橋上光流：沿橋中線、橋面上方半格（執行狀態淡入）
     trail = makeTrail(bp.map(p => p.clone().setY(p.y + bridgeK * 0.5)), { size: bridgeK * 1.6 }); scene.add(trail.obj);
   }
-}
-
-// 中景陰影：three.js 的光會照到所有物件，不能分層；所以把主光拆成兩盞同方向的光，各負責一半強度、各自一張陰影圖
-// （近景那盞範圍小→銳利，中景那盞範圍大）。被任一盞擋住的地方會暗一半，和全擋差不多，中景影子比較淡但看得出來。
-function makeShadowSun(group, sd, size) {
-  const l = new THREE.DirectionalLight(ENV.sun, ENV.sunI / 2);
-  const bb = new THREE.Box3().expandByObject(group), c = bb.getCenter(new THREE.Vector3()), R = bb.getSize(new THREE.Vector3()).length() / 2;
-  l.position.copy(c).addScaledVector(sd, R * 2); l.target.position.copy(c);
-  Object.assign(l.shadow.camera, { left: -R, right: R, top: R, bottom: -R, near: 0.1, far: R * 4 });
-  l.shadow.mapSize.set(size, size); l.shadow.bias = -0.0003; l.shadow.normalBias = R * 0.0008; l.castShadow = true;
-  l.shadow.camera.updateProjectionMatrix();
-  return l;
 }
 
 // 把 merged 方塊 mesh 的每顆方塊往自己的中心縮（花苞變成小晶塊）。merged 的每個面是連續 4 個頂點：
@@ -289,7 +214,6 @@ if (q.get('layers')) {
     const m = new THREE.MeshBasicMaterial({ color: LAYER_COLORS[k] });   // 不吃光：色調映射與光向不會把顏色偏掉，IoU 才準
     g.traverse(o => { if (o.isMesh) o.material = m; });
   }
-  voidBg.visible = false;
   scene.background = new THREE.Color('#202028');
 }
 if (q.get('ref')) {
@@ -298,7 +222,6 @@ if (q.get('ref')) {
 }
 let view = cam;
 if (q.get('top')) {   // 俯視結構圖：正交相機從上往下，畫出鏡頭位置與視線
-  voidBg.visible = false;
   scene.background = new THREE.Color('#202028');
   const bb = new THREE.Box3(); for (const k of ['near', 'midnear', 'mid']) bb.expandByObject(layers[k]);
   bb.expandByPoint(cam.position);
