@@ -1,0 +1,23 @@
+# 麥塊世界（creeper-window）
+
+雨夜木屋裡望向窗外，一隻苦力怕站在門廊上；Claude 的狀態由牠演出。目標圖 `docs/codex-brainstorm/minecraft/mc1.png`。
+製作紀錄（四階段）：`docs/麥塊世界/01–04`。`theme.json` 先 `enabled: false`。
+
+- 入口：`index.html`（three.js r170，vendored 在 `vendor/`，MIT）
+- `assets.js`：程式像素貼圖（16 px，固定種子、原創）＋苦力怕、燈籠、雲杉、火把、小屋；`assets.html` 是素材總覽
+- `scene.js`：方塊場景擺放（`LAYOUT`，鏡頭對齊 mc1；世界以 `scale.x = -1` 鏡像，對外座標用 `mirror()`）
+- `fx.js`：天空、雨、湖面倒影、玻璃雨滴、霧與合成 shader
+- 測試：`?state=storm` 直接進某狀態；按鍵 `0`–`5` 切狀態、`d` 除錯列；`?ref=<圖>&a=0.5` 疊目標圖；`window.theme`（`bench()`、`advance()`）
+- 日夜（2026-10-29）：預設跟著電腦時間；`?day=1` 固定 10:30、`?night=1` 固定 22:00；`CONFIG.clockHours` 可直接設（錄影用）。
+  月亮與太陽都在 mc1 的月亮方位升降（構圖與右上 HUD 區不變）：白天是下雨的陰天、淺灰方塊雲、像素太陽；清晨偏冷粉、黃昏偏暖橘；窗燈與燈籠白天調暗。
+
+| 狀態 | 苦力怕 | 天氣 |
+|---|---|---|
+| none | 不在（從左邊走開） | 小雨 |
+| clear 待命 | 站在窗前，綠色呼吸 | 小雨 |
+| overcast 思考 | 左右歪頭 | 雨稍大 |
+| storm 執行 | 往玻璃前傾 | 大雨、遠方閃電 |
+| clearing 收尾 | 回正，燈籠亮一下 | 雨變小 |
+| waiting 等你 | 轉頭看你、鼓起泛白（不爆） | 中雨 |
+
+效能：Intel UHD 630 約 32 ms／格（1357×764）。

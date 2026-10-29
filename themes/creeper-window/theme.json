@@ -1,0 +1,9 @@
+{
+  "name": "麥塊世界",
+  "order": 70,
+  "entry": "index.html",
+  "enabled": false,
+  "bundled": false,
+  "description": "雨夜木屋裡望向窗外，一隻苦力怕貼著玻璃站在門廊上；湖、雲杉、對岸小屋的燈。Claude 的狀態由苦力怕演出。",
+  "tags": ["夜景", "風格實驗"]
+}
