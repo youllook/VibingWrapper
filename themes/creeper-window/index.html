@@ -408,10 +408,50 @@ const act = {                                    // the creeper's performance, a
   here: new Tw(0),                               // 0 away … 1 at the window (walks)
   tilt: new Tw(0), lean: new Tw(0), look: new Tw(0), fuse: new Tw(0), breath: new Tw(1), flare: new Tw(0),
   ctilt: new Tw(0),                              // the crowd's head-tilting (thinking), each at its own pace
-  roam: new Tw(0),                               // idle (clear): now and then pacing a step or looking about
-  paceX: new Tw(0), paceYaw: new Tw(0), lookY: new Tw(0), lookX: new Tw(0),   // the main creeper's idle moves
+  // the main creeper's idle moves (see IDLE): steps along the porch (x) and back from the glass (z), a turn, a head
+  // look, a sway, and how much the head obeys "look at you" (waiting)
+  paceX: new Tw(0), paceZ: new Tw(0), paceYaw: new Tw(0), lookY: new Tw(0), lookX: new Tw(0), sway: new Tw(0), lookK: new Tw(1),
 };
-let idleT = 3, paceBack = 0;
+let idleT = 3;
+const idleQ = [];                                // [time, fn]: the later legs of an idle move
+const rnd = (a, b) => a + Math.random() * (b - a);
+// a few steps back from the glass (still facing it), `pause` s there doing `there`, then up to the glass, then `back`
+function backOff(dist, pause, there, back) {
+  const dur = dist / 0.5 + 0.4, at = simT + 0.3 + dur, ret = at + pause;
+  act.paceZ.to(dist, dur, 0.3);
+  idleQ.push([at, there], [ret, () => act.paceZ.to(0, dur)], [ret + dur, back]);
+}
+// the main creeper while it is at the window, by state: each picks a move and returns the pause before the next one
+// (the pause starts once the move is done). The crowd has its own, in crowd.js.
+const IDLE = {
+  clear() {                                      // paces a step or two along the porch, or looks about
+    if (Math.random() < 0.35) {
+      let x; do x = rnd(-0.55, 0.55); while (Math.abs(x - act.paceX.b) < 0.25);
+      const dir = Math.sign(x - act.paceX.b), d = Math.abs(x - act.paceX.b) / 0.6 + 0.3;
+      act.lookY.to(0, 0.5); act.lookX.to(0, 0.5);
+      act.paceYaw.to(-dir * 1.3, 0.5); act.paceX.to(x, d, 0.4);   // side-on, walk, back to the glass
+      idleQ.push([simT + 0.4 + d, () => act.paceYaw.to(0, 0.6)]);
+      return rnd(2, 5);
+    }
+    let y = 0; if (Math.random() > 0.25) do y = rnd(-0.8, 0.8); while (Math.abs(y - act.lookY.b) < 0.3);
+    act.lookY.to(y, rnd(0.5, 1.1)); act.lookX.to(y ? rnd(-0.06, 0.12) : 0, 0.7);
+    return rnd(1.5, 5.5);
+  },
+  storm() {                                      // backs off two or three steps and comes back, looks left / right, sways
+    const k = Math.random();
+    if (k < 0.35) { backOff(rnd(0.6, 1.0), rnd(0.6, 1.6), () => act.lookY.to(rnd(-0.6, 0.6), 0.5), () => act.lookY.to(0, 0.6)); return rnd(1.5, 4); }
+    if (k < 0.8) { act.lookY.to(Math.random() < 0.3 ? 0 : (Math.random() < 0.5 ? -1 : 1) * rnd(0.35, 0.75), rnd(0.4, 0.8)); return rnd(1.2, 3.5); }
+    act.sway.to(1, 0.6); idleQ.push([simT + rnd(2, 4), () => act.sway.to(0, 0.8)]);
+    return rnd(1, 3);
+  },
+  waiting() {                                    // leans in looking at you; now and then looks away, backs off, comes back
+    if (Math.random() < 0.4) {
+      act.lookK.to(0.15, 0.5); act.lookY.to(rnd(-0.4, 0.4), 0.5);
+      backOff(rnd(0.5, 0.8), rnd(0.4, 1.2), () => {}, () => { act.lookK.to(1, 0.7); act.lookY.to(0, 0.7); });
+    }
+    return rnd(2, 5);
+  },
+};
 let walkFrom = 0, walking = 0, nextBolt = 8, bolt = 0, tiltT = 0;
 function enter(name) {
   const prev = stateName; if (name === prev) return;
@@ -421,15 +461,16 @@ function enter(name) {
   const arriving = prev === 'none', leaving = name === 'none';
   for (const p in PARAMS) knob[p].to(STATES[name][p], p === 'wet' ? (leaving ? 14 : 8) : 4, arriving ? 5.5 : leaving ? 3 : 0);
   act.here.to(name === 'none' ? 0 : 1, name === 'none' ? 7 : 6);
-  act.lean.to(name === 'storm' ? 1 : 0, name === 'storm' ? 3 : 2);
+  act.lean.to(name === 'storm' ? 1 : name === 'waiting' ? 0.5 : 0, name === 'storm' ? 3 : 2);
   act.look.to(name === 'waiting' ? 1 : 0, 1.6);
   act.fuse.to(name === 'waiting' ? 1 : 0, name === 'waiting' ? 2 : 1);
   act.breath.to(name === 'clear' || name === 'none' ? 1 : 0.5, 2);
   if (name !== 'overcast') act.tilt.to(0, 1.2); else tiltT = 0;
   act.ctilt.to(name === 'overcast' ? 1 : 0, 1.5);
-  act.roam.to(name === 'clear' ? 1 : 0, 1.5);
-  if (name !== 'clear') { act.paceX.to(0, 1.2); act.paceYaw.to(0, 0.8); act.lookY.to(0, 0.8); act.lookX.to(0, 0.8); paceBack = 0; }
-  else idleT = 2 + Math.random() * 3;
+  // idle moves: settle back, then start over on the new state's clock
+  idleQ.length = 0; idleT = rnd(1.5, 4);
+  act.paceX.to(0, 1.2); act.paceZ.to(0, 1.2); for (const k of ['paceYaw', 'lookY', 'lookX', 'sway']) act[k].to(0, 0.8);
+  act.lookK.to(1, 0.8);
   if (name === 'clearing') { act.flare.set(0).to(1, 0.6); setTimeout(() => act.flare.to(0, 3), 900); }
   if (name === 'storm') nextBolt = 4 + Math.random() * 6;
 }
@@ -474,37 +515,25 @@ function update(dt) {
   crowdGlow.setRGB(0.001, 0.004, 0.0012).multiplyScalar(tod.night);   // barely: they read by the light on them, not their own
   for (const m of crowd.materials) m.emissive.copy(crowdGlow);
   crowd.update({ t: crowdT, cam: camLayout, simT, groundAt,
-    pose: { tilt: act.ctilt.v, lean: act.lean.v, look: act.look.v, fuse: act.fuse.v, roam: act.roam.v } });
+    pose: { tilt: act.ctilt.v, lean: act.lean.v, look: act.look.v, fuse: act.fuse.v, mode: IDLE[stateName] ? stateName : null } });
 
   // walk in / out along the porch; legs swing while it moves
   const h = act.here.v;
   cr.position.lerpVectors(CREEP_AWAY, CREEP_HOME, h);
-  cr.position.x += act.paceX.v;
+  cr.position.x += act.paceX.v; cr.position.z += act.paceZ.v;     // (+z: away from the glass)
   cr.visible = h > 0.001;
   const moving = Math.abs(act.here.b - h) > 0.002 && act.here.d && simT - act.here.t0 < act.here.d;
-  // idle (clear, at the window): at odd moments it paces a step or two along the porch (turns side-on, walks, turns
-  // back to the glass), or turns its head to look about: up the porch, out over the lake, back in
-  if (stateName === 'clear' && h > 0.99) {
-    if (paceBack && simT > paceBack) { act.paceYaw.to(0, 0.6); paceBack = 0; }
-    if ((idleT -= dt) <= 0) {
-      if (Math.random() < 0.35) {
-        let x; do x = (Math.random() * 2 - 1) * 0.55; while (Math.abs(x - act.paceX.b) < 0.25);
-        const dir = Math.sign(x - act.paceX.b), d = Math.abs(x - act.paceX.b) / 0.6 + 0.3;
-        act.lookY.to(0, 0.5); act.lookX.to(0, 0.5);
-        act.paceYaw.to(-dir * 1.3, 0.5); act.paceX.to(x, d, 0.4);
-        paceBack = simT + 0.4 + d; idleT = 0.4 + d + 2 + Math.random() * 3;
-      } else {
-        let y = 0; if (Math.random() > 0.25) do y = (Math.random() * 2 - 1) * 0.8; while (Math.abs(y - act.lookY.b) < 0.3);
-        act.lookY.to(y, 0.5 + Math.random() * 0.6); act.lookX.to(y ? -0.06 + Math.random() * 0.18 : 0, 0.7);
-        idleT = 1.5 + Math.random() * 4;
-      }
-    }
+  // idle moves while it stands at the window (IDLE, by state)
+  if (h > 0.99 && IDLE[stateName]) {
+    while (idleQ.length && simT >= idleQ[0][0]) idleQ.shift()[1]();
+    if (!idleQ.length && (idleT -= dt) <= 0) idleT = IDLE[stateName]();
   }
-  const pacing = Math.abs(act.paceX.b - act.paceX.v) > 0.01 && simT > act.paceX.t0;
+  const pacing = [act.paceX, act.paceZ].some(w => Math.abs(w.b - w.v) > 0.01 && simT > w.t0);
   walking += ((moving || pacing ? 1 : 0) - walking) * Math.min(1, dt * 4);
   const sw = Math.sin(simT * 7) * 0.5 * walking;
   CU.legs[0].rotation.x = sw; CU.legs[3].rotation.x = sw; CU.legs[1].rotation.x = -sw; CU.legs[2].rotation.x = -sw;
   cr.rotation.y = Math.PI + (moving ? (act.here.b > h ? 1 : -1) * 0.9 * walking : 0) + act.paceYaw.v;    // side-on while walking
+  cr.rotation.z = act.sway.v * Math.sin(simT * 2.4) * 0.09;
   // thinking: the head goes over to one side, holds, comes back, the other side
   if (stateName === 'overcast') {
     tiltT -= dt;
@@ -516,8 +545,9 @@ function update(dt) {
   // waiting: the head turns to the camera
   V2.copy(cam.position); world.root.worldToLocal(V2); V2.sub(cr.position);
   const yawToCam = Math.atan2(V2.x, V2.z) - cr.rotation.y;
-  CU.head.rotation.y = act.look.v * Math.atan2(Math.sin(yawToCam), Math.cos(yawToCam)) * 0.85 + act.lookY.v;
-  CU.head.rotation.x = -act.look.v * 0.08 + act.lookX.v;
+  const lookAt = act.look.v * act.lookK.v;
+  CU.head.rotation.y = lookAt * Math.atan2(Math.sin(yawToCam), Math.cos(yawToCam)) * 0.85 + act.lookY.v;
+  CU.head.rotation.x = -lookAt * 0.08 + act.lookX.v;
   // the fuse: swell and flash white on a ~1.6 s beat while waiting — it never goes off
   const beat = Math.pow(Math.max(0, Math.sin(simT * Math.PI / 0.8)), 6);
   const flash = act.fuse.v * beat;
