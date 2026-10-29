@@ -1,0 +1,840 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.0
+--------
+workdir: E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a185fa-36f0-7351-9846-c2c17193cb9a
+--------
+user
+讀 prompt.md 並照做，所有輸出存在目前資料夾
+2026-10-29T04:45:30.709538Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 404: {\"error\": \"not found\"}")
+codex
+我會先讀取 `prompt.md` 與資料夾內的工作規範，再依照要求執行，所有產出都存放在目前資料夾。
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Get-Content -LiteralPath prompt.md; Get-ChildItem -Force -Name; rg --files -g AGENTS.md -g '"'!node_modules'"' -g '"'!vendor'"'" in E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg
+ exited 1 in 744ms:
+# 任務：把 mc1.png 的「前景（室內）」單獨抽出來，給 3D 場景對位用
+
+mc1.png 是從木屋室內望向窗外的概念圖。我要在 3D 裡重建室內，需要一張「只有前景」的對照圖。
+
+## 前景＝屋內的東西（要保留）
+- 左下的木桌與燈籠
+- 左側木牆、左牆小窗的窗框
+- 大窗的所有木框：左框、上框、中柱、窗台（屋內那側）、右下屋內的木牆／窗台
+- 天花板／梁（若有）
+
+## 背景＝窗外的一切（要拿掉）
+苦力怕、門廊石台、湖、樹、山、天空、月亮、雨絲、玻璃上的雨滴反光——全部換成**純洋紅 #FF00FF 平塗**。
+
+## 要求
+1. 用圖像生成工具「編輯 mc1.png」：前景的位置、形狀、透視、比例**完全不動**，像素對齊原圖（同為 1672×941），只把背景改成純洋紅。不要重畫構圖、不要加東西。
+2. 輸出 `fg.png`（前景＋洋紅背景）。
+3. 另外輸出 `fg_lines.png`：同尺寸，黑底，把前景的主要結構邊線（桌面邊、桌腳、燈籠外框、牆柱、窗框內外緣、窗台線、天花板梁）畫成白色細線，背景不畫任何東西。這張可以用程式描邊（例如從 fg.png 取邊緣），重點是線要準。
+4. 寫 `notes.md`：列出各前景元素在畫面上的位置（百分比座標：左框 x、中柱 x 範圍、窗台 y、桌面邊緣線兩端點、燈籠框範圍、天花板線），以及你估計的鏡頭：視平線大約在畫面幾 %、窗牆是正對還是斜對鏡頭（往哪邊轉幾度）、大概的垂直視角。
+5. 完成後建立空檔 `.done`。
+codex.log
+mc1.png
+prompt.md
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "rg -n '麥塊|codex-fg' C:\\Users\\user\\.codex\\memories\\MEMORY.md" in E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg
+ exited 1 in 291ms:
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Get-Content -LiteralPath 'D:/codex_workspace/appdata/.codex/skills/.system/imagegen/SKILL.md'; "'$p = Get-Item .; while ($p) { $a = Join-Path $p.FullName '"'AGENTS.md'; if (Test-Path -LiteralPath "'$a) { Write-Output $a; Get-Content -LiteralPath $a }; $p = $p.Parent }' in E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg
+ succeeded in 363ms:
+---
+name: "imagegen"
+description: "Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas."
+---
+
+# Image Generation Skill
+
+Generates or edits images for the current project (for example website assets, game assets, UI mockups, product mockups, wireframes, logo design, photorealistic images, or infographics).
+
+## Top-level modes and rules
+
+This skill has exactly two top-level modes:
+
+- **Default built-in tool mode (preferred):** built-in `image_gen` tool for image generation, editing, and transparent-image requests. Does not require `OPENAI_API_KEY`.
+- **Fallback CLI mode:** `scripts/image_gen.py` CLI. Use when the user explicitly asks for or confirms the CLI/API/model path. Requires `OPENAI_API_KEY`.
+
+Within CLI fallback, the CLI exposes three subcommands:
+
+- `generate`
+- `edit`
+- `generate-batch`
+
+Rules:
+- Use the built-in `image_gen` tool by default for normal image generation and editing requests.
+- Do not switch to CLI fallback for ordinary quality, size, or file-path control.
+- For transparent images, ask built-in `image_gen` for a transparent background and preserve the generated alpha.
+- Never silently switch from built-in `image_gen` or CLI `gpt-image-2` to CLI `gpt-image-1.5`; ask the user first unless they explicitly requested `gpt-image-1.5`.
+- The word `batch` by itself does not mean CLI fallback. If the user asks for many assets or says to batch-generate assets without explicitly asking for CLI/API/model controls, stay on the built-in path and issue one built-in call per requested asset or variant.
+- If the built-in tool fails or is unavailable, tell the user the CLI fallback exists and that it requires `OPENAI_API_KEY`. Proceed only if the user explicitly asks for that fallback.
+- If the user explicitly asks for CLI mode, use the bundled `scripts/image_gen.py` workflow. Do not create one-off SDK runners.
+- Never modify `scripts/image_gen.py`. If something is missing, ask the user before doing anything else.
+
+Built-in save-path policy:
+- In built-in tool mode, Codex saves generated images under `$CODEX_HOME/*` by default.
+- Do not describe or rely on OS temp as the default built-in destination.
+- Do not describe or rely on a destination-path argument (if any) on the built-in `image_gen` tool. If a specific location is needed, generate first and then move or copy the selected output from `$CODEX_HOME/generated_images/...`.
+- Save-path precedence in built-in mode:
+  1. If the user names a destination, move or copy the selected output there.
+  2. If the image is meant for the current project, move or copy the final selected image into the workspace before finishing.
+  3. If the image is only for preview or brainstorming, render it inline; the underlying file can remain at the default `$CODEX_HOME/*` path.
+- Never leave a project-referenced asset only at the default `$CODEX_HOME/*` path.
+- Do not overwrite an existing asset unless the user explicitly asked for replacement; otherwise create a sibling versioned filename such as `hero-v2.png` or `item-icon-edited.png`.
+
+Shared prompt guidance for both modes lives in `references/prompting.md` and `references/sample-prompts.md`.
+
+Fallback-only docs/resources for CLI mode:
+- `references/cli.md`
+- `references/image-api.md`
+- `references/codex-network.md`
+- `scripts/image_gen.py`
+
+## When to use
+- Generate a new image (concept art, product shot, cover, website hero)
+- Generate a new image using one or more reference images for style, composition, or mood
+- Edit an existing image (inpainting, lighting or weather transformations, background replacement, object removal, compositing, transparent background)
+- Produce many assets or variants for one task
+
+## When not to use
+- Extending or matching an existing SVG/vector icon set, logo system, or illustration library inside the repo
+- Creating simple shapes, diagrams, wireframes, or icons that are better produced directly in SVG, HTML/CSS, or canvas
+- Making a small project-local asset edit when the source file already exists in an editable native format
+- Any task where the user clearly wants deterministic code-native output instead of a generated bitmap
+
+## Decision tree
+
+Think about two separate questions:
+
+1. **Intent:** is this a new image or an edit of an existing image?
+2. **Execution strategy:** is this one asset or many assets/variants?
+
+Intent:
+- If the user wants to modify an existing image while preserving parts of it, treat the request as **edit**.
+- If the user provides images only as references for style, composition, mood, or subject guidance, treat the request as **generate**.
+- If the user provides no images, treat the request as **generate**.
+
+Built-in edit semantics:
+- Built-in edit mode is for images already visible in the conversation context, such as attached images or images generated earlier in the thread.
+- If the user wants to edit a local image file with the built-in tool, first load it with built-in `view_image` tool so the image is visible in the conversation context, then proceed with the built-in edit flow.
+- Do not promise arbitrary filesystem-path editing through the built-in tool.
+- If a local file still needs direct file-path control, masks, or other explicit CLI-only parameters, use the explicit CLI fallback only when the user asks for it.
+- For edits, preserve invariants aggressively and save non-destructively by default.
+
+Execution strategy:
+- In the built-in default path, produce many assets or variants by issuing one `image_gen` call per requested asset or variant.
+- In the CLI fallback path, use the CLI `generate-batch` subcommand only when the user explicitly chose CLI mode and needs many prompts/assets.
+- For many distinct assets, do not use `n` as a substitute for separate prompts. `n` is for variants of one prompt; distinct assets need distinct built-in calls or distinct CLI `generate-batch` jobs.
+
+Assume the user wants a new image unless they clearly ask to change an existing one.
+
+## Workflow
+1. Decide the top-level mode: built-in by default, including transparent-output requests; fallback CLI only if explicitly requested or confirmed.
+2. Decide the intent: `generate` or `edit`.
+3. Decide whether the output is preview-only or meant to be consumed by the current project.
+4. Decide the execution strategy: single asset vs repeated built-in calls vs CLI `generate-batch`.
+5. Collect inputs up front: prompt(s), exact text (verbatim), constraints/avoid list, and any input images.
+6. For every input image, label its role explicitly:
+   - reference image
+   - edit target
+   - supporting insert/style/compositing input
+7. If the edit target is only on the local filesystem and you are staying on the built-in path, inspect it with `view_image` first so the image is available in conversation context.
+8. If the user asked for a photo, illustration, sprite, product image, banner, or other explicitly raster-style asset, use `image_gen` rather than substituting SVG/HTML/CSS placeholders. If the request is for an icon, logo, or UI graphic that should match existing repo-native SVG/vector/code assets, prefer editing those directly instead.
+9. Augment the prompt based on specificity:
+   - If the user's prompt is already specific and detailed, normalize it into a clear spec without adding creative requirements.
+   - If the user's prompt is generic, add tasteful augmentation only when it materially improves output quality.
+10. Use the built-in `image_gen` tool by default.
+11. For transparent-output requests, ask built-in `image_gen` for a transparent background and preserve the generated alpha channel.
+12. Inspect outputs and validate: subject, style, composition, text accuracy, and invariants/avoid items.
+13. Iterate with a single targeted change, then re-check.
+14. For preview-only work, render the image inline; the underlying file may remain at the default `$CODEX_HOME/generated_images/...` path.
+15. For project-bound work, move or copy the selected artifact into the workspace and update any consuming code or references. Never leave a project-referenced asset only at the default `$CODEX_HOME/generated_images/...` path.
+16. For batches or multi-asset requests, persist every requested deliverable final in the workspace unless the user explicitly asked to keep outputs preview-only. Discarded variants do not need to be kept unless requested.
+17. If the user explicitly chooses or confirms the CLI fallback, then use the fallback-only docs for model, quality, size, `input_fidelity`, masks, output format, output paths, and network setup.
+18. Always report the final saved path(s) for any workspace-bound asset(s), plus the final prompt or prompt set and whether the built-in tool or fallback CLI mode was used.
+
+## Transparent image requests
+
+Ask built-in `image_gen` for a genuinely transparent background and preserve its alpha.
+
+## Prompt augmentation
+
+Reformat user prompts into a structured, production-oriented spec. Make the user's goal clearer and more actionable, but do not blindly add detail.
+
+Treat this as prompt-shaping guidance, not a closed schema. Use only the lines that help, and add a short extra labeled line when it materially improves clarity.
+
+### Specificity policy
+
+Use the user's prompt specificity to decide how much augmentation is appropriate:
+
+- If the prompt is already specific and detailed, preserve that specificity and only normalize/structure it.
+- If the prompt is generic, you may add tasteful augmentation when it will materially improve the result.
+
+Allowed augmentations:
+- composition or framing hints
+- polish level or intended-use hints
+- practical layout guidance
+- reasonable scene concreteness that supports the stated request
+
+Not allowed augmentations:
+- extra characters or objects that are not implied by the request
+- brand names, slogans, palettes, or narrative beats that are not implied
+- arbitrary side-specific placement unless the surrounding layout supports it
+
+## Use-case taxonomy (exact slugs)
+
+Classify each request into one of these buckets and keep the slug consistent across prompts and references.
+
+Generate:
+- photorealistic-natural — candid/editorial lifestyle scenes with real texture and natural lighting.
+- product-mockup — product/packaging shots, catalog imagery, merch concepts.
+- ui-mockup — app/web interface mockups and wireframes; specify the desired fidelity.
+- infographic-diagram — diagrams/infographics with structured layout and text.
+- scientific-educational — classroom explainers, scientific diagrams, and learning visuals with required labels and accuracy constraints.
+- ads-marketing — campaign concepts and ad creatives with audience, brand position, scene, and exact tagline/copy.
+- productivity-visual — slide, chart, workflow, and data-heavy business visuals.
+- logo-brand — logo/mark exploration, vector-friendly.
+- illustration-story — comics, children’s book art, narrative scenes.
+- stylized-concept — style-driven concept art, 3D/stylized renders.
+- historical-scene — period-accurate/world-knowledge scenes.
+
+Edit:
+- text-localization — translate/replace in-image text, preserve layout.
+- identity-preserve — try-on, person-in-scene; lock face/body/pose.
+- precise-object-edit — remove/replace a specific element (including interior swaps).
+- lighting-weather — time-of-day/season/atmosphere changes only.
+- background-extraction — transparent background / clean cutout. Ask built-in `image_gen` for actual transparency.
+- style-transfer — apply reference style while changing subject/scene.
+- compositing — multi-image insert/merge with matched lighting/perspective.
+- sketch-to-render — drawing/line art to photoreal render.
+
+## Shared prompt schema
+
+Use the following labeled spec as shared prompt scaffolding for both top-level modes:
+
+```text
+Use case: <taxonomy slug>
+Asset type: <where the asset will be used>
+Primary request: <user's main prompt>
+Input images: <Image 1: role; Image 2: role> (optional)
+Scene/backdrop: <environment>
+Subject: <main subject>
+Style/medium: <photo/illustration/3D/etc>
+Composition/framing: <wide/close/top-down; placement>
+Lighting/mood: <lighting + mood>
+Color palette: <palette notes>
+Materials/textures: <surface details>
+Text (verbatim): "<exact text>"
+Constraints: <must keep/must avoid>
+Avoid: <negative constraints>
+```
+
+Notes:
+- `Asset type` and `Input images` are prompt scaffolding, not dedicated CLI flags.
+- `Scene/backdrop` refers to the visual setting. It is not the same as the fallback CLI `background` parameter, which controls output transparency behavior.
+- Fallback-only execution notes such as `Quality:`, `Input fidelity:`, masks, output format, and output paths belong in the CLI path only. Do not treat them as built-in `image_gen` tool arguments.
+
+Augmentation rules:
+- Keep it short.
+- Add only the details needed to improve the prompt materially.
+- For edits, explicitly list invariants (`change only X; keep Y unchanged`).
+- If any critical detail is missing and blocks success, ask a question; otherwise proceed.
+
+## Examples
+
+### Generation example (hero image)
+```text
+Use case: product-mockup
+Asset type: landing page hero
+Primary request: a minimal hero image of a ceramic coffee mug
+Style/medium: clean product photography
+Composition/framing: wide composition with usable negative space for page copy if needed
+Lighting/mood: soft studio lighting
+Constraints: no logos, no text, no watermark
+```
+
+### Edit example (invariants)
+```text
+Use case: precise-object-edit
+Asset type: product photo background replacement
+Primary request: replace only the background with a warm sunset gradient
+Constraints: change only the background; keep the product and its edges unchanged; no text; no watermark
+```
+
+## Prompting best practices
+- Structure prompt as scene/backdrop -> subject -> details -> constraints.
+- Include intended use (ad, UI mock, infographic) to set the mode and polish level.
+- Use camera/composition language for photorealism.
+- Only use SVG/vector stand-ins when the user explicitly asked for vector output or a non-image placeholder.
+- Quote exact text and specify typography + placement.
+- For tricky words, spell them letter-by-letter and require verbatim rendering.
+- For multi-image inputs, reference images by index and describe how they should be used.
+- For edits, repeat invariants every iteration to reduce drift.
+- Iterate with single-change follow-ups.
+- If the prompt is generic, add only the extra detail that will materially help.
+- If the prompt is already detailed, normalize it instead of expanding it.
+- For CLI fallback only, see `references/cli.md` and `references/image-api.md` for model, `quality`, `input_fidelity`, masks, output format, and output-path guidance.
+- For transparent images, ask built-in `image_gen` for actual transparency and preserve its alpha.
+
+More principles shared by both modes: `references/prompting.md`.
+Copy/paste specs shared by both modes: `references/sample-prompts.md`.
+
+## Guidance by asset type
+Asset-type templates (website assets, game assets, wireframes, logo) are consolidated in `references/sample-prompts.md`.
+
+## gpt-image-2 guidance for CLI fallback
+
+The fallback CLI defaults to `gpt-image-2`.
+
+- Use `gpt-image-2` for new CLI/API workflows unless the user confirms a different model.
+- CLI `gpt-image-2` does not support `background=transparent`; ask before using `gpt-image-1.5` unless the user explicitly requested that model.
+- `gpt-image-2` always uses high fidelity for image inputs; do not set `input_fidelity` with this model.
+- `gpt-image-2` supports `quality` values `low`, `medium`, `high`, and `auto`.
+- Use `quality low` for fast drafts, thumbnails, and quick iterations. Use `medium`, `high`, or `auto` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
+- Square images are typically fastest to generate. Use `1024x1024` for fast square drafts.
+- If the user asks for 4K-style output, use `3840x2160` for landscape or `2160x3840` for portrait.
+- `gpt-image-2` size may be `auto` or `WIDTHxHEIGHT` if all constraints hold: max edge `<= 3840px`, both edges multiples of `16px`, long-to-short ratio `<= 3:1`, total pixels between `655,360` and `8,294,400`.
+
+Popular `gpt-image-2` sizes:
+- `1024x1024` square
+- `1536x1024` landscape
+- `1024x1536` portrait
+- `2048x2048` 2K square
+- `2048x1152` 2K landscape
+- `3840x2160` 4K landscape
+- `2160x3840` 4K portrait
+- `auto`
+
+## Fallback CLI mode only
+
+### Temp and output conventions
+These conventions apply only to the CLI fallback. They do not describe built-in `image_gen` output behavior.
+- Use `tmp/imagegen/` for intermediate files (for example JSONL batches); delete them when done.
+- Write final artifacts under `output/imagegen/`.
+- Use `--out` or `--out-dir` to control output paths; keep filenames stable and descriptive.
+
+### Dependencies
+Prefer `uv` for dependency management in this repo.
+
+Required Python package:
+```bash
+uv pip install openai
+```
+
+Optional for image inspection and downscaling:
+```bash
+uv pip install pillow
+```
+
+Portability note:
+- If you are using the installed skill outside this repo, install dependencies into that environment with its package manager.
+- In uv-managed environments, `uv pip install ...` remains the preferred path.
+
+### Environment
+- `OPENAI_API_KEY` must be set for live API calls.
+- Do not ask the user for `OPENAI_API_KEY` when using the built-in `image_gen` tool.
+- Never ask the user to paste the full key in chat. Ask them to set it locally and confirm when ready.
+
+If the key is missing, give the user these steps:
+1. Create an API key in the OpenAI platform UI: https://platform.openai.com/api-keys
+2. Set `OPENAI_API_KEY` as an environment variable in their system.
+3. Offer to guide them through setting the environment variable for their OS/shell if needed.
+
+If installation is not possible in this environment, tell the user which dependency is missing and how to install it into their active environment.
+
+### Script-mode notes
+- CLI commands + examples: `references/cli.md`
+- API parameter quick reference: `references/image-api.md`
+- Network approvals / sandbox settings for CLI mode: `references/codex-network.md`
+
+## Reference map
+- `references/prompting.md`: shared prompting principles for both modes.
+- `references/sample-prompts.md`: shared copy/paste prompt recipes for both modes.
+- `references/cli.md`: fallback-only CLI usage via `scripts/image_gen.py`.
+- `references/image-api.md`: fallback-only API/CLI parameter reference.
+- `references/codex-network.md`: fallback-only network/sandbox troubleshooting for CLI mode.
+- `scripts/image_gen.py`: fallback-only CLI implementation. Use only when the user explicitly chooses or confirms CLI mode.
+
+codex
+我會使用 imagegen 技能編輯原圖，保留室內木構與桌燈，將所有窗外區域替換為洋紅色；接著製作結構線圖與對位座標。像素對齊會另外檢查，不會只憑生成結果判定。
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a185fa-36f0-7351-9846-c2c17193cb9a\\exec-d4f287da-1844-4bb3-b607-6c41e370cca6.png' -Destination fg.png; python -c \"from PIL import Image; import numpy; im=Image.open('fg.png'); print(im.size)\"" in E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg
+ succeeded in 714ms:
+(1672, 941)
+
+codex
+已產生前景圖，但檢查發現生成工具仍會改動部分窗框邊界，不能保證原圖逐像素對齊。我會把這項偏差與色值檢查結果寫入 `notes.md`，並依原圖座標製作結構線，避免把生成偏差當成 3D 對位基準。
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a185fa-36f0-7351-9846-c2c17193cb9a\\exec-c345fa67-3b87-41a4-b907-2751d376d500.png' -Destination fg.png; python -c \"from PIL import Image; import numpy as np; a=np.array(Image.open('mc1.png').convert('RGB')); b=np.array(Image.open('fg.png').convert('RGB')); m=(b[:,:,0]>220)&(b[:,:,1]<40)&(b[:,:,2]>220); print('size',b.shape,'magenta_region',int(m.sum()),'exact_magenta',int(np.all(b==[255,0,255],axis=2).sum()),'foreground_changed',int(np.any(a"'!=b,axis=2)[~m].sum()),'"'foreground_total',int((~m).sum()))\"" in E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg
+ succeeded in 874ms:
+size (941, 1672, 3) magenta_region 915647 exact_magenta 3 foreground_changed 652201 foreground_total 657705
+
+apply patch
+patch: completed
+E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg\make_lines.py
+diff --git a/docs/麥塊世界/codex-fg/make_lines.py b/docs/麥塊世界/codex-fg/make_lines.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..aca6eedbbb5629cc36d25b1fdb6bb889dd57ac25
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/make_lines.py
+@@ -0,0 +1,26 @@
++from PIL import Image, ImageDraw
++import json
++import numpy as np
++
++# Manually traced visible structural edges in the original mc1.png.
++# No texture edges, outdoor edges or hidden geometry are invented.
++paths = {
++ 'ceiling': [[(0,20),(79,52),(145,0)],[(0,155),(75,180)],[(80,132),(211,59)],[(307,70),(479,0)],[(358,91),(599,0)],[(378,105),(777,5)]],
++ 'left_wall': [[(78,130),(40,518)],[(102,139),(65,459)],[(211,0),(190,467)],[(245,0),(234,674)],[(294,0),(270,670)],[(312,70),(307,660)]],
++ 'small_window': [[(145,182),(204,155)],[(145,182),(136,299),(200,278)],[(136,313),(198,293)],[(136,313),(128,420)],[(190,310),(184,467)]],
++ 'large_frame': [[(359,91),(336,661),(775,733)],[(378,105),(343,653),(774,717)],[(777,5),(774,738),(813,746),(814,0)],[(833,0),(834,734)],[(854,0),(853,727),(1671,866)],[(813,746),(1671,901)],[(596,756),(1671,933)]],
++ 'table': [[(221,668),(595,736),(0,836)],[(595,736),(591,850),(534,875),(527,940)],[(591,850),(656,867),(655,940)],[(534,893),(655,878)],[(0,858),(522,770)]],
++ 'lantern': [[(10,540),(52,546),(221,536),(230,519),(18,519),(10,540)],[(10,540),(0,681),(17,700),(56,709),(218,692),(221,536)],[(52,546),(56,681),(218,666)],[(56,681),(56,709)],[(77,545),(78,677)],[(199,541),(196,668)],[(52,519),(55,475),(89,461),(190,469),(191,519)],[(88,462),(86,447),(115,446),(116,424),(155,423),(158,448),(168,449),(168,469)]]
++}
++im=Image.new('RGB',(1672,941),'black')
++d=ImageDraw.Draw(im)
++for group in paths.values():
++ for points in group: d.line(points,fill='white',width=1)
++im.save('fg_lines.png')
++with open('structure_points.json','w',encoding='utf-8') as f: json.dump(paths,f,indent=2)
++a=np.array(Image.open('mc1.png').convert('RGB'))
++b=np.array(Image.open('fg.png').convert('RGB'))
++m=(b[:,:,0]>220)&(b[:,:,1]<40)&(b[:,:,2]>220)
++report={'size':list(Image.open('fg.png').size),'magenta_like_pixels':int(m.sum()),'exact_FF00FF_pixels':int(np.all(b==[255,0,255],axis=2).sum()),'changed_pixels_outside_magenta_region':int(np.any(a!=b,axis=2)[~m].sum()),'pixels_outside_magenta_region':int((~m).sum()),'pixel_perfect_pass':False,'lines_reference':'Manual visible structure tracing of mc1.png; approximate, not calibrated'}
++with open('validation.json','w',encoding='utf-8') as f: json.dump(report,f,indent=2)
++print(json.dumps(report))
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command 'python make_lines.py' in E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg
+ succeeded in 1036ms:
+{"size": [1672, 941], "magenta_like_pixels": 915647, "exact_FF00FF_pixels": 3, "changed_pixels_outside_magenta_region": 652201, "pixels_outside_magenta_region": 657705, "pixel_perfect_pass": false, "lines_reference": "Manual visible structure tracing of mc1.png; approximate, not calibrated"}
+
+diff --git a/docs/麥塊世界/codex-fg/make_lines.py b/docs/麥塊世界/codex-fg/make_lines.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..aca6eedbbb5629cc36d25b1fdb6bb889dd57ac25
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/make_lines.py
+@@ -0,0 +1,26 @@
++from PIL import Image, ImageDraw
++import json
++import numpy as np
++
++# Manually traced visible structural edges in the original mc1.png.
++# No texture edges, outdoor edges or hidden geometry are invented.
++paths = {
++ 'ceiling': [[(0,20),(79,52),(145,0)],[(0,155),(75,180)],[(80,132),(211,59)],[(307,70),(479,0)],[(358,91),(599,0)],[(378,105),(777,5)]],
++ 'left_wall': [[(78,130),(40,518)],[(102,139),(65,459)],[(211,0),(190,467)],[(245,0),(234,674)],[(294,0),(270,670)],[(312,70),(307,660)]],
++ 'small_window': [[(145,182),(204,155)],[(145,182),(136,299),(200,278)],[(136,313),(198,293)],[(136,313),(128,420)],[(190,310),(184,467)]],
++ 'large_frame': [[(359,91),(336,661),(775,733)],[(378,105),(343,653),(774,717)],[(777,5),(774,738),(813,746),(814,0)],[(833,0),(834,734)],[(854,0),(853,727),(1671,866)],[(813,746),(1671,901)],[(596,756),(1671,933)]],
++ 'table': [[(221,668),(595,736),(0,836)],[(595,736),(591,850),(534,875),(527,940)],[(591,850),(656,867),(655,940)],[(534,893),(655,878)],[(0,858),(522,770)]],
++ 'lantern': [[(10,540),(52,546),(221,536),(230,519),(18,519),(10,540)],[(10,540),(0,681),(17,700),(56,709),(218,692),(221,536)],[(52,546),(56,681),(218,666)],[(56,681),(56,709)],[(77,545),(78,677)],[(199,541),(196,668)],[(52,519),(55,475),(89,461),(190,469),(191,519)],[(88,462),(86,447),(115,446),(116,424),(155,423),(158,448),(168,449),(168,469)]]
++}
++im=Image.new('RGB',(1672,941),'black')
++d=ImageDraw.Draw(im)
++for group in paths.values():
++ for points in group: d.line(points,fill='white',width=1)
++im.save('fg_lines.png')
++with open('structure_points.json','w',encoding='utf-8') as f: json.dump(paths,f,indent=2)
++a=np.array(Image.open('mc1.png').convert('RGB'))
++b=np.array(Image.open('fg.png').convert('RGB'))
++m=(b[:,:,0]>220)&(b[:,:,1]<40)&(b[:,:,2]>220)
++report={'size':list(Image.open('fg.png').size),'magenta_like_pixels':int(m.sum()),'exact_FF00FF_pixels':int(np.all(b==[255,0,255],axis=2).sum()),'changed_pixels_outside_magenta_region':int(np.any(a!=b,axis=2)[~m].sum()),'pixels_outside_magenta_region':int((~m).sum()),'pixel_perfect_pass':False,'lines_reference':'Manual visible structure tracing of mc1.png; approximate, not calibrated'}
++with open('validation.json','w',encoding='utf-8') as f: json.dump(report,f,indent=2)
++print(json.dumps(report))
+
+apply patch
+patch: completed
+E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg\notes.md
+diff --git a/docs/麥塊世界/codex-fg/make_lines.py b/docs/麥塊世界/codex-fg/make_lines.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..aca6eedbbb5629cc36d25b1fdb6bb889dd57ac25
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/make_lines.py
+@@ -0,0 +1,26 @@
++from PIL import Image, ImageDraw
++import json
++import numpy as np
++
++# Manually traced visible structural edges in the original mc1.png.
++# No texture edges, outdoor edges or hidden geometry are invented.
++paths = {
++ 'ceiling': [[(0,20),(79,52),(145,0)],[(0,155),(75,180)],[(80,132),(211,59)],[(307,70),(479,0)],[(358,91),(599,0)],[(378,105),(777,5)]],
++ 'left_wall': [[(78,130),(40,518)],[(102,139),(65,459)],[(211,0),(190,467)],[(245,0),(234,674)],[(294,0),(270,670)],[(312,70),(307,660)]],
++ 'small_window': [[(145,182),(204,155)],[(145,182),(136,299),(200,278)],[(136,313),(198,293)],[(136,313),(128,420)],[(190,310),(184,467)]],
++ 'large_frame': [[(359,91),(336,661),(775,733)],[(378,105),(343,653),(774,717)],[(777,5),(774,738),(813,746),(814,0)],[(833,0),(834,734)],[(854,0),(853,727),(1671,866)],[(813,746),(1671,901)],[(596,756),(1671,933)]],
++ 'table': [[(221,668),(595,736),(0,836)],[(595,736),(591,850),(534,875),(527,940)],[(591,850),(656,867),(655,940)],[(534,893),(655,878)],[(0,858),(522,770)]],
++ 'lantern': [[(10,540),(52,546),(221,536),(230,519),(18,519),(10,540)],[(10,540),(0,681),(17,700),(56,709),(218,692),(221,536)],[(52,546),(56,681),(218,666)],[(56,681),(56,709)],[(77,545),(78,677)],[(199,541),(196,668)],[(52,519),(55,475),(89,461),(190,469),(191,519)],[(88,462),(86,447),(115,446),(116,424),(155,423),(158,448),(168,449),(168,469)]]
++}
++im=Image.new('RGB',(1672,941),'black')
++d=ImageDraw.Draw(im)
++for group in paths.values():
++ for points in group: d.line(points,fill='white',width=1)
++im.save('fg_lines.png')
++with open('structure_points.json','w',encoding='utf-8') as f: json.dump(paths,f,indent=2)
++a=np.array(Image.open('mc1.png').convert('RGB'))
++b=np.array(Image.open('fg.png').convert('RGB'))
++m=(b[:,:,0]>220)&(b[:,:,1]<40)&(b[:,:,2]>220)
++report={'size':list(Image.open('fg.png').size),'magenta_like_pixels':int(m.sum()),'exact_FF00FF_pixels':int(np.all(b==[255,0,255],axis=2).sum()),'changed_pixels_outside_magenta_region':int(np.any(a!=b,axis=2)[~m].sum()),'pixels_outside_magenta_region':int((~m).sum()),'pixel_perfect_pass':False,'lines_reference':'Manual visible structure tracing of mc1.png; approximate, not calibrated'}
++with open('validation.json','w',encoding='utf-8') as f: json.dump(report,f,indent=2)
++print(json.dumps(report))
+diff --git a/docs/麥塊世界/codex-fg/notes.md b/docs/麥塊世界/codex-fg/notes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b13b2ca3aed601604c7545a36e75cae4b8e982e1
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/notes.md
+@@ -0,0 +1,46 @@
++# 室內前景對位筆記
++
++## 交付狀態：尚未通過嚴格驗收
++
++已使用內建 imagegen 編輯 mc1.png 兩次，選擇第二次結果存為 fg.png。兩張輸出均為 1672 × 941。fg.png 保留主要室內構圖並去除窗外景物，但生成工具仍重繪部分室內像素、改變窗框內緣，且洋紅並非精確平塗 #FF00FF。因此這是參考草稿，不能宣稱已滿足 prompt.md 的逐像素對齊要求，也未建立表示全部完成的 .done。
++
++validation.json 記錄實際檢查：915647 個近洋紅像素中，全圖精確 #FF00FF 像素只有 3 個；近洋紅區域之外 657705 個像素中，有 652201 個與原圖不完全相同。這項像素差異統計不等同於幾何位移，但足以否定「前景像素完全不動」。左大窗內緣有約 20–45 px 的局部變化，下方右窗台也有偏差。
++
++fg_lines.png 是以原圖 mc1.png 的可見結構人工選點、由程式畫出的 1 px 白線黑底圖，不從生成圖的變形邊界取線。線圖是人工近似，失焦的燈籠、桌緣誤差約 5–15 px，清楚的木框邊緣約 3–8 px；不應當作精密標定結果。桌腳只描可見段，未補畫被裁切或遮擋部分。structure_points.json 保存全部像素座標，可用 make_lines.py 重建線圖。背景內不畫景物或紋理線。
++
++## 座標定義
++
++以下均以原圖為基準，左上為 (0%,0%)，右下為 (100%,100%)；x%=x/1672×100，y%=y/941×100。數值為人工讀圖近似。超出畫面的構件不外推。
++
++| 元素 | 百分比位置與邊線 |
++| --- | --- |
++| 大窗左框／牆柱 | 主木柱約 x=12.6–21.5%；靠窗內緣上端 (22.6%,11.2%)，下端 (20.5%,69.4%)，不是等 x 的垂直線 |
++| 大窗中柱 | 約 x=46.3–51.1%；主木面約 46.3–49.9%，最右側暗邊／玻璃交界約 51.1%；下端 y 約 78–79% |
++| 大窗上框 | 玻璃與上梁交界約 (22.6%,11.2%) → (46.5%,0.5%)；外側梁線約 (21.4%,9.7%) → (35.8%,0%) |
++| 左段窗台內緣 | (20.5%,69.4%) → (46.3%,76.2%) |
++| 右段窗台內緣 | (51.0%,77.3%) → (99.9%,92.0%) |
++| 窗台前側下緣 | 約 (48.6%,79.3%) → (99.9%,95.7%)；可見牆體繼續向畫面下方延伸 |
++| 小窗上格 | 約 x=8.1–12.2%，y=16.5–31.8%；上邊 (8.7%,19.3%) → (12.2%,16.5%) |
++| 小窗橫框 | 上緣 (8.1%,31.8%) → (12.0%,29.5%)；下緣 (8.1%,33.3%) → (11.8%,31.1%) |
++| 小窗下格 | 約 x=7.7–11.8%，y=32.9–49.6%；下段被燈籠遮擋 |
++| 桌面後緣 | 燈籠右側可見端 (13.2%,71.0%) → 桌面右角 (35.6%,78.2%) |
++| 桌面前緣 | 左側出畫點 (0%,88.8%) → 右角 (35.6%,78.2%) |
++| 桌體／可見支腳 | 右外緣約 (35.6%,78.2%) → (35.3%,90.3%)；支腳可見區約 x=31.5–39.2%、y=90.3–100% |
++| 燈籠整體框範圍 | 約 x=0–13.8%、y=44.8–75.3%，含上方提把；最左邊接近裁切 |
++| 燈籠發光箱體 | 約 x=0.6–13.2%、y=57.0–72.4%；上蓋約 y=55.2–58.0%；底框約 y=70.8–75.3% |
++| 天花板／梁 | 主斜梁 (18.4%,7.4%) → (28.6%,0%)；次梁 (21.4%,9.7%) → (35.8%,0%)；左側梁 (4.8%,14.0%) → (12.6%,6.3%) |
++
++## 鏡頭初始估計
++
++- 視平線：建議先以 y=45–49%（約 423–461 px）試配，初始值 47%。這是以窗框上下斜線向左外推收斂得到的粗估，並非把湖岸線視為視平線。概念圖透視未必完全符合單一針孔相機。
++- 窗牆斜對鏡頭：牆面沿畫面右方向更靠近鏡頭，沿左方向退遠；上框向右升、下窗台向右降。相機視線相對窗牆法線可先設偏轉約 35–50°（初始 40°），再調整。若把窗牆正對鏡頭作為零度，應轉成右端靠近、左端遠離；實際引擎旋轉正負號依座標系決定。
++- 垂直視角：先試 55°，合理探索範圍約 45–65°；16:9 畫面下 55° 垂直視角約對應 85.5° 水平視角。單張圖沒有已知尺寸與相機標定，無法唯一求出視角、偏轉與距離。
++- 先對齊中柱與窗台兩條主線，再調視角與相機距離；桌燈失焦較強，適合作次要位置參考。
++
++## 工具與可重現資料
++
++- 前景：內建 imagegen，直接引用 mc1.png 編輯；未使用 CLI/API fallback。
++- 最終編輯提示詞：imagegen_prompt.txt。
++- 結構線：Pillow 畫線，程式 make_lines.py；座標 structure_points.json。
++- 驗證：尺寸、精確洋紅像素數、原圖與結果像素差異，詳 validation.json。
++- 要達成嚴格驗收，仍需用原圖建立精確遮罩並保留原始前景像素，背景做確定性的 RGB 填色；目前未把此方法冒充成已符合要求的生成結果。
+
+apply patch
+patch: completed
+E:\DesktopPet\.claude\worktrees\codex-machine-project-setup-0ff44f\docs\麥塊世界\codex-fg\imagegen_prompt.txt
+diff --git a/docs/麥塊世界/codex-fg/imagegen_prompt.txt b/docs/麥塊世界/codex-fg/imagegen_prompt.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..575c34def2d77c7561f1bb5b4b1a9dee5916d510
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/imagegen_prompt.txt
+@@ -0,0 +1 @@
++Use mc1.png as EDIT TARGET, extract original indoor foreground without repainting it. Exact 1672x941. Replace window glass and all outside scenery/rain/reflections with EXACT flat RGB 255,0,255. Preserve original foreground pixels. Critical mask geometry: large LEFT window opening polygon has corners (378,103),(777,5),(774,717),(343,653). The narrow slanted region from x343 to435 IS GLASS with rain highlights, NOT a solid wooden jamb: remove this region to magenta too. Do not invent a broad solid wood wall inside this polygon! Keep actual original left vertical wooden jamb to the left of line (378,103) to (343,653). Central timber post remains x777..832, full original width. Right window opening is polygon (854,0),(1671,0),(1671,866),(853,727); remove the glass droplet reflections along this entire edge. Small window openings on left remain original outlines but filled magenta, retaining its wooden crossbar. Preserve original wooden upper beams, left wall, table and lantern absolutely unchanged, same geometry and texture and blur. Remove creeper, stone porch, lake, mountains, trees, clouds moon rain glass. Do not add anything. No new wood. Uniform exact #FF00FF in all removed areas. Output only foreground+magenta.
+diff --git a/docs/麥塊世界/codex-fg/make_lines.py b/docs/麥塊世界/codex-fg/make_lines.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..aca6eedbbb5629cc36d25b1fdb6bb889dd57ac25
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/make_lines.py
+@@ -0,0 +1,26 @@
++from PIL import Image, ImageDraw
++import json
++import numpy as np
++
++# Manually traced visible structural edges in the original mc1.png.
++# No texture edges, outdoor edges or hidden geometry are invented.
++paths = {
++ 'ceiling': [[(0,20),(79,52),(145,0)],[(0,155),(75,180)],[(80,132),(211,59)],[(307,70),(479,0)],[(358,91),(599,0)],[(378,105),(777,5)]],
++ 'left_wall': [[(78,130),(40,518)],[(102,139),(65,459)],[(211,0),(190,467)],[(245,0),(234,674)],[(294,0),(270,670)],[(312,70),(307,660)]],
++ 'small_window': [[(145,182),(204,155)],[(145,182),(136,299),(200,278)],[(136,313),(198,293)],[(136,313),(128,420)],[(190,310),(184,467)]],
++ 'large_frame': [[(359,91),(336,661),(775,733)],[(378,105),(343,653),(774,717)],[(777,5),(774,738),(813,746),(814,0)],[(833,0),(834,734)],[(854,0),(853,727),(1671,866)],[(813,746),(1671,901)],[(596,756),(1671,933)]],
++ 'table': [[(221,668),(595,736),(0,836)],[(595,736),(591,850),(534,875),(527,940)],[(591,850),(656,867),(655,940)],[(534,893),(655,878)],[(0,858),(522,770)]],
++ 'lantern': [[(10,540),(52,546),(221,536),(230,519),(18,519),(10,540)],[(10,540),(0,681),(17,700),(56,709),(218,692),(221,536)],[(52,546),(56,681),(218,666)],[(56,681),(56,709)],[(77,545),(78,677)],[(199,541),(196,668)],[(52,519),(55,475),(89,461),(190,469),(191,519)],[(88,462),(86,447),(115,446),(116,424),(155,423),(158,448),(168,449),(168,469)]]
++}
++im=Image.new('RGB',(1672,941),'black')
++d=ImageDraw.Draw(im)
++for group in paths.values():
++ for points in group: d.line(points,fill='white',width=1)
++im.save('fg_lines.png')
++with open('structure_points.json','w',encoding='utf-8') as f: json.dump(paths,f,indent=2)
++a=np.array(Image.open('mc1.png').convert('RGB'))
++b=np.array(Image.open('fg.png').convert('RGB'))
++m=(b[:,:,0]>220)&(b[:,:,1]<40)&(b[:,:,2]>220)
++report={'size':list(Image.open('fg.png').size),'magenta_like_pixels':int(m.sum()),'exact_FF00FF_pixels':int(np.all(b==[255,0,255],axis=2).sum()),'changed_pixels_outside_magenta_region':int(np.any(a!=b,axis=2)[~m].sum()),'pixels_outside_magenta_region':int((~m).sum()),'pixel_perfect_pass':False,'lines_reference':'Manual visible structure tracing of mc1.png; approximate, not calibrated'}
++with open('validation.json','w',encoding='utf-8') as f: json.dump(report,f,indent=2)
++print(json.dumps(report))
+diff --git a/docs/麥塊世界/codex-fg/notes.md b/docs/麥塊世界/codex-fg/notes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b13b2ca3aed601604c7545a36e75cae4b8e982e1
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/notes.md
+@@ -0,0 +1,46 @@
++# 室內前景對位筆記
++
++## 交付狀態：尚未通過嚴格驗收
++
++已使用內建 imagegen 編輯 mc1.png 兩次，選擇第二次結果存為 fg.png。兩張輸出均為 1672 × 941。fg.png 保留主要室內構圖並去除窗外景物，但生成工具仍重繪部分室內像素、改變窗框內緣，且洋紅並非精確平塗 #FF00FF。因此這是參考草稿，不能宣稱已滿足 prompt.md 的逐像素對齊要求，也未建立表示全部完成的 .done。
++
++validation.json 記錄實際檢查：915647 個近洋紅像素中，全圖精確 #FF00FF 像素只有 3 個；近洋紅區域之外 657705 個像素中，有 652201 個與原圖不完全相同。這項像素差異統計不等同於幾何位移，但足以否定「前景像素完全不動」。左大窗內緣有約 20–45 px 的局部變化，下方右窗台也有偏差。
++
++fg_lines.png 是以原圖 mc1.png 的可見結構人工選點、由程式畫出的 1 px 白線黑底圖，不從生成圖的變形邊界取線。線圖是人工近似，失焦的燈籠、桌緣誤差約 5–15 px，清楚的木框邊緣約 3–8 px；不應當作精密標定結果。桌腳只描可見段，未補畫被裁切或遮擋部分。structure_points.json 保存全部像素座標，可用 make_lines.py 重建線圖。背景內不畫景物或紋理線。
++
++## 座標定義
++
++以下均以原圖為基準，左上為 (0%,0%)，右下為 (100%,100%)；x%=x/1672×100，y%=y/941×100。數值為人工讀圖近似。超出畫面的構件不外推。
++
++| 元素 | 百分比位置與邊線 |
++| --- | --- |
++| 大窗左框／牆柱 | 主木柱約 x=12.6–21.5%；靠窗內緣上端 (22.6%,11.2%)，下端 (20.5%,69.4%)，不是等 x 的垂直線 |
++| 大窗中柱 | 約 x=46.3–51.1%；主木面約 46.3–49.9%，最右側暗邊／玻璃交界約 51.1%；下端 y 約 78–79% |
++| 大窗上框 | 玻璃與上梁交界約 (22.6%,11.2%) → (46.5%,0.5%)；外側梁線約 (21.4%,9.7%) → (35.8%,0%) |
++| 左段窗台內緣 | (20.5%,69.4%) → (46.3%,76.2%) |
++| 右段窗台內緣 | (51.0%,77.3%) → (99.9%,92.0%) |
++| 窗台前側下緣 | 約 (48.6%,79.3%) → (99.9%,95.7%)；可見牆體繼續向畫面下方延伸 |
++| 小窗上格 | 約 x=8.1–12.2%，y=16.5–31.8%；上邊 (8.7%,19.3%) → (12.2%,16.5%) |
++| 小窗橫框 | 上緣 (8.1%,31.8%) → (12.0%,29.5%)；下緣 (8.1%,33.3%) → (11.8%,31.1%) |
++| 小窗下格 | 約 x=7.7–11.8%，y=32.9–49.6%；下段被燈籠遮擋 |
++| 桌面後緣 | 燈籠右側可見端 (13.2%,71.0%) → 桌面右角 (35.6%,78.2%) |
++| 桌面前緣 | 左側出畫點 (0%,88.8%) → 右角 (35.6%,78.2%) |
++| 桌體／可見支腳 | 右外緣約 (35.6%,78.2%) → (35.3%,90.3%)；支腳可見區約 x=31.5–39.2%、y=90.3–100% |
++| 燈籠整體框範圍 | 約 x=0–13.8%、y=44.8–75.3%，含上方提把；最左邊接近裁切 |
++| 燈籠發光箱體 | 約 x=0.6–13.2%、y=57.0–72.4%；上蓋約 y=55.2–58.0%；底框約 y=70.8–75.3% |
++| 天花板／梁 | 主斜梁 (18.4%,7.4%) → (28.6%,0%)；次梁 (21.4%,9.7%) → (35.8%,0%)；左側梁 (4.8%,14.0%) → (12.6%,6.3%) |
++
++## 鏡頭初始估計
++
++- 視平線：建議先以 y=45–49%（約 423–461 px）試配，初始值 47%。這是以窗框上下斜線向左外推收斂得到的粗估，並非把湖岸線視為視平線。概念圖透視未必完全符合單一針孔相機。
++- 窗牆斜對鏡頭：牆面沿畫面右方向更靠近鏡頭，沿左方向退遠；上框向右升、下窗台向右降。相機視線相對窗牆法線可先設偏轉約 35–50°（初始 40°），再調整。若把窗牆正對鏡頭作為零度，應轉成右端靠近、左端遠離；實際引擎旋轉正負號依座標系決定。
++- 垂直視角：先試 55°，合理探索範圍約 45–65°；16:9 畫面下 55° 垂直視角約對應 85.5° 水平視角。單張圖沒有已知尺寸與相機標定，無法唯一求出視角、偏轉與距離。
++- 先對齊中柱與窗台兩條主線，再調視角與相機距離；桌燈失焦較強，適合作次要位置參考。
++
++## 工具與可重現資料
++
++- 前景：內建 imagegen，直接引用 mc1.png 編輯；未使用 CLI/API fallback。
++- 最終編輯提示詞：imagegen_prompt.txt。
++- 結構線：Pillow 畫線，程式 make_lines.py；座標 structure_points.json。
++- 驗證：尺寸、精確洋紅像素數、原圖與結果像素差異，詳 validation.json。
++- 要達成嚴格驗收，仍需用原圖建立精確遮罩並保留原始前景像素，背景做確定性的 RGB 填色；目前未把此方法冒充成已符合要求的生成結果。
+
+diff --git a/docs/麥塊世界/codex-fg/imagegen_prompt.txt b/docs/麥塊世界/codex-fg/imagegen_prompt.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..575c34def2d77c7561f1bb5b4b1a9dee5916d510
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/imagegen_prompt.txt
+@@ -0,0 +1 @@
++Use mc1.png as EDIT TARGET, extract original indoor foreground without repainting it. Exact 1672x941. Replace window glass and all outside scenery/rain/reflections with EXACT flat RGB 255,0,255. Preserve original foreground pixels. Critical mask geometry: large LEFT window opening polygon has corners (378,103),(777,5),(774,717),(343,653). The narrow slanted region from x343 to435 IS GLASS with rain highlights, NOT a solid wooden jamb: remove this region to magenta too. Do not invent a broad solid wood wall inside this polygon! Keep actual original left vertical wooden jamb to the left of line (378,103) to (343,653). Central timber post remains x777..832, full original width. Right window opening is polygon (854,0),(1671,0),(1671,866),(853,727); remove the glass droplet reflections along this entire edge. Small window openings on left remain original outlines but filled magenta, retaining its wooden crossbar. Preserve original wooden upper beams, left wall, table and lantern absolutely unchanged, same geometry and texture and blur. Remove creeper, stone porch, lake, mountains, trees, clouds moon rain glass. Do not add anything. No new wood. Uniform exact #FF00FF in all removed areas. Output only foreground+magenta.
+diff --git a/docs/麥塊世界/codex-fg/make_lines.py b/docs/麥塊世界/codex-fg/make_lines.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..aca6eedbbb5629cc36d25b1fdb6bb889dd57ac25
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/make_lines.py
+@@ -0,0 +1,26 @@
++from PIL import Image, ImageDraw
++import json
++import numpy as np
++
++# Manually traced visible structural edges in the original mc1.png.
++# No texture edges, outdoor edges or hidden geometry are invented.
++paths = {
++ 'ceiling': [[(0,20),(79,52),(145,0)],[(0,155),(75,180)],[(80,132),(211,59)],[(307,70),(479,0)],[(358,91),(599,0)],[(378,105),(777,5)]],
++ 'left_wall': [[(78,130),(40,518)],[(102,139),(65,459)],[(211,0),(190,467)],[(245,0),(234,674)],[(294,0),(270,670)],[(312,70),(307,660)]],
++ 'small_window': [[(145,182),(204,155)],[(145,182),(136,299),(200,278)],[(136,313),(198,293)],[(136,313),(128,420)],[(190,310),(184,467)]],
++ 'large_frame': [[(359,91),(336,661),(775,733)],[(378,105),(343,653),(774,717)],[(777,5),(774,738),(813,746),(814,0)],[(833,0),(834,734)],[(854,0),(853,727),(1671,866)],[(813,746),(1671,901)],[(596,756),(1671,933)]],
++ 'table': [[(221,668),(595,736),(0,836)],[(595,736),(591,850),(534,875),(527,940)],[(591,850),(656,867),(655,940)],[(534,893),(655,878)],[(0,858),(522,770)]],
++ 'lantern': [[(10,540),(52,546),(221,536),(230,519),(18,519),(10,540)],[(10,540),(0,681),(17,700),(56,709),(218,692),(221,536)],[(52,546),(56,681),(218,666)],[(56,681),(56,709)],[(77,545),(78,677)],[(199,541),(196,668)],[(52,519),(55,475),(89,461),(190,469),(191,519)],[(88,462),(86,447),(115,446),(116,424),(155,423),(158,448),(168,449),(168,469)]]
++}
++im=Image.new('RGB',(1672,941),'black')
++d=ImageDraw.Draw(im)
++for group in paths.values():
++ for points in group: d.line(points,fill='white',width=1)
++im.save('fg_lines.png')
++with open('structure_points.json','w',encoding='utf-8') as f: json.dump(paths,f,indent=2)
++a=np.array(Image.open('mc1.png').convert('RGB'))
++b=np.array(Image.open('fg.png').convert('RGB'))
++m=(b[:,:,0]>220)&(b[:,:,1]<40)&(b[:,:,2]>220)
++report={'size':list(Image.open('fg.png').size),'magenta_like_pixels':int(m.sum()),'exact_FF00FF_pixels':int(np.all(b==[255,0,255],axis=2).sum()),'changed_pixels_outside_magenta_region':int(np.any(a!=b,axis=2)[~m].sum()),'pixels_outside_magenta_region':int((~m).sum()),'pixel_perfect_pass':False,'lines_reference':'Manual visible structure tracing of mc1.png; approximate, not calibrated'}
++with open('validation.json','w',encoding='utf-8') as f: json.dump(report,f,indent=2)
++print(json.dumps(report))
+diff --git a/docs/麥塊世界/codex-fg/notes.md b/docs/麥塊世界/codex-fg/notes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b13b2ca3aed601604c7545a36e75cae4b8e982e1
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/notes.md
+@@ -0,0 +1,46 @@
++# 室內前景對位筆記
++
++## 交付狀態：尚未通過嚴格驗收
++
++已使用內建 imagegen 編輯 mc1.png 兩次，選擇第二次結果存為 fg.png。兩張輸出均為 1672 × 941。fg.png 保留主要室內構圖並去除窗外景物，但生成工具仍重繪部分室內像素、改變窗框內緣，且洋紅並非精確平塗 #FF00FF。因此這是參考草稿，不能宣稱已滿足 prompt.md 的逐像素對齊要求，也未建立表示全部完成的 .done。
++
++validation.json 記錄實際檢查：915647 個近洋紅像素中，全圖精確 #FF00FF 像素只有 3 個；近洋紅區域之外 657705 個像素中，有 652201 個與原圖不完全相同。這項像素差異統計不等同於幾何位移，但足以否定「前景像素完全不動」。左大窗內緣有約 20–45 px 的局部變化，下方右窗台也有偏差。
++
++fg_lines.png 是以原圖 mc1.png 的可見結構人工選點、由程式畫出的 1 px 白線黑底圖，不從生成圖的變形邊界取線。線圖是人工近似，失焦的燈籠、桌緣誤差約 5–15 px，清楚的木框邊緣約 3–8 px；不應當作精密標定結果。桌腳只描可見段，未補畫被裁切或遮擋部分。structure_points.json 保存全部像素座標，可用 make_lines.py 重建線圖。背景內不畫景物或紋理線。
++
++## 座標定義
++
++以下均以原圖為基準，左上為 (0%,0%)，右下為 (100%,100%)；x%=x/1672×100，y%=y/941×100。數值為人工讀圖近似。超出畫面的構件不外推。
++
++| 元素 | 百分比位置與邊線 |
++| --- | --- |
++| 大窗左框／牆柱 | 主木柱約 x=12.6–21.5%；靠窗內緣上端 (22.6%,11.2%)，下端 (20.5%,69.4%)，不是等 x 的垂直線 |
++| 大窗中柱 | 約 x=46.3–51.1%；主木面約 46.3–49.9%，最右側暗邊／玻璃交界約 51.1%；下端 y 約 78–79% |
++| 大窗上框 | 玻璃與上梁交界約 (22.6%,11.2%) → (46.5%,0.5%)；外側梁線約 (21.4%,9.7%) → (35.8%,0%) |
++| 左段窗台內緣 | (20.5%,69.4%) → (46.3%,76.2%) |
++| 右段窗台內緣 | (51.0%,77.3%) → (99.9%,92.0%) |
++| 窗台前側下緣 | 約 (48.6%,79.3%) → (99.9%,95.7%)；可見牆體繼續向畫面下方延伸 |
++| 小窗上格 | 約 x=8.1–12.2%，y=16.5–31.8%；上邊 (8.7%,19.3%) → (12.2%,16.5%) |
++| 小窗橫框 | 上緣 (8.1%,31.8%) → (12.0%,29.5%)；下緣 (8.1%,33.3%) → (11.8%,31.1%) |
++| 小窗下格 | 約 x=7.7–11.8%，y=32.9–49.6%；下段被燈籠遮擋 |
++| 桌面後緣 | 燈籠右側可見端 (13.2%,71.0%) → 桌面右角 (35.6%,78.2%) |
++| 桌面前緣 | 左側出畫點 (0%,88.8%) → 右角 (35.6%,78.2%) |
++| 桌體／可見支腳 | 右外緣約 (35.6%,78.2%) → (35.3%,90.3%)；支腳可見區約 x=31.5–39.2%、y=90.3–100% |
++| 燈籠整體框範圍 | 約 x=0–13.8%、y=44.8–75.3%，含上方提把；最左邊接近裁切 |
++| 燈籠發光箱體 | 約 x=0.6–13.2%、y=57.0–72.4%；上蓋約 y=55.2–58.0%；底框約 y=70.8–75.3% |
++| 天花板／梁 | 主斜梁 (18.4%,7.4%) → (28.6%,0%)；次梁 (21.4%,9.7%) → (35.8%,0%)；左側梁 (4.8%,14.0%) → (12.6%,6.3%) |
++
++## 鏡頭初始估計
++
++- 視平線：建議先以 y=45–49%（約 423–461 px）試配，初始值 47%。這是以窗框上下斜線向左外推收斂得到的粗估，並非把湖岸線視為視平線。概念圖透視未必完全符合單一針孔相機。
++- 窗牆斜對鏡頭：牆面沿畫面右方向更靠近鏡頭，沿左方向退遠；上框向右升、下窗台向右降。相機視線相對窗牆法線可先設偏轉約 35–50°（初始 40°），再調整。若把窗牆正對鏡頭作為零度，應轉成右端靠近、左端遠離；實際引擎旋轉正負號依座標系決定。
++- 垂直視角：先試 55°，合理探索範圍約 45–65°；16:9 畫面下 55° 垂直視角約對應 85.5° 水平視角。單張圖沒有已知尺寸與相機標定，無法唯一求出視角、偏轉與距離。
++- 先對齊中柱與窗台兩條主線，再調視角與相機距離；桌燈失焦較強，適合作次要位置參考。
++
++## 工具與可重現資料
++
++- 前景：內建 imagegen，直接引用 mc1.png 編輯；未使用 CLI/API fallback。
++- 最終編輯提示詞：imagegen_prompt.txt。
++- 結構線：Pillow 畫線，程式 make_lines.py；座標 structure_points.json。
++- 驗證：尺寸、精確洋紅像素數、原圖與結果像素差異，詳 validation.json。
++- 要達成嚴格驗收，仍需用原圖建立精確遮罩並保留原始前景像素，背景做確定性的 RGB 填色；目前未把此方法冒充成已符合要求的生成結果。
+
+codex
+已讀取並執行，產出存於目前資料夾：
+
+- `fg.png`：圖像工具編輯的前景圖。
+- `fg_lines.png`：1672×941 黑底白色結構線。
+- `notes.md`：百分比座標、鏡頭估計與驗證結果。
+
+**尚未完全達標**：生成圖仍有窗框偏移，背景也不是精確的 `#FF00FF` 平塗，因此未建立 `.done`，避免誤標完成。
+diff --git a/docs/麥塊世界/codex-fg/imagegen_prompt.txt b/docs/麥塊世界/codex-fg/imagegen_prompt.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..575c34def2d77c7561f1bb5b4b1a9dee5916d510
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/imagegen_prompt.txt
+@@ -0,0 +1 @@
++Use mc1.png as EDIT TARGET, extract original indoor foreground without repainting it. Exact 1672x941. Replace window glass and all outside scenery/rain/reflections with EXACT flat RGB 255,0,255. Preserve original foreground pixels. Critical mask geometry: large LEFT window opening polygon has corners (378,103),(777,5),(774,717),(343,653). The narrow slanted region from x343 to435 IS GLASS with rain highlights, NOT a solid wooden jamb: remove this region to magenta too. Do not invent a broad solid wood wall inside this polygon! Keep actual original left vertical wooden jamb to the left of line (378,103) to (343,653). Central timber post remains x777..832, full original width. Right window opening is polygon (854,0),(1671,0),(1671,866),(853,727); remove the glass droplet reflections along this entire edge. Small window openings on left remain original outlines but filled magenta, retaining its wooden crossbar. Preserve original wooden upper beams, left wall, table and lantern absolutely unchanged, same geometry and texture and blur. Remove creeper, stone porch, lake, mountains, trees, clouds moon rain glass. Do not add anything. No new wood. Uniform exact #FF00FF in all removed areas. Output only foreground+magenta.
+diff --git a/docs/麥塊世界/codex-fg/make_lines.py b/docs/麥塊世界/codex-fg/make_lines.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..aca6eedbbb5629cc36d25b1fdb6bb889dd57ac25
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/make_lines.py
+@@ -0,0 +1,26 @@
++from PIL import Image, ImageDraw
++import json
++import numpy as np
++
++# Manually traced visible structural edges in the original mc1.png.
++# No texture edges, outdoor edges or hidden geometry are invented.
++paths = {
++ 'ceiling': [[(0,20),(79,52),(145,0)],[(0,155),(75,180)],[(80,132),(211,59)],[(307,70),(479,0)],[(358,91),(599,0)],[(378,105),(777,5)]],
++ 'left_wall': [[(78,130),(40,518)],[(102,139),(65,459)],[(211,0),(190,467)],[(245,0),(234,674)],[(294,0),(270,670)],[(312,70),(307,660)]],
++ 'small_window': [[(145,182),(204,155)],[(145,182),(136,299),(200,278)],[(136,313),(198,293)],[(136,313),(128,420)],[(190,310),(184,467)]],
++ 'large_frame': [[(359,91),(336,661),(775,733)],[(378,105),(343,653),(774,717)],[(777,5),(774,738),(813,746),(814,0)],[(833,0),(834,734)],[(854,0),(853,727),(1671,866)],[(813,746),(1671,901)],[(596,756),(1671,933)]],
++ 'table': [[(221,668),(595,736),(0,836)],[(595,736),(591,850),(534,875),(527,940)],[(591,850),(656,867),(655,940)],[(534,893),(655,878)],[(0,858),(522,770)]],
++ 'lantern': [[(10,540),(52,546),(221,536),(230,519),(18,519),(10,540)],[(10,540),(0,681),(17,700),(56,709),(218,692),(221,536)],[(52,546),(56,681),(218,666)],[(56,681),(56,709)],[(77,545),(78,677)],[(199,541),(196,668)],[(52,519),(55,475),(89,461),(190,469),(191,519)],[(88,462),(86,447),(115,446),(116,424),(155,423),(158,448),(168,449),(168,469)]]
++}
++im=Image.new('RGB',(1672,941),'black')
++d=ImageDraw.Draw(im)
++for group in paths.values():
++ for points in group: d.line(points,fill='white',width=1)
++im.save('fg_lines.png')
++with open('structure_points.json','w',encoding='utf-8') as f: json.dump(paths,f,indent=2)
++a=np.array(Image.open('mc1.png').convert('RGB'))
++b=np.array(Image.open('fg.png').convert('RGB'))
++m=(b[:,:,0]>220)&(b[:,:,1]<40)&(b[:,:,2]>220)
++report={'size':list(Image.open('fg.png').size),'magenta_like_pixels':int(m.sum()),'exact_FF00FF_pixels':int(np.all(b==[255,0,255],axis=2).sum()),'changed_pixels_outside_magenta_region':int(np.any(a!=b,axis=2)[~m].sum()),'pixels_outside_magenta_region':int((~m).sum()),'pixel_perfect_pass':False,'lines_reference':'Manual visible structure tracing of mc1.png; approximate, not calibrated'}
++with open('validation.json','w',encoding='utf-8') as f: json.dump(report,f,indent=2)
++print(json.dumps(report))
+diff --git a/docs/麥塊世界/codex-fg/notes.md b/docs/麥塊世界/codex-fg/notes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b13b2ca3aed601604c7545a36e75cae4b8e982e1
+--- /dev/null
++++ b/docs/麥塊世界/codex-fg/notes.md
+@@ -0,0 +1,46 @@
++# 室內前景對位筆記
++
++## 交付狀態：尚未通過嚴格驗收
++
++已使用內建 imagegen 編輯 mc1.png 兩次，選擇第二次結果存為 fg.png。兩張輸出均為 1672 × 941。fg.png 保留主要室內構圖並去除窗外景物，但生成工具仍重繪部分室內像素、改變窗框內緣，且洋紅並非精確平塗 #FF00FF。因此這是參考草稿，不能宣稱已滿足 prompt.md 的逐像素對齊要求，也未建立表示全部完成的 .done。
++
++validation.json 記錄實際檢查：915647 個近洋紅像素中，全圖精確 #FF00FF 像素只有 3 個；近洋紅區域之外 657705 個像素中，有 652201 個與原圖不完全相同。這項像素差異統計不等同於幾何位移，但足以否定「前景像素完全不動」。左大窗內緣有約 20–45 px 的局部變化，下方右窗台也有偏差。
++
++fg_lines.png 是以原圖 mc1.png 的可見結構人工選點、由程式畫出的 1 px 白線黑底圖，不從生成圖的變形邊界取線。線圖是人工近似，失焦的燈籠、桌緣誤差約 5–15 px，清楚的木框邊緣約 3–8 px；不應當作精密標定結果。桌腳只描可見段，未補畫被裁切或遮擋部分。structure_points.json 保存全部像素座標，可用 make_lines.py 重建線圖。背景內不畫景物或紋理線。
++
++## 座標定義
++
++以下均以原圖為基準，左上為 (0%,0%)，右下為 (100%,100%)；x%=x/1672×100，y%=y/941×100。數值為人工讀圖近似。超出畫面的構件不外推。
++
++| 元素 | 百分比位置與邊線 |
++| --- | --- |
++| 大窗左框／牆柱 | 主木柱約 x=12.6–21.5%；靠窗內緣上端 (22.6%,11.2%)，下端 (20.5%,69.4%)，不是等 x 的垂直線 |
++| 大窗中柱 | 約 x=46.3–51.1%；主木面約 46.3–49.9%，最右側暗邊／玻璃交界約 51.1%；下端 y 約 78–79% |
++| 大窗上框 | 玻璃與上梁交界約 (22.6%,11.2%) → (46.5%,0.5%)；外側梁線約 (21.4%,9.7%) → (35.8%,0%) |
++| 左段窗台內緣 | (20.5%,69.4%) → (46.3%,76.2%) |
++| 右段窗台內緣 | (51.0%,77.3%) → (99.9%,92.0%) |
++| 窗台前側下緣 | 約 (48.6%,79.3%) → (99.9%,95.7%)；可見牆體繼續向畫面下方延伸 |
++| 小窗上格 | 約 x=8.1–12.2%，y=16.5–31.8%；上邊 (8.7%,19.3%) → (12.2%,16.5%) |
++| 小窗橫框 | 上緣 (8.1%,31.8%) → (12.0%,29.5%)；下緣 (8.1%,33.3%) → (11.8%,31.1%) |
++| 小窗下格 | 約 x=7.7–11.8%，y=32.9–49.6%；下段被燈籠遮擋 |
++| 桌面後緣 | 燈籠右側可見端 (13.2%,71.0%) → 桌面右角 (35.6%,78.2%) |
++| 桌面前緣 | 左側出畫點 (0%,88.8%) → 右角 (35.6%,78.2%) |
++| 桌體／可見支腳 | 右外緣約 (35.6%,78.2%) → (35.3%,90.3%)；支腳可見區約 x=31.5–39.2%、y=90.3–100% |
++| 燈籠整體框範圍 | 約 x=0–13.8%、y=44.8–75.3%，含上方提把；最左邊接近裁切 |
++| 燈籠發光箱體 | 約 x=0.6–13.2%、y=57.0–72.4%；上蓋約 y=55.2–58.0%；底框約 y=70.8–75.3% |
++| 天花板／梁 | 主斜梁 (18.4%,7.4%) → (28.6%,0%)；次梁 (21.4%,9.7%) → (35.8%,0%)；左側梁 (4.8%,14.0%) → (12.6%,6.3%) |
++
++## 鏡頭初始估計
++
++- 視平線：建議先以 y=45–49%（約 423–461 px）試配，初始值 47%。這是以窗框上下斜線向左外推收斂得到的粗估，並非把湖岸線視為視平線。概念圖透視未必完全符合單一針孔相機。
++- 窗牆斜對鏡頭：牆面沿畫面右方向更靠近鏡頭，沿左方向退遠；上框向右升、下窗台向右降。相機視線相對窗牆法線可先設偏轉約 35–50°（初始 40°），再調整。若把窗牆正對鏡頭作為零度，應轉成右端靠近、左端遠離；實際引擎旋轉正負號依座標系決定。
++- 垂直視角：先試 55°，合理探索範圍約 45–65°；16:9 畫面下 55° 垂直視角約對應 85.5° 水平視角。單張圖沒有已知尺寸與相機標定，無法唯一求出視角、偏轉與距離。
++- 先對齊中柱與窗台兩條主線，再調視角與相機距離；桌燈失焦較強，適合作次要位置參考。
++
++## 工具與可重現資料
++
++- 前景：內建 imagegen，直接引用 mc1.png 編輯；未使用 CLI/API fallback。
++- 最終編輯提示詞：imagegen_prompt.txt。
++- 結構線：Pillow 畫線，程式 make_lines.py；座標 structure_points.json。
++- 驗證：尺寸、精確洋紅像素數、原圖與結果像素差異，詳 validation.json。
++- 要達成嚴格驗收，仍需用原圖建立精確遮罩並保留原始前景像素，背景做確定性的 RGB 填色；目前未把此方法冒充成已符合要求的生成結果。
+
+tokens used
+42,813
+已讀取並執行，產出存於目前資料夾：
+
+- `fg.png`：圖像工具編輯的前景圖。
+- `fg_lines.png`：1672×941 黑底白色結構線。
+- `notes.md`：百分比座標、鏡頭估計與驗證結果。
+
+**尚未完全達標**：生成圖仍有窗框偏移，背景也不是精確的 `#FF00FF` 平塗，因此未建立 `.done`，避免誤標完成。

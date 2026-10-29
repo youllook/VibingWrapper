@@ -1,0 +1,132 @@
+{
+  "note": "麥塊世界 motion storyboard: one full round of Claude states, 1080p. record: electron docs/錄製/record.js <worktree> <out> --shots docs/麥塊世界/shots-creeper.json",
+  "defaults": {
+    "size": [
+      1920,
+      1080
+    ],
+    "fps": 30,
+    "preroll": 4
+  },
+  "shots": {
+    "creeper-storyboard": {
+      "theme": "creeper-window",
+      "script": [
+        {
+          "state": "none",
+          "sec": 4,
+          "sessions": [
+            null
+          ]
+        },
+        {
+          "state": "clear",
+          "sec": 12,
+          "sessions": [
+            "clear"
+          ]
+        },
+        {
+          "state": "overcast",
+          "sec": 8,
+          "sessions": [
+            "overcast"
+          ]
+        },
+        {
+          "state": "storm",
+          "sec": 4,
+          "sessions": [
+            "storm"
+          ]
+        },
+        {
+          "sec": 6,
+          "eval": "T.strike()"
+        },
+        {
+          "state": "clearing",
+          "sec": 5,
+          "sessions": [
+            "clear"
+          ]
+        },
+        {
+          "state": "waiting",
+          "sec": 8,
+          "sessions": [
+            "waiting"
+          ]
+        },
+        {
+          "state": "none",
+          "sec": 10,
+          "sessions": [
+            null
+          ]
+        }
+      ]
+    },
+    "creeper-daynight": {
+      "note": "one day in 54 s: 05:00 → midnight, the creeper through every state; clockTo is the time at the end of each segment",
+      "theme": "creeper-window",
+      "clock": 5.0,
+      "preroll": 8,
+      "script": [
+        {
+          "state": "clear",
+          "sec": 10,
+          "sessions": [
+            "clear"
+          ],
+          "clockTo": 7.5
+        },
+        {
+          "state": "overcast",
+          "sec": 8,
+          "sessions": [
+            "overcast"
+          ],
+          "clockTo": 11
+        },
+        {
+          "state": "storm",
+          "sec": 4,
+          "sessions": [
+            "storm"
+          ],
+          "clockTo": 13
+        },
+        {
+          "sec": 6,
+          "eval": "T.strike()",
+          "clockTo": 16
+        },
+        {
+          "state": "clearing",
+          "sec": 8,
+          "sessions": [
+            "clear"
+          ],
+          "clockTo": 18.6
+        },
+        {
+          "state": "waiting",
+          "sec": 9,
+          "sessions": [
+            "waiting"
+          ],
+          "clockTo": 21.5
+        },
+        {
+          "state": "none",
+          "sec": 9,
+          "sessions": [
+            null
+          ],
+          "clockTo": 24
+        }
+      ]
+    }
+  }
+}
