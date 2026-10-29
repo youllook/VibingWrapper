@@ -20,6 +20,7 @@
 |---|---|
 | `?state=<名稱>` | 固定某個狀態（六態名或 state.json 的值） |
 | `?full=1` | 全解析度（預設半解析度） |
+| `?bg=0` | 全 3D（預設是前景 3D＋中遠景貼圖 `textures/backdrop.jpg`，由 `docs/麥塊世界mc3/tools/backdrop.py` 從 Codex 扣圖合成） |
 | `?noatm=1` / `?atm={…}` | 關掉／臨時調整霧與光（`lib/atmosphere.js` 的 `ATM`） |
 | `?env={…}` | 臨時調整環境光（`scene.js` 的 `ENV`） |
 | `?tex=pp` | 方塊與苦力怕改用 Pixel Perfection CE 圖案（見下） |
@@ -33,3 +34,4 @@
 - 程式與自畫貼圖：本 repo 授權。
 - `textures/pp/`（只在 `?tex=pp` 時載入）：Textures based on Pixel Perfection CE by XSSheep and contributors, CC BY-SA 4.0 — https://github.com/Athemis/PixelPerfectionCE
 - `ref-mc3.png`：製作用目標圖（Codex 生成），發布前移除。
+- `textures/backdrop.jpg`：由同一張 Codex 生成目標圖的中景＋遠景扣圖合成。

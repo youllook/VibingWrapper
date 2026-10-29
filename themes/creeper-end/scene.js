@@ -191,6 +191,7 @@ const voidBg = makeVoid();
 scene.add(voidBg);
 
 // ── 材質（階段 4）：?flat=1 回到灰模固有色
+const BG = q.get('bg') !== '0';   // 預設：前景 3D＋中遠景貼圖（2026-10-29 用戶定）；?bg=0 回全 3D
 const LOOK = !q.get('flat') && !q.get('layers') && !q.get('top');
 let U = null, halos = null, motes = null, trail = null;
 if (LOOK) {
@@ -202,7 +203,12 @@ if (LOOK) {
     U = makeUniforms(ATM);
     for (const [slot, m] of Object.entries(mats)) patchMaterial(m, U, { under: slot === 'endstone', rim: slot === 'creeper' });
     voidBg.visible = false;
-    scene.add(makeSky(U));
+    // ?bg=1（2026-10-29 用戶點子）：只留前景（近景＋中近景）3D，中景遠景藏起來，背景換成目標圖的中遠景扣圖（textures/backdrop.jpg）
+    if (BG) {
+      layers.mid.visible = false; layers.far.visible = false;
+      const t = new THREE.TextureLoader().load('textures/backdrop.jpg'); t.colorSpace = THREE.SRGBColorSpace;
+      scene.background = t;
+    } else scene.add(makeSky(U));
     // 背光：太陽在畫面右上後方，給朝右、朝後的面一道金邊（目標圖橋與台地上緣的金光）
     // 主光＝背光：從天空太陽暈的方向打過來；近景＋中近景投影（低角度，影子往鏡頭方向拉長）
     // 主光方向：同天空太陽暈的方位（右上後方）但抬高到約 35°，影子才會是目標圖那種約一個身長、往左下
@@ -226,7 +232,7 @@ if (LOOK) {
         layers.mid.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       }
     } else sun.position.copy(sd).multiplyScalar(100);
-    halos = makeHalos(scene); scene.add(halos);
+    halos = makeHalos(BG ? new THREE.Group().add(...[layers.near, layers.midnear].map(g => g.clone(true))) : scene); scene.add(halos);
     // 花苞＝發光晶塊（2026-10-29 用戶圈的目標圖：小而亮的粉白方塊＋光暈）：每個方塊往自己中心縮成 0.55 大、不受霧、不吃色調映射
     scene.traverse(o => { if (o.isMesh && (o.userData.slot === 'chorusFlower' || o.userData.slot === 'obsidianGlow')) shrinkCubes(o, 0.55); });
     // 接觸陰影：每隻苦力怕腳下一片柔和暗影，往左前方（背光的反方向）略拉長
