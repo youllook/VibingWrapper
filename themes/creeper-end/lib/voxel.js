@@ -16,6 +16,9 @@ const FACES = [   // 法線、四個角（單位方塊 0..1）
 export const VARIANTS = { endstone: 4, obsidian: 2 };
 const fhash = (x, y, z, f) => { let h = Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791) ^ Math.imul(f + 1, 2654435761); h ^= h >>> 13; return (Math.imul(h, 0x5bd1e995) >>> 0); };
 
+// 頂點 AO 的四階亮度（0＝兩側都擋住，3＝沒擋）
+export const AO_LEVELS = [0.5, 0.66, 0.82, 1];
+
 export class Voxels {
   constructor() { this.cells = new Map(); this.boxes = []; }
   key(x, y, z) { return x + ',' + y + ',' + z; }
@@ -27,20 +30,32 @@ export class Voxels {
   box(cx, cy, cz, sx, sy, sz, color) { this.boxes.push([cx, cy, cz, sx, sy, sz, new THREE.Color(color)]); return this; }
 
   // 整數格 → 只含外露面的單一 Mesh（頂點色）。scale：一格多大（遠景可用 2、4 省三角形）
-  merged({ slot = 'default', scale = 1, material } = {}) {
+  // ao：頂點環境遮蔽（原版麥塊那種）：每個面頂點看法線那一層的兩個側鄰格＋角鄰格，越多被擋越暗；凹角、交界自然變暗
+  merged({ slot = 'default', scale = 1, material, ao = true } = {}) {
     const pos = [], nor = [], col = [], uv = [], idx = [], nv = VARIANTS[slot] || 1;
     for (const [x, y, z, c] of this.cells.values()) {
       for (let fi = 0; fi < 6; fi++) {
         const [n, quad] = FACES[fi];
         if (this.has(x + n[0], y + n[1], z + n[2])) continue;
-        const base = pos.length / 3;
+        const base = pos.length / 3, axis = n[0] ? 0 : n[1] ? 1 : 2, t1 = (axis + 1) % 3, t2 = (axis + 2) % 3, occ = [];
         for (const q of quad) {
+          let k = 1;
+          if (ao) {
+            const o = [x + n[0], y + n[1], z + n[2]], a = o.slice(), b = o.slice();
+            a[t1] += q[t1] ? 1 : -1; b[t2] += q[t2] ? 1 : -1;
+            const s1 = this.has(...a), s2 = this.has(...b), cc = this.has(a[0] + (t2 === 0 ? b[0] - o[0] : 0), a[1] + (t2 === 1 ? b[1] - o[1] : 0), a[2] + (t2 === 2 ? b[2] - o[2] : 0));
+            const lvl = s1 && s2 ? 0 : 3 - s1 - s2 - cc;
+            k = AO_LEVELS[lvl];
+          }
+          occ.push(k);
           pos.push((x + q[0]) * scale, (y + q[1]) * scale, (z + q[2]) * scale);
-          nor.push(...n); col.push(c.r, c.g, c.b);
+          nor.push(...n); col.push(c.r * k, c.g * k, c.b * k);
         }
         const u0 = nv > 1 ? fhash(x, y, z, fi) % nv / nv : 0, u1 = u0 + 1 / nv;
         uv.push(u0, 0, u1, 0, u1, 1, u0, 1);
-        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        // 對角較亮的那條當切線，避免 AO 漸層出現斜向折痕
+        if (occ[0] + occ[2] >= occ[1] + occ[3]) idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        else idx.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
       }
     }
     const g = new THREE.BufferGeometry();

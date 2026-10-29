@@ -27,9 +27,10 @@ app.whenReady().then(async () => {
   await win.loadURL(`http://127.0.0.1:${server.address().port}/${url}`);
   const t0 = Date.now();
   while (Date.now() - t0 < 20000 && !(await win.webContents.executeJavaScript('!!window.__ready').catch(() => false))) await new Promise(r => setTimeout(r, 200));
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, +(process.env.WAIT || 300)));   // WAIT=毫秒：多等一會再拍（看漸入的動態）
   const info = await win.webContents.executeJavaScript('JSON.stringify(window.theme ? { tris: window.theme.tris, calls: window.theme.calls } : null)').catch(() => null);
   if (info && info !== 'null') console.log('theme', info);
+  if (process.env.EVAL) console.log('eval', await win.webContents.executeJavaScript(process.env.EVAL).catch(e => 'err ' + e));   // EVAL='運算式'：印頁面裡的值（除錯）
   if (process.env.PERF) {   // PERF=1：連畫 60 格、每格 gl.finish()，印平均毫秒（含 CPU 送指令＋GPU 完成）
     const ms = await win.webContents.executeJavaScript(`(() => { const r = window.theme.renderer, gl = r.getContext(); window.theme.render(); gl.finish();
       const t0 = performance.now(); for (let i = 0; i < 60; i++) { window.theme.render(); gl.finish(); } return (performance.now() - t0) / 60; })()`).catch(e => 'err ' + e);

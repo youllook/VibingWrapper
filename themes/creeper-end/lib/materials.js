@@ -7,12 +7,13 @@ export function makeMaterials(opts = {}) {
   const T = makeTextures(opts);
   const lambert = (map, extra = {}) => new THREE.MeshLambertMaterial({ map, vertexColors: true, ...extra });
   return {
-    endstone: lambert(T.endstone),
+    // 末地石：拋光大理石感（2026-10-29 用戶）——Phong 高光，逆光的太陽在頂面反出一片柔亮
+    endstone: new THREE.MeshPhongMaterial({ map: T.endstone, vertexColors: true, shininess: 80, specular: '#5a4c3c' }),   // 高光太強會把下層島頂面曝白（逆光正好反射進鏡頭）
     obsidian: lambert(T.obsidian),
     chorusStem: lambert(T.chorusStem),
     // 會發光的：不吃光，顏色直接亮（bloom 在階段 5）
-    chorusFlower: new THREE.MeshBasicMaterial({ map: T.chorusFlower, vertexColors: true, color: '#ff8af0' }),   // color 乘上去拉飽和，免得被色調映射曝成白
-    obsidianGlow: new THREE.MeshBasicMaterial({ vertexColors: true, color: '#ff8af0' }),
+    chorusFlower: new THREE.MeshBasicMaterial({ map: T.chorusFlower, color: '#ffc8ff', toneMapped: false }),   // 晶塊：粉白、不吃色調映射（才夠亮）   // color 乘上去拉飽和，免得被色調映射曝成白
+    obsidianGlow: new THREE.MeshBasicMaterial({ color: '#ffc8ff', toneMapped: false }),
     creeper: lambert(null),
     creeperFace: lambert(null),
   };

@@ -19,9 +19,13 @@ export const PARAMS = {
   heroSway: 11,         // 思考：主角頭左右轉（度）
   idleSway: 3,          // 待命：晃頭（度）
   rate: { head: 3.2, walk: 4, glow: 5 },   // 趨近速率（1/秒）
+  // 隨機走動（不在／待命／思考）：在自己的平台上挑附近一格走過去、停一下再挑
+  wander: { heroR: 1.6, heroBox: [0.1, 0.5, 0.55, 0.98], walkerR: 0.48, speed: 0.9, hz: 1.5, amp: 0.36, pause: [2.5, 7], turn: 3.5 },
+  // heroR：主角離家最遠幾個「苦力怕身高」；heroBox：主角腳底只能落在畫面這個範圍（左、右、上、下，0–1）；walkerR：隊伍成員離家最遠＝到最近同伴距離的比例；speed：每秒幾個身高
 };
+const WANDER_STATES = ['absent', 'idle', 'thinking'];
 
-export function createStates({ hero, walkers, scene, q }) {
+export function createStates({ hero, walkers, scene, q, ground, cam }) {
   const P = PARAMS;
   const actors = [hero, ...walkers].map((g, i) => {
     const parts = g.userData.parts, own = new Set(), meshes = [];
@@ -33,8 +37,24 @@ export function createStates({ hero, walkers, scene, q }) {
       yaw: parts.head.rotation.y, pitch: parts.head.rotation.x,
       amp: 0, phase: i * 1.7, glow: 0, white: 0,
       seed: i * 2.399,
+      home: g.position.clone(), bodyYaw: g.rotation.y, target: null, wait: 1 + i * 0.7, step: 1.625 * g.scale.x,
     };
   });
+  // 每隻可去的格子：主角＝平台格、離家 heroR 個身高內；隊伍＝橋格、離家不超過到最近同伴的 walkerR 倍（不會撞在一起）
+  const rnd = (() => { let x = 12345; return () => ((x = (x * 1103515245 + 12345) >>> 0) / 4294967296); })();
+  for (const a of actors) {
+    const cells = ground ? (a.isHero ? ground.hero : ground.walkers) : [];
+    let R = a.step * P.wander.heroR;
+    if (!a.isHero) {
+      let d = Infinity; for (const b of actors) if (b !== a && !b.isHero) d = Math.min(d, b.home.distanceTo(a.home));
+      R = d * P.wander.walkerR;
+    }
+    a.cells = cells.filter(c => Math.hypot(c.x - a.home.x, c.z - a.home.z) <= R);
+    if (a.isHero && cam) {   // 主角不能走出畫面左下那塊（目標圖構圖），用鏡頭投影篩
+      const [l, r, t, b] = P.wander.heroBox, v = new THREE.Vector3();
+      a.cells = a.cells.filter(c => { v.copy(c).project(cam); const x = (v.x + 1) / 2, y = (1 - v.y) / 2; return x > l && x < r && y > t && y < b; });
+    }
+  }
   const ease = (cur, tgt, k, dt) => cur + (tgt - cur) * (1 - Math.exp(-k * dt));
 
   // 每隻自己 clone 一份材質（共用材質不能動）；材質若被場景重新套過就再 clone
@@ -57,7 +77,7 @@ export function createStates({ hero, walkers, scene, q }) {
     for (const m of a.meshes) if (m.material.emissive) m.material.emissive.copy(glowCol);
   }
 
-  const S = { state: 'idle', STATES, PARAMS, set, update, tState: 0 };
+  const S = { state: 'idle', STATES, PARAMS, set, update, tState: 0, actors };   // actors：除錯用（cells、target）
   let T = 0, fixed = false, lastPolled = null;
 
   function set(name) {
@@ -72,10 +92,39 @@ export function createStates({ hero, walkers, scene, q }) {
     const n = walkers.length;
     for (const a of actors) {
       const { parts } = a;
+      // ── 隨機走動 ──
+      const W = P.wander;
+      let moving = false;
+      if (WANDER_STATES.includes(st) && a.cells.length) {
+        if (!a.target) {
+          a.wait -= dt;
+          if (a.wait <= 0) a.target = a.cells[Math.floor(rnd() * a.cells.length)];
+        } else {
+          const dx = a.target.x - a.g.position.x, dz = a.target.z - a.g.position.z, d = Math.hypot(dx, dz);
+          if (d < a.step * 0.05) { a.target = null; a.wait = W.pause[0] + rnd() * (W.pause[1] - W.pause[0]); }
+          else {
+            const want = Math.atan2(dx, dz);
+            let dy = ((want - a.bodyYaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+            a.bodyYaw += dy * (1 - Math.exp(-W.turn * dt));
+            if (Math.abs(dy) < 0.6) {   // 先轉向再走
+              const v = Math.min(d, a.step * W.speed * dt);
+              a.g.position.x += dx / d * v; a.g.position.z += dz / d * v;
+            }
+            moving = true;
+          }
+        }
+      } else if (a.target && !WANDER_STATES.includes(st)) { a.target = null; a.wait = 1 + rnd() * 2; }   // 換到別的狀態就原地停下
+      a.g.rotation.y = a.bodyYaw;
       // ── 頭 ──
       let ty = 0, tp = 0;
       const lookBack = a.isHero && (st === 'idle' || st === 'thinking' || st === 'waiting');
-      if (lookBack) { ty = a.baseYaw; tp = a.basePitch; }
+      if (lookBack) {
+        tp = a.basePitch; ty = a.baseYaw;
+        if (cam) {   // 身體在走來走去，頭要轉向鏡頭（扣掉身體朝向），最多 ±80°
+          const rel = Math.atan2(cam.position.x - a.g.position.x, cam.position.z - a.g.position.z) - a.bodyYaw;
+          ty = THREE.MathUtils.clamp(Math.atan2(Math.sin(rel), Math.cos(rel)), -1.4, 1.4);
+        }
+      }
       if (a.isHero && st === 'thinking') ty += THREE.MathUtils.degToRad(P.heroSway) * Math.sin(T * 0.9);
       if (st === 'idle') {   // 待命：偶爾輕晃頭（兩個頻率疊起來，不規律）
         const w = Math.sin(T * 0.37 + a.seed) * Math.sin(T * 0.23 + a.seed * 2);
@@ -86,8 +135,8 @@ export function createStates({ hero, walkers, scene, q }) {
       parts.head.rotation.y = a.yaw; parts.head.rotation.x = a.pitch;
 
       // ── 腳（只有隊伍踏步，主角站著） ──
-      let ampT = 0, hz = P.walkHz;
-      if (!a.isHero) {
+      let ampT = moving ? W.amp : 0, hz = moving ? W.hz : P.walkHz;
+      if (!a.isHero && !moving) {
         const wi = a.idx - 1;
         if (st === 'executing') ampT = P.walkAmp;
         else if (st === 'finishing') { ampT = ts >= wi * P.stopGap ? 0 : P.walkAmp * 0.85; hz = P.finishHz; }
@@ -128,6 +177,7 @@ export function createStates({ hero, walkers, scene, q }) {
 
   // ── 讀 state.json ──
   async function poll() {
+    if (S.CONFIG.polling === false) return;
     try {
       const r = await fetch('state.json?t=' + Date.now(), { cache: 'no-store' });
       const j = await r.json();
@@ -141,5 +191,10 @@ export function createStates({ hero, walkers, scene, q }) {
   else { poll(); setInterval(poll, 1000); }
   addEventListener('keydown', e => { const k = KEYS[e.key]; if (k) set(k); });
 
+  // 錄影／demo 測試介面（themes/README.md）：applyState(sky)、setSessions([...])、CONFIG.polling
+  S.CONFIG = { polling: true, clockHours: null };
+  let sess = [null];
+  S.applyState = sky => { lastPolled = sky; set(sess.some(x => x) ? SKY[sky] || sky : 'absent'); };
+  S.setSessions = a => { sess = Array.isArray(a) ? a : [null]; if (!sess.some(x => x)) set('absent'); };
   return S;
 }

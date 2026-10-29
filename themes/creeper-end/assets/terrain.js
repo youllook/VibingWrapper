@@ -53,7 +53,7 @@ function paint(cols, r, { scale = 1, extra = [] } = {}) {
 
 // ---------- 浮島 ----------
 /** makeIsland({seed, radius(格), terraces 1–3, depth(中心倒錐深,格), scale(一格多大,預設1)}) → Group，userData.surface=[[x,y,z]]（頂面可站格，y=上表面高度） */
-export function makeIsland({ seed = 1, radius = 10, terraces = 2, depth = 14, scale = 1 } = {}) {
+export function makeIsland({ seed = 1, radius = 10, terraces = 2, depth = 14, scale = 1, jag = 0 } = {}) {   // jag：底部每根柱長度隨機差（0–1，目標圖的參差鐘乳石）
   const r = rng(seed * 7 + 3);
   const T = Math.max(1, Math.min(3, terraces | 0));
   const ax = radius * (0.9 + r() * 0.2), az = radius * (0.9 + r() * 0.2), rot = r() * Math.PI;
@@ -75,6 +75,8 @@ export function makeIsland({ seed = 1, radius = 10, terraces = 2, depth = 14, sc
     thick += (vnoise(x * 0.6, z * 0.6 + 9, seed + 4) - 0.5) * 3 + (hash(x, z, seed + 5) < 0.5 ? 1 : 0);
     // 鐘乳石：低頻噪聲高處成簇垂下
     if (d < 0.95 && vnoise(x * 0.4 + 2, z * 0.4, seed + 6) > 0.72) thick += (1 + hash(x, z, seed + 7) * depth * 0.16) * (1.05 - d);
+    // 參差：以 2×2 為一組（柱比單格粗，像目標圖的方塊柱）各自隨機加長，相鄰組長短差大 → 每根柱都露出正面與側面
+    if (jag) thick += Math.floor(Math.pow(hash(x >> 1, z >> 1, seed + 9), 2) * depth * jag * (1.1 - d));
     thick = Math.max(1, Math.floor(thick));
     cols.push({ x, z, top, bot: top - thick + 1 });
     surface.push([x * scale, (top + 1) * scale, z * scale]);
