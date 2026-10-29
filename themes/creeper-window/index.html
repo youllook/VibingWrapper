@@ -178,7 +178,7 @@ lampL.position.copy(W2([LAYOUT.lantern[0], LAYOUT.lantern[1] + 0.3, LAYOUT.lante
 // creeper in the frame; the rest get less (Fable #1)
 const spill = new THREE.SpotLight(0xffc896, 11, 0, 0.42, 1, 2);
 spill.position.copy(W2([0.6, 2.3, 1.4])); spill.target.position.copy(W2([-0.85, 3.0, 4.6])); scene.add(spill, spill.target);
-const deckSpill = new THREE.SpotLight(0xffb070, 2.2, 0, 0.6, 1, 2);   // the room's light, weaker, on the crowd outside the right pane
+const deckSpill = new THREE.SpotLight(0xffb070, 11, 0, 0.6, 1, 2);    // the room's light, weaker, on the crowd outside the right pane
 deckSpill.position.copy(W2([2.5, 2.6, 1.2])); deckSpill.target.position.copy(W2([4.6, 2.2, 5.2])); scene.add(deckSpill, deckSpill.target);
 const shore = [[3.5, 1.6, 40.2], [35.5, 1.6, 25.2]].map(p => { const l = new THREE.PointLight(0xffa850, 6, 0, 2); l.position.copy(W2(p)); scene.add(l); return l; });
 
@@ -562,7 +562,9 @@ function update(dt) {
   world.lantern.userData.glow.emissiveIntensity = 3.0 * (0.5 + 0.5 * tod.lamp) * fl * (1 + act.flare.v * 0.6);
   room.intensity = 6 * tod.lamp * fl * (1 + act.flare.v * 0.5);
   dayFill.intensity = 7 * tod.D;
-  deckSpill.intensity = 2.2 * tod.lamp * fl;
+  // the knot on the deck faces the camera with the sky behind it: enough room light for their faces to read, more
+  // at dusk (the bright sky turns them to silhouettes), still under the main creeper's
+  deckSpill.intensity = (11 * tod.lamp + 6 * tod.Tw) * fl;
   spill.intensity = 11 * tod.lamp * fl * (1 + act.flare.v * 0.5) + flash * 6;
 
   shadowT -= dt; if (shadowT <= 0) { renderer.shadowMap.needsUpdate = true; shadowT = 0.1; }
