@@ -2,19 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cehwreusuddie"
-path="res://.godot/imported/boat_boat3_h31_basecolor.jpg-8649fb75cd9d28f880f90c3f5570d1c2.ctex"
+uid="uid://boam41hh5y6ws"
+path="res://.godot/imported/timber_diff.jpg-34d54ca6d4395943707351c643eb2799.ctex"
 metadata={
 "vram_texture": false
-}
-generator_parameters={
-"md5": "6ae43310cb7798816c01e32a6aee9fb5"
 }
 
 [deps]
 
-source_file="res://models/boat_boat3_h31_basecolor.jpg"
-dest_files=["res://.godot/imported/boat_boat3_h31_basecolor.jpg-8649fb75cd9d28f880f90c3f5570d1c2.ctex"]
+source_file="res://textures/wood/timber_diff.jpg"
+dest_files=["res://.godot/imported/timber_diff.jpg-34d54ca6d4395943707351c643eb2799.ctex"]
 
 [params]
 
@@ -26,7 +23,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""

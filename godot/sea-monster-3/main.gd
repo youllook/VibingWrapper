@@ -31,7 +31,7 @@ const DEBOUNCE := 0.3
 const LEE := 0.4
 const LENS := {"clear": 0.08, "overcast": 0.3, "storm": 0.85, "waiting": 0.6, "clearing": 1.0}
 const BOAT_LEN := 6.5
-const BOAT_DRAFT := 0.55
+const BOAT_DRAFT := 0.40
 const BOAT_YAW := -PI / 2 + 0.25                  # model −Z (the bow posts) → world −X, turned a little away
 const BOAT_AT := Vector3(0.3, 0.0, 0.4)
 
@@ -272,16 +272,18 @@ func _build_boat() -> void:
 	b.scale = Vector3.ONE * k
 	b.position = Vector3(-box.get_center().x * k, -box.position.y * k - BOAT_DRAFT, -box.get_center().z * k)
 	pivot.position = BOAT_AT
-	# soaked wood (boat.gdshader): Tripo's colour, roughness and normals, darker and opaque, with procedural planks and
-	# grain laid over them so the gunwale holds up a metre from the lens (user 2026-10-30)
+	# soaked wood (boat.gdshader): photographed planks and timber projected along the hull, Tripo's colour kept only
+	# blurred for the grime; opaque (user 2026-10-30)
 	for m in b.find_children("*", "MeshInstance3D", true, false):
 		var mi := m as MeshInstance3D
 		var src := mi.mesh.surface_get_material(0) as StandardMaterial3D
 		var bm := ShaderMaterial.new()
 		bm.shader = load("res://boat.gdshader")
 		bm.set_shader_parameter("albedo_tex", src.albedo_texture)
-		bm.set_shader_parameter("normal_tex", src.normal_texture)
-		bm.set_shader_parameter("rm_tex", src.roughness_texture)
+		for set in ["planks", "timber"]:
+			bm.set_shader_parameter(set + "_col", load("res://textures/wood/%s_diff.jpg" % set))
+			bm.set_shader_parameter(set + "_nrm", load("res://textures/wood/%s_nor_gl.jpg" % set))
+			bm.set_shader_parameter(set + "_rgh", load("res://textures/wood/%s_rough.jpg" % set))
 		bm.set_shader_parameter("metres", k)
 		mi.material_override = bm
 

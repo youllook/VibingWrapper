@@ -2,19 +2,19 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dev3mlr2il37l"
-path="res://.godot/imported/boat_boat3_h31_rm.jpg-2b6c26cc33a1cb5a6c9dcde9d952a3bd.ctex"
+uid="uid://b5vslli2n1m4v"
+path="res://.godot/imported/boat_boat_h31_300k_rm.jpg-a4c8d9e3593ebc0762b4fc7e5cec3cf1.ctex"
 metadata={
 "vram_texture": false
 }
 generator_parameters={
-"md5": "2e3398d3fd42c962e8c6a90ea1430823"
+"md5": "345a2a01cc073aa0858b61b307cbfb94"
 }
 
 [deps]
 
-source_file="res://models/boat_boat3_h31_rm.jpg"
-dest_files=["res://.godot/imported/boat_boat3_h31_rm.jpg-2b6c26cc33a1cb5a6c9dcde9d952a3bd.ctex"]
+source_file="res://models/boat_boat_h31_300k_rm.jpg"
+dest_files=["res://.godot/imported/boat_boat_h31_300k_rm.jpg-a4c8d9e3593ebc0762b4fc7e5cec3cf1.ctex"]
 
 [params]
 

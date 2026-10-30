@@ -20,7 +20,9 @@
 | 巨魷頭 | H3.1、**4K**、PBR、4 萬面 | 55 |
 | 腕 | H3.1、4K、PBR、4 萬面（骨架在 Blender 自己綁） | 55 |
 
-共 220 點（2700 → 2480）。導出 GLB 到 `D:\ChromeDownload\`（`boat3_h31`、`fisherman_rig`、`squidhead_h31`、`tentacle_h31`），轉進 `godot/sea-monster-3/models/`。
+共 220 點（2700 → 2480）。
+
+**2026-10-30 木船重生**：同一張輸入圖，H3.1、Ultra Mesh Quality、AI Complete、4K、PBR、三角 **30 萬面**（實得 280,029 面；舊的 18,907 面邊角全圓）。55 點（1885 → 1830），導出 `D:\ChromeDownloadoat_h31_300k.glb`（26 MB）。Tripo 的 Retopo 最多 1 萬面，只能減不能加，所以要重生。導出 GLB 到 `D:\ChromeDownload\`（`boat3_h31`、`fisherman_rig`、`squidhead_h31`、`tentacle_h31`），轉進 `godot/sea-monster-3/models/`。
 
 ## 接手時的處理
 

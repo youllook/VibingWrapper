@@ -23,7 +23,7 @@ godot --headless --path godot/sea-monster-3 --export-release "Web" ../../themes/
 
 - `head.glb` 巨魷頭（近景專用、4K 貼圖）：原點在底、兩眼在 ±X、腕根朝 +Z。用 +X 那顆眼，就是模型自己的眼睛（2026-10-30 用戶：外掛的活眼移除）。
 - `tentacle.glb` 腕（4K）：Blender 沿中心線綁 16 節骨鏈（`/e/tmp/sea-monster-3/blender/rig_tentacle.py`），模型原點在腕的中段，程式把根部移到 `TENTS[].at`；三根各自的根、方向、長粗、仰角、捲曲。
-- `boat.glb` 舊木漁船。Tripo 的 2K 貼圖是碎塊拼貼，近景船舷會糊，所以 `boat.gdshader` 保留它的顏色／粗糙度／法線，再沿船身疊程式木紋（木板與接縫、纖維、木節、磨損，凹凸打進法線讓濕亮反光抓得到；細纖維小於約 2 像素就淡出，不閃爍）。Tripo 材質一律是半透明混合，程式改成不透明（不然海會畫在上面）。
+- `boat.glb` 舊木漁船（2026-10-30 重生：H3.1、Ultra Mesh、**30 萬面**、4K、PBR；原本 2 萬面，邊角全被磨圓）。Tripo 的貼圖不管幾 K 都是碎片拼貼、木紋方向亂，所以 `boat.gdshader` 不用它的貼圖畫木頭：改把 Poly Haven CC0 實拍木材沿船身投影（`textures/wood/`：側板 `worn_planks`＝planks、頂蓋與甲板 `rough_wood`＝timber，各 2K），Tripo 的顏色只取模糊版當髒污；船舷頂蓋以上（舷弧曲線 `sheer_*` 以上）的羊角樁、槳栓、鐵箍用 Tripo 原色當濕鏽鐵（它的金屬通道是空的，只能靠高度判斷）。Tripo 材質一律是半透明混合，程式改成不透明。
 
 ## 做法
 

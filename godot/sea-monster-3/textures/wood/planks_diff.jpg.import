@@ -2,19 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://csl1bk1e2cv5d"
-path="res://.godot/imported/boat_boat3_h31_normal.png-7cfc32a131fa6ff50fdc51981984cdb1.ctex"
+uid="uid://dum4r2udopffu"
+path="res://.godot/imported/planks_diff.jpg-f470cd95e7151d4561048abeaaf54beb.ctex"
 metadata={
 "vram_texture": false
-}
-generator_parameters={
-"md5": "2ac644f301d1f7e15595af25df599971"
 }
 
 [deps]
 
-source_file="res://models/boat_boat3_h31_normal.png"
-dest_files=["res://.godot/imported/boat_boat3_h31_normal.png-7cfc32a131fa6ff50fdc51981984cdb1.ctex"]
+source_file="res://textures/wood/planks_diff.jpg"
+dest_files=["res://.godot/imported/planks_diff.jpg-f470cd95e7151d4561048abeaaf54beb.ctex"]
 
 [params]
 
@@ -26,7 +23,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""
