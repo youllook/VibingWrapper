@@ -1,0 +1,31 @@
+{
+  "canvas_size": [
+    1672,
+    941
+  ],
+  "source_sha256": "42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660",
+  "source_unchanged": true,
+  "outside_day_edit_mask_pixels_exact": true,
+  "day_unchanged_pixel_fraction": 0.66729632021315,
+  "bulb_count": 13,
+  "png_modes": {
+    "gym4.png": "RGB",
+    "generated-day.png": "RGB",
+    "generated-shade.png": "RGB",
+    "generated-night.png": "RGB",
+    "mask-edit-day.png": "L",
+    "plate-day.png": "RGB",
+    "plate-shade.png": "RGB",
+    "plate-night.png": "RGB",
+    "mask-windows.png": "L",
+    "mask-mirror.png": "L",
+    "mask-floor-sun.png": "L",
+    "mask-fan.png": "L",
+    "mask-lamps.png": "L",
+    "mask-board.png": "L",
+    "mask-bulbs.png": "L",
+    "check-遮罩.png": "RGB",
+    "check-三張.png": "RGB"
+  },
+  "method": "Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement."
+}

@@ -1,0 +1,127 @@
+{
+  "canvas_size": [
+    1672,
+    941
+  ],
+  "units": "px",
+  "coordinate_origin": "top-left",
+  "bulbs": [
+    {
+      "name": "left_wall",
+      "center": [
+        49,
+        140
+      ],
+      "radius": 12,
+      "in_mirror": false
+    },
+    {
+      "name": "bar_rack_wall",
+      "center": [
+        474,
+        379
+      ],
+      "radius": 8,
+      "in_mirror": false
+    },
+    {
+      "name": "pillar_wall",
+      "center": [
+        595,
+        366
+      ],
+      "radius": 10,
+      "in_mirror": false
+    },
+    {
+      "name": "mirror_pendant_1",
+      "center": [
+        1061,
+        347
+      ],
+      "radius": 6,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_pendant_2",
+      "center": [
+        1194,
+        343
+      ],
+      "radius": 11,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_pendant_3",
+      "center": [
+        1238,
+        343
+      ],
+      "radius": 7,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_pendant_4",
+      "center": [
+        1258,
+        369
+      ],
+      "radius": 9,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_pendant_5",
+      "center": [
+        1371,
+        341
+      ],
+      "radius": 11,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_pendant_6",
+      "center": [
+        1470,
+        309
+      ],
+      "radius": 12,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_distant_1",
+      "center": [
+        865,
+        466
+      ],
+      "radius": 5,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_distant_2",
+      "center": [
+        909,
+        475
+      ],
+      "radius": 6,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_distant_3",
+      "center": [
+        1003,
+        508
+      ],
+      "radius": 6,
+      "in_mirror": true
+    },
+    {
+      "name": "mirror_distant_4",
+      "center": [
+        1250,
+        517
+      ],
+      "radius": 7,
+      "in_mirror": true
+    }
+  ]
+}

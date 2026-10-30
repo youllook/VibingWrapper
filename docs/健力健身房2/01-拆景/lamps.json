@@ -1,0 +1,34 @@
+{
+  "canvas_size": [
+    1672,
+    941
+  ],
+  "units": "px",
+  "coordinate_origin": "top-left",
+  "lamps": [
+    {
+      "name": "red",
+      "center": [
+        123,
+        338
+      ],
+      "radius": 19
+    },
+    {
+      "name": "yellow",
+      "center": [
+        177,
+        347
+      ],
+      "radius": 18
+    },
+    {
+      "name": "white",
+      "center": [
+        231,
+        355
+      ],
+      "radius": 18
+    }
+  ]
+}

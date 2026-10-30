@@ -1,0 +1,1703 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.0
+--------
+workdir: E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a18ea3-98c4-78a1-95af-6fbe3d6223ea
+--------
+user
+讀本資料夾的 prompt.md 並照做，全部輸出存在本資料夾。
+2026-10-30T21:07:28.953602Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 404: {\"error\": \"not found\"}")
+2026-10-30T21:07:29.099838Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 404: {\"error\": \"not found\"}")
+2026-10-30T21:07:29.551262Z ERROR codex_memories_write::phase2: Phase 2 no changes
+codex
+我會先讀取本資料夾的 `prompt.md`，確認要求後直接執行，並將所有輸出存回本資料夾。
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Get-Content -LiteralPath 'prompt.md' -Raw" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 425ms:
+# 任務：把 gym4.png 整理成可做動態桌布的底圖與遮罩
+
+本資料夾的 `gym4.png`（1672×941）是一張健身房桌布的目標圖。之後會用程式重新做出三樣會動的東西：
+**窗光光束與粉塵**、**鏡子裡模糊的選手倒影**、**吊扇扇葉**。所以需要把這些從圖裡拿掉，得到乾淨的底圖。
+
+可以用內建的圖像生成／編輯工具，也可以寫 Python（PIL、numpy、opencv）做遮罩與合成。
+**每張輸出都要是 1672×941，物件位置必須與原圖完全對齊。** 建議做法（第一版驗證過）：生圖只負責補被拿掉的區域，
+最後用遮罩把補好的區域接回原圖，其餘像素保持原圖不動。全部完成後建立空檔 `.done`。
+
+## 底圖（RGB）
+
+1. `plate-day.png`：同一個鏡頭、同一個傍晚光線，但
+   - 拿掉**空氣中所有的體積光束**（從高窗斜射下來的光柱、霧狀的光），也拿掉**空中飄浮的粉塵亮點**。牆、柱、器材上原本被陽光照亮的地方可以保留。
+   - **地上的窗格光斑保留**（地板上一塊塊亮的格子）。
+   - **鏡子裡的選手、槓鈴、槓片、深蹲架全部拿掉**，鏡中補成模糊的健身房內部倒影（柱子、高窗、燈泡、遠處器材），保持原本的失焦與暖色。鏡框、鏡子下緣的鐵框保留。
+   - **吊扇的扇葉拿掉**，只留中間的馬達與吊桿，扇葉後面補成鐵皮屋頂與桁架。
+   - 白板上的字與正字全部擦掉，變成有點髒、留有擦痕的空白白板（框、筆槽、筆保留）。
+   - 海報、紅黃白三顆燈、壁燈、器材、長凳都不動。
+2. `plate-shade.png`：與 1 相同，但**太陽被雲遮住**：地上的窗格光斑消失（地板變成一致的陰影暗色），
+   牆柱上的直射陽光也消失；高窗本身仍然是亮的（陰天的天光），壁燈照常亮。
+3. `plate-night.png`：與 1 相同的構圖，改成**夜晚**：高窗外是深藍夜色（看得到窗框），沒有任何陽光與光斑；
+   所有鎢絲壁燈與天花板吊燈亮著，暖黃光暈打在附近的磚牆上；鏡中倒影是暗的，只映出幾顆燈泡的光點；
+   紅黃白三顆燈**全部關著**（暗的燈罩）；整體偏暗但磚牆、地板紋理看得出來。物件位置一律不動。
+
+## 遮罩（L 灰階，255＝範圍內，邊緣可以有 2–3 px 的柔邊）
+
+4. `mask-windows.png`：所有高窗的玻璃範圍（左上兩組、中上一組、鏡中倒影裡的窗不算）。
+5. `mask-mirror.png`：鏡面玻璃的內部範圍（不含鐵框）。
+6. `mask-floor-sun.png`：plate-day 地上窗格光斑的範圍（可以用 plate-day 與 plate-shade 的亮度差做出來）。
+7. `mask-fan.png`：原圖扇葉掃過的整個圓盤範圍（以馬達為圓心），另外在 `fan.json` 記下馬達中心座標與扇葉半徑（像素）。
+8. `mask-lamps.png`：紅、黃、白三顆燈的燈罩（三個圓）；在 `lamps.json` 記下三顆燈的圓心與半徑，順序紅、黃、白。
+9. `mask-board.png`：白板可寫字的內部範圍；在 `board.json` 記下四個角的座標（左上、右上、右下、左下）。
+10. `mask-bulbs.png`：畫面中所有壁燈與吊燈燈泡的發光點（每顆一個小圓）；在 `bulbs.json` 記下每顆的圓心與半徑。
+
+## 驗收
+
+- `check-遮罩.png`：把 4–10 用不同顏色半透明疊在 gym4.png 上的標註圖。
+- `check-三張.png`：gym4、plate-day、plate-shade、plate-night 四張縮小拼成 2×2 對照圖。
+- 生圖用的提示詞記在 `generation-prompts.md`；生圖中間檔存成 `generated-*.png`，合成腳本存成 `build_plates.py`（可重跑）。
+- 不要改動 `gym4.png`。
+
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command 'Get-ChildItem -Force | Select-Object Mode,Length,Name' in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 530ms:
+
+Mode   Length Name
+----   ------ ----
+-a---    1237 codex.log
+-a--- 2159236 gym4.png
+-a---    3728 prompt.md
+
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Get-Content -LiteralPath 'D:/codex_workspace/appdata/.codex/skills/.system/imagegen/SKILL.md' -Raw" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 424ms:
+---
+name: "imagegen"
+description: "Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas."
+---
+
+# Image Generation Skill
+
+Generates or edits images for the current project (for example website assets, game assets, UI mockups, product mockups, wireframes, logo design, photorealistic images, or infographics).
+
+## Top-level modes and rules
+
+This skill has exactly two top-level modes:
+
+- **Default built-in tool mode (preferred):** built-in `image_gen` tool for image generation, editing, and transparent-image requests. Does not require `OPENAI_API_KEY`.
+- **Fallback CLI mode:** `scripts/image_gen.py` CLI. Use when the user explicitly asks for or confirms the CLI/API/model path. Requires `OPENAI_API_KEY`.
+
+Within CLI fallback, the CLI exposes three subcommands:
+
+- `generate`
+- `edit`
+- `generate-batch`
+
+Rules:
+- Use the built-in `image_gen` tool by default for normal image generation and editing requests.
+- Do not switch to CLI fallback for ordinary quality, size, or file-path control.
+- For transparent images, ask built-in `image_gen` for a transparent background and preserve the generated alpha.
+- Never silently switch from built-in `image_gen` or CLI `gpt-image-2` to CLI `gpt-image-1.5`; ask the user first unless they explicitly requested `gpt-image-1.5`.
+- The word `batch` by itself does not mean CLI fallback. If the user asks for many assets or says to batch-generate assets without explicitly asking for CLI/API/model controls, stay on the built-in path and issue one built-in call per requested asset or variant.
+- If the built-in tool fails or is unavailable, tell the user the CLI fallback exists and that it requires `OPENAI_API_KEY`. Proceed only if the user explicitly asks for that fallback.
+- If the user explicitly asks for CLI mode, use the bundled `scripts/image_gen.py` workflow. Do not create one-off SDK runners.
+- Never modify `scripts/image_gen.py`. If something is missing, ask the user before doing anything else.
+
+Built-in save-path policy:
+- In built-in tool mode, Codex saves generated images under `$CODEX_HOME/*` by default.
+- Do not describe or rely on OS temp as the default built-in destination.
+- Do not describe or rely on a destination-path argument (if any) on the built-in `image_gen` tool. If a specific location is needed, generate first and then move or copy the selected output from `$CODEX_HOME/generated_images/...`.
+- Save-path precedence in built-in mode:
+  1. If the user names a destination, move or copy the selected output there.
+  2. If the image is meant for the current project, move or copy the final selected image into the workspace before finishing.
+  3. If the image is only for preview or brainstorming, render it inline; the underlying file can remain at the default `$CODEX_HOME/*` path.
+- Never leave a project-referenced asset only at the default `$CODEX_HOME/*` path.
+- Do not overwrite an existing asset unless the user explicitly asked for replacement; otherwise create a sibling versioned filename such as `hero-v2.png` or `item-icon-edited.png`.
+
+Shared prompt guidance for both modes lives in `references/prompting.md` and `references/sample-prompts.md`.
+
+Fallback-only docs/resources for CLI mode:
+- `references/cli.md`
+- `references/image-api.md`
+- `references/codex-network.md`
+- `scripts/image_gen.py`
+
+## When to use
+- Generate a new image (concept art, product shot, cover, website hero)
+- Generate a new image using one or more reference images for style, composition, or mood
+- Edit an existing image (inpainting, lighting or weather transformations, background replacement, object removal, compositing, transparent background)
+- Produce many assets or variants for one task
+
+## When not to use
+- Extending or matching an existing SVG/vector icon set, logo system, or illustration library inside the repo
+- Creating simple shapes, diagrams, wireframes, or icons that are better produced directly in SVG, HTML/CSS, or canvas
+- Making a small project-local asset edit when the source file already exists in an editable native format
+- Any task where the user clearly wants deterministic code-native output instead of a generated bitmap
+
+## Decision tree
+
+Think about two separate questions:
+
+1. **Intent:** is this a new image or an edit of an existing image?
+2. **Execution strategy:** is this one asset or many assets/variants?
+
+Intent:
+- If the user wants to modify an existing image while preserving parts of it, treat the request as **edit**.
+- If the user provides images only as references for style, composition, mood, or subject guidance, treat the request as **generate**.
+- If the user provides no images, treat the request as **generate**.
+
+Built-in edit semantics:
+- Built-in edit mode is for images already visible in the conversation context, such as attached images or images generated earlier in the thread.
+- If the user wants to edit a local image file with the built-in tool, first load it with built-in `view_image` tool so the image is visible in the conversation context, then proceed with the built-in edit flow.
+- Do not promise arbitrary filesystem-path editing through the built-in tool.
+- If a local file still needs direct file-path control, masks, or other explicit CLI-only parameters, use the explicit CLI fallback only when the user asks for it.
+- For edits, preserve invariants aggressively and save non-destructively by default.
+
+Execution strategy:
+- In the built-in default path, produce many assets or variants by issuing one `image_gen` call per requested asset or variant.
+- In the CLI fallback path, use the CLI `generate-batch` subcommand only when the user explicitly chose CLI mode and needs many prompts/assets.
+- For many distinct assets, do not use `n` as a substitute for separate prompts. `n` is for variants of one prompt; distinct assets need distinct built-in calls or distinct CLI `generate-batch` jobs.
+
+Assume the user wants a new image unless they clearly ask to change an existing one.
+
+## Workflow
+1. Decide the top-level mode: built-in by default, including transparent-output requests; fallback CLI only if explicitly requested or confirmed.
+2. Decide the intent: `generate` or `edit`.
+3. Decide whether the output is preview-only or meant to be consumed by the current project.
+4. Decide the execution strategy: single asset vs repeated built-in calls vs CLI `generate-batch`.
+5. Collect inputs up front: prompt(s), exact text (verbatim), constraints/avoid list, and any input images.
+6. For every input image, label its role explicitly:
+   - reference image
+   - edit target
+   - supporting insert/style/compositing input
+7. If the edit target is only on the local filesystem and you are staying on the built-in path, inspect it with `view_image` first so the image is available in conversation context.
+8. If the user asked for a photo, illustration, sprite, product image, banner, or other explicitly raster-style asset, use `image_gen` rather than substituting SVG/HTML/CSS placeholders. If the request is for an icon, logo, or UI graphic that should match existing repo-native SVG/vector/code assets, prefer editing those directly instead.
+9. Augment the prompt based on specificity:
+   - If the user's prompt is already specific and detailed, normalize it into a clear spec without adding creative requirements.
+   - If the user's prompt is generic, add tasteful augmentation only when it materially improves output quality.
+10. Use the built-in `image_gen` tool by default.
+11. For transparent-output requests, ask built-in `image_gen` for a transparent background and preserve the generated alpha channel.
+12. Inspect outputs and validate: subject, style, composition, text accuracy, and invariants/avoid items.
+13. Iterate with a single targeted change, then re-check.
+14. For preview-only work, render the image inline; the underlying file may remain at the default `$CODEX_HOME/generated_images/...` path.
+15. For project-bound work, move or copy the selected artifact into the workspace and update any consuming code or references. Never leave a project-referenced asset only at the default `$CODEX_HOME/generated_images/...` path.
+16. For batches or multi-asset requests, persist every requested deliverable final in the workspace unless the user explicitly asked to keep outputs preview-only. Discarded variants do not need to be kept unless requested.
+17. If the user explicitly chooses or confirms the CLI fallback, then use the fallback-only docs for model, quality, size, `input_fidelity`, masks, output format, output paths, and network setup.
+18. Always report the final saved path(s) for any workspace-bound asset(s), plus the final prompt or prompt set and whether the built-in tool or fallback CLI mode was used.
+
+## Transparent image requests
+
+Ask built-in `image_gen` for a genuinely transparent background and preserve its alpha.
+
+## Prompt augmentation
+
+Reformat user prompts into a structured, production-oriented spec. Make the user's goal clearer and more actionable, but do not blindly add detail.
+
+Treat this as prompt-shaping guidance, not a closed schema. Use only the lines that help, and add a short extra labeled line when it materially improves clarity.
+
+### Specificity policy
+
+Use the user's prompt specificity to decide how much augmentation is appropriate:
+
+- If the prompt is already specific and detailed, preserve that specificity and only normalize/structure it.
+- If the prompt is generic, you may add tasteful augmentation when it will materially improve the result.
+
+Allowed augmentations:
+- composition or framing hints
+- polish level or intended-use hints
+- practical layout guidance
+- reasonable scene concreteness that supports the stated request
+
+Not allowed augmentations:
+- extra characters or objects that are not implied by the request
+- brand names, slogans, palettes, or narrative beats that are not implied
+- arbitrary side-specific placement unless the surrounding layout supports it
+
+## Use-case taxonomy (exact slugs)
+
+Classify each request into one of these buckets and keep the slug consistent across prompts and references.
+
+Generate:
+- photorealistic-natural — candid/editorial lifestyle scenes with real texture and natural lighting.
+- product-mockup — product/packaging shots, catalog imagery, merch concepts.
+- ui-mockup — app/web interface mockups and wireframes; specify the desired fidelity.
+- infographic-diagram — diagrams/infographics with structured layout and text.
+- scientific-educational — classroom explainers, scientific diagrams, and learning visuals with required labels and accuracy constraints.
+- ads-marketing — campaign concepts and ad creatives with audience, brand position, scene, and exact tagline/copy.
+- productivity-visual — slide, chart, workflow, and data-heavy business visuals.
+- logo-brand — logo/mark exploration, vector-friendly.
+- illustration-story — comics, children’s book art, narrative scenes.
+- stylized-concept — style-driven concept art, 3D/stylized renders.
+- historical-scene — period-accurate/world-knowledge scenes.
+
+Edit:
+- text-localization — translate/replace in-image text, preserve layout.
+- identity-preserve — try-on, person-in-scene; lock face/body/pose.
+- precise-object-edit — remove/replace a specific element (including interior swaps).
+- lighting-weather — time-of-day/season/atmosphere changes only.
+- background-extraction — transparent background / clean cutout. Ask built-in `image_gen` for actual transparency.
+- style-transfer — apply reference style while changing subject/scene.
+- compositing — multi-image insert/merge with matched lighting/perspective.
+- sketch-to-render — drawing/line art to photoreal render.
+
+## Shared prompt schema
+
+Use the following labeled spec as shared prompt scaffolding for both top-level modes:
+
+```text
+Use case: <taxonomy slug>
+Asset type: <where the asset will be used>
+Primary request: <user's main prompt>
+Input images: <Image 1: role; Image 2: role> (optional)
+Scene/backdrop: <environment>
+Subject: <main subject>
+Style/medium: <photo/illustration/3D/etc>
+Composition/framing: <wide/close/top-down; placement>
+Lighting/mood: <lighting + mood>
+Color palette: <palette notes>
+Materials/textures: <surface details>
+Text (verbatim): "<exact text>"
+Constraints: <must keep/must avoid>
+Avoid: <negative constraints>
+```
+
+Notes:
+- `Asset type` and `Input images` are prompt scaffolding, not dedicated CLI flags.
+- `Scene/backdrop` refers to the visual setting. It is not the same as the fallback CLI `background` parameter, which controls output transparency behavior.
+- Fallback-only execution notes such as `Quality:`, `Input fidelity:`, masks, output format, and output paths belong in the CLI path only. Do not treat them as built-in `image_gen` tool arguments.
+
+Augmentation rules:
+- Keep it short.
+- Add only the details needed to improve the prompt materially.
+- For edits, explicitly list invariants (`change only X; keep Y unchanged`).
+- If any critical detail is missing and blocks success, ask a question; otherwise proceed.
+
+## Examples
+
+### Generation example (hero image)
+```text
+Use case: product-mockup
+Asset type: landing page hero
+Primary request: a minimal hero image of a ceramic coffee mug
+Style/medium: clean product photography
+Composition/framing: wide composition with usable negative space for page copy if needed
+Lighting/mood: soft studio lighting
+Constraints: no logos, no text, no watermark
+```
+
+### Edit example (invariants)
+```text
+Use case: precise-object-edit
+Asset type: product photo background replacement
+Primary request: replace only the background with a warm sunset gradient
+Constraints: change only the background; keep the product and its edges unchanged; no text; no watermark
+```
+
+## Prompting best practices
+- Structure prompt as scene/backdrop -> subject -> details -> constraints.
+- Include intended use (ad, UI mock, infographic) to set the mode and polish level.
+- Use camera/composition language for photorealism.
+- Only use SVG/vector stand-ins when the user explicitly asked for vector output or a non-image placeholder.
+- Quote exact text and specify typography + placement.
+- For tricky words, spell them letter-by-letter and require verbatim rendering.
+- For multi-image inputs, reference images by index and describe how they should be used.
+- For edits, repeat invariants every iteration to reduce drift.
+- Iterate with single-change follow-ups.
+- If the prompt is generic, add only the extra detail that will materially help.
+- If the prompt is already detailed, normalize it instead of expanding it.
+- For CLI fallback only, see `references/cli.md` and `references/image-api.md` for model, `quality`, `input_fidelity`, masks, output format, and output-path guidance.
+- For transparent images, ask built-in `image_gen` for actual transparency and preserve its alpha.
+
+More principles shared by both modes: `references/prompting.md`.
+Copy/paste specs shared by both modes: `references/sample-prompts.md`.
+
+## Guidance by asset type
+Asset-type templates (website assets, game assets, wireframes, logo) are consolidated in `references/sample-prompts.md`.
+
+## gpt-image-2 guidance for CLI fallback
+
+The fallback CLI defaults to `gpt-image-2`.
+
+- Use `gpt-image-2` for new CLI/API workflows unless the user confirms a different model.
+- CLI `gpt-image-2` does not support `background=transparent`; ask before using `gpt-image-1.5` unless the user explicitly requested that model.
+- `gpt-image-2` always uses high fidelity for image inputs; do not set `input_fidelity` with this model.
+- `gpt-image-2` supports `quality` values `low`, `medium`, `high`, and `auto`.
+- Use `quality low` for fast drafts, thumbnails, and quick iterations. Use `medium`, `high`, or `auto` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
+- Square images are typically fastest to generate. Use `1024x1024` for fast square drafts.
+- If the user asks for 4K-style output, use `3840x2160` for landscape or `2160x3840` for portrait.
+- `gpt-image-2` size may be `auto` or `WIDTHxHEIGHT` if all constraints hold: max edge `<= 3840px`, both edges multiples of `16px`, long-to-short ratio `<= 3:1`, total pixels between `655,360` and `8,294,400`.
+
+Popular `gpt-image-2` sizes:
+- `1024x1024` square
+- `1536x1024` landscape
+- `1024x1536` portrait
+- `2048x2048` 2K square
+- `2048x1152` 2K landscape
+- `3840x2160` 4K landscape
+- `2160x3840` 4K portrait
+- `auto`
+
+## Fallback CLI mode only
+
+### Temp and output conventions
+These conventions apply only to the CLI fallback. They do not describe built-in `image_gen` output behavior.
+- Use `tmp/imagegen/` for intermediate files (for example JSONL batches); delete them when done.
+- Write final artifacts under `output/imagegen/`.
+- Use `--out` or `--out-dir` to control output paths; keep filenames stable and descriptive.
+
+### Dependencies
+Prefer `uv` for dependency management in this repo.
+
+Required Python package:
+```bash
+uv pip install openai
+```
+
+Optional for image inspection and downscaling:
+```bash
+uv pip install pillow
+```
+
+Portability note:
+- If you are using the installed skill outside this repo, install dependencies into that environment with its package manager.
+- In uv-managed environments, `uv pip install ...` remains the preferred path.
+
+### Environment
+- `OPENAI_API_KEY` must be set for live API calls.
+- Do not ask the user for `OPENAI_API_KEY` when using the built-in `image_gen` tool.
+- Never ask the user to paste the full key in chat. Ask them to set it locally and confirm when ready.
+
+If the key is missing, give the user these steps:
+1. Create an API key in the OpenAI platform UI: https://platform.openai.com/api-keys
+2. Set `OPENAI_API_KEY` as an environment variable in their system.
+3. Offer to guide them through setting the environment variable for their OS/shell if needed.
+
+If installation is not possible in this environment, tell the user which dependency is missing and how to install it into their active environment.
+
+### Script-mode notes
+- CLI commands + examples: `references/cli.md`
+- API parameter quick reference: `references/image-api.md`
+- Network approvals / sandbox settings for CLI mode: `references/codex-network.md`
+
+## Reference map
+- `references/prompting.md`: shared prompting principles for both modes.
+- `references/sample-prompts.md`: shared copy/paste prompt recipes for both modes.
+- `references/cli.md`: fallback-only CLI usage via `scripts/image_gen.py`.
+- `references/image-api.md`: fallback-only API/CLI parameter reference.
+- `references/codex-network.md`: fallback-only network/sandbox troubleshooting for CLI mode.
+- `scripts/image_gen.py`: fallback-only CLI implementation. Use only when the user explicitly chooses or confirms CLI mode.
+
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "rg -n 'DesktopPet|gym|健身' 'C:/Users/user/.codex/memories/MEMORY.md'" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 826ms:
+190:# Task Group: E:\DesktopPet Codex shortcut verification and Chrome browser-control browsing
+193:applies_to: cwd=E:\DesktopPet; reuse_rule=recheck current official documentation and user-specific Settings > Voice UI for shortcuts; reuse the browser-control workflow only for browse/inspect requests and treat browser/tab IDs as session-specific.
+199:- rollout_summaries/2026-10-02T13-01-26-okA9-codex_shortcut_and_chrome_mcp_luggagent_browsing.md (cwd=\\?\E:\DesktopPet, rollout_path=\\?\C:\Users\user\.codex\sessions\2026\10\02\rollout-2026-10-02T21-01-26-01a0fcb4-8e79-7cd1-9c87-8c1d2474b6e1.jsonl, updated_at=2026-10-08T06:48:59+00:00, thread_id=01a0fcb4-8e79-7cd1-9c87-8c1d2474b6e1, official documentation and local-config check)
+209:- rollout_summaries/2026-10-02T13-01-26-okA9-codex_shortcut_and_chrome_mcp_luggagent_browsing.md (cwd=\\?\E:\DesktopPet, rollout_path=\\?\C:\Users\user\.codex\sessions\2026\10\02\rollout-2026-10-02T21-01-26-01a0fcb4-8e79-7cd1-9c87-8c1d2474b6e1.jsonl, updated_at=2026-10-08T06:48:59+00:00, thread_id=01a0fcb4-8e79-7cd1-9c87-8c1d2474b6e1, Chrome browser-control inspection)
+290:# Task Group: E:\DesktopPet pine-lake-retreat “松湖暮光” wallpaper theme development
+293:applies_to: cwd=E:\DesktopPet; reuse_rule=reuse the theme architecture and validation sequence for similar DesktopPet themes, but keep all edits inside the user-authorized `themes/<id>/` scope and remeasure viewport/performance results on the current runtime.
+299:- rollout_summaries/2026-10-01T07-56-42-HDuw-add_pine_lake_retreat_wallpaper_theme.md (cwd=\\?\E:\DesktopPet, rollout_path=C:\Users\user\.codex\sessions\2026\10\01\rollout-2026-10-01T15-56-42-01a0f677-35de-7452-baae-7308ceb66f48.jsonl, updated_at=2026-10-02T07:04:07+00:00, thread_id=01a0f677-35de-7452-baae-7308ceb66f48, preview-validated theme delivery)
+307:- when creating a DesktopPet theme, the user asked: "只能寫 themes/<id>/ 裡面，不要改其他任何檔案或資料夾" and prohibited Git and terminating `electron.exe` -> preserve that strict write/process boundary unless newly authorized. [Task 1]
+
+codex
+我會使用 imagegen 技能補出移除物件後的背景，再以遮罩接回原圖，保留其他區域的像素與位置。接著製作陰天、夜晚版本、七張遮罩及可重跑的合成腳本，最後檢查尺寸與對齊。
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command '$p = Get-Item .; while ($null -ne $p) { $f = Join-Path $p.FullName '"'AGENTS.md'; if (Test-Path -LiteralPath "'$f) { Write-Output $f; Get-Content -LiteralPath $f }; $p = $p.Parent }; python -c "import PIL,numpy,cv2; print('"'Image dependencies available')\"" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 805ms:
+Image dependencies available
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18ea3-98c4-78a1-95af-6fbe3d6223ea\\exec-70727bee-4cd3-48ad-9e4f-5e80e1840b29.png' -Destination 'generated-day.png'" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 476ms:
+codex
+第一張補景已完成：鏡中選手與深蹲架、扇葉、白板文字及主要空氣光束都已移除，地板窗格光斑仍保留。我正在製作另外兩種光線版本，並標定窗玻璃、鏡面、燈泡與白板的遮罩範圍。
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18ea3-98c4-78a1-95af-6fbe3d6223ea\\exec-1a997abd-83dc-4ac6-9cba-9326b8ba9e51.png' -Destination 'generated-shade.png'" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 519ms:
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Get-FileHash -LiteralPath 'gym4.png' -Algorithm SHA256" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 447ms:
+
+Algorithm       Hash                                                                   Path
+---------       ----                                                                   ----
+SHA256          42536CE8B7FA90D41CFCA3AC31EDA8D04A61104877ACB7E32B0C97F332185660       E:\DesktopPet\.claude\worktrees…
+
+
+apply patch
+patch: completed
+E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景\generation-prompts.md
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+codex
+陰天版本已生成，但它誤刪了左側前景的一部分槓片。我會在合成時保留原圖器材，只轉移光照變化，避免這類生成偏差進入成品。遮罩與座標資料也會採用原圖的 1672×941 座標系。
+apply patch
+patch: completed
+E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景\build_plates.py
+diff --git a/docs/健力健身房2/01-拆景/build_plates.py b/docs/健力健身房2/01-拆景/build_plates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b7d848cc37a294fcf9eeac069209a9b564faacd1
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/build_plates.py
+@@ -0,0 +1,121 @@
++"""Rebuild all deliverables: python build_plates.py (Pillow, numpy, opencv-python)."""
++from pathlib import Path
++import json, hashlib
++import numpy as np
++import cv2
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++ROOT = Path(__file__).resolve().parent
++SIZE = (1672, 941)
++SOURCE_SHA = '42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660'
++def read(name):
++    im = Image.open(ROOT/name).convert('RGB')
++    if im.size != SIZE:
++        im = im.resize(SIZE, Image.Resampling.LANCZOS)
++    return np.asarray(im).astype(np.float32)
++def save(a, name):
++    Image.fromarray(np.uint8(np.clip(np.rint(a),0,255))).save(ROOT/name)
++def poly(points, blur=1):
++    im = Image.new('L',SIZE); ImageDraw.Draw(im).polygon(points,fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def circles(items, blur=1):
++    im = Image.new('L',SIZE); d=ImageDraw.Draw(im)
++    for item in items:
++        x,y=item['center']; r=item['radius']; d.ellipse((x-r,y-r,x+r,y+r),fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def blend(a,b,m): return a*(1-m[...,None])+b*m[...,None]
++def dump(name,data): (ROOT/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++def gauss(a,s): return cv2.GaussianBlur(a,(0,0),s)
++
++def main():
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    (ROOT/'.done').unlink(missing_ok=True)
++    orig=read('gym4.png'); gen=read('generated-day.png')
++    for n in ['day','shade','night']:
++        save(read('generated-'+n+'.png'),'generated-'+n+'.png')
++    board_points=[(1521,166),(1671,142),(1671,455),(1537,465)]
++    mirror=poly([(803,263),(1478,158),(1503,637),(800,625)],0.8)
++    board=poly(board_points,0.8)
++    fan={'center':[1182,65],'radius':216,'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left','note':'Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical.'}
++    lamps=[{'name':n,'center':c,'radius':r} for n,c,r in [('red',[123,338],19),('yellow',[177,347],18),('white',[231,355],18)]]
++    bulbs=[{'name':n,'center':[x,y],'radius':r,'in_mirror':ref} for n,x,y,r,ref in [
++        ('left_wall',49,140,12,False),('bar_rack_wall',474,379,8,False),('pillar_wall',595,366,10,False),
++        ('mirror_pendant_1',1061,347,6,True),('mirror_pendant_2',1194,343,11,True),
++        ('mirror_pendant_3',1238,343,7,True),('mirror_pendant_4',1258,369,9,True),
++        ('mirror_pendant_5',1371,341,11,True),('mirror_pendant_6',1470,309,12,True),
++        ('mirror_distant_1',865,466,5,True),('mirror_distant_2',909,475,6,True),
++        ('mirror_distant_3',1003,508,6,True),('mirror_distant_4',1250,517,7,True)]]
++    windows=Image.new('L',SIZE); d=ImageDraw.Draw(windows)
++    for p in [[(374,0),(547,0),(545,110),(374,28)],[(615,64),(768,157),(767,235),(614,160)],[(807,201),(854,230),(807,237)]]: d.polygon(p,fill=255)
++    for p,w in [([(432,0),(430,57)],7), ([(474,0),(473,78)],7), ([(513,0),(511,98)],6), ([(376,4),(545,80)],5), ([(639,78),(637,174)],5), ([(662,94),(660,191)],5), ([(687,110),(685,205)],5), ([(712,125),(710,214)],6), ([(739,143),(737,224)],5), ([(614,111),(768,196)],5), ([(824,211),(824,235)],4), ([(841,220),(841,232)],4)]: d.line(p,fill=0,width=w)
++    windows=np.asarray(windows.filter(ImageFilter.GaussianBlur(.65))).astype(np.float32)/255
++    # Local replacement regions. Untouched pixels outside this mask remain identical.
++    roof=poly([(956,0),(1409,0),(1404,131),(1205,169),(1055,165),(959,117)],3)
++    motor=poly([(1171,0),(1193,0),(1197,45),(1206,57),(1204,74),(1189,83),(1170,77),(1163,65),(1172,49)],1)
++    roof*=1-motor
++    haze=poly([(561,108),(609,60),(790,176),(790,627),(685,626),(679,526),(615,520),(608,431),(559,429)],5)
++    # Keep physical lamp, pillar hardware and foreground equipment unchanged.
++    haze*=1-circles([{'center':[595,366],'radius':25}],4)
++    edit=np.maximum.reduce([mirror,board,roof,haze])
++    day=blend(orig,gen,edit)
++    save(edit*255,'mask-edit-day.png')
++    # Transfer illumination only. All high-frequency geometry comes from day.
++    # Foreground objects are protected against accidental omissions in generated sources.
++    equipment=np.maximum.reduce([
++        poly([(0,395),(287,394),(293,676),(0,704)],5),
++        poly([(301,151),(482,164),(481,572),(527,605),(533,675),(306,678)],4),
++        poly([(1477,552),(1671,541),(1671,940),(1434,916),(1435,837),(1509,827),(1514,654),(1470,635)],4)])
++    plates={}
++    for name,gain in [('shade',.74),('night',.30)]:
++        target=read('generated-'+name+'.png')
++        base_low=gauss(day,3)
++        target_low=gauss(target,3)
++        ratio=np.clip((target_low+2)/(base_low+2),.025,3.0)
++        ratio=blend(ratio,np.ones_like(ratio)*gain,equipment)
++        out=np.clip((day+2)*ratio-2,0,255)
++        # Mirror is intentionally soft, so use the generated mirror directly.
++        out=blend(out,target,mirror)
++        if name=='shade':
++            out=blend(out,day,circles(lamps,2))
++        else:
++            # Exact dark lens silhouettes, no residual signal-light emission.
++            out=blend(out,target,circles([dict(v,radius=v['radius']+9) for v in lamps],3))
++        plates[name]=out
++    shade,night=plates['shade'],plates['night']
++    for name,a in [('day',day),('shade',shade),('night',night)]: save(a,'plate-'+name+'.png')
++    floor=poly([(0,699),(673,671),(1450,712),(1484,805),(1422,940),(0,940)],1)
++    lum=lambda a: a@np.array([.2126,.7152,.0722])
++    difference=gauss(lum(day)-lum(shade),1)
++    sun=np.clip((difference-26)/48,0,1)*floor
++    sun=gauss(sun,.8)
++    masks={'windows':windows,'mirror':mirror,'floor-sun':sun,'fan':circles([fan]),'lamps':circles(lamps),'board':board,'bulbs':circles(bulbs)}
++    for name,m in masks.items(): save(m*255,'mask-'+name+'.png')
++    meta={'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left'}
++    dump('fan.json',fan); dump('lamps.json',dict(meta,lamps=lamps))
++    dump('board.json',dict(meta,corner_order=['top-left','top-right','bottom-right','bottom-left'],corners=board_points))
++    dump('bulbs.json',dict(meta,bulbs=bulbs))
++    colors=[(80,190,255),(200,100,255),(255,208,40),(70,255,130),(255,80,100),(50,240,225),(255,145,40)]
++    overlay=orig.copy()
++    for (name,m),c in zip(masks.items(),colors): overlay=blend(overlay,np.full_like(orig,c),m*.46)
++    im=Image.fromarray(np.uint8(np.clip(overlay,0,255))); d=ImageDraw.Draw(im)
++    font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',18)
++    for i,((name,m),c) in enumerate(zip(masks.items(),colors)):
++        x=18+i*232; d.rectangle((x,904,x+224,933),fill=(18,20,24)); d.rectangle((x+6,913,x+18,925),fill=c);d.text((x+25,908),name,fill='white',font=font)
++    im.save(ROOT/'check-遮罩.png')
++    sheet=Image.new('RGB',SIZE,(15,15,15)); d=ImageDraw.Draw(sheet)
++    for i,(label,a) in enumerate([('ORIGINAL',orig),('DAY',day),('SHADE',shade),('NIGHT',night)]):
++        x=(i%2)*836; y=(i//2)*470
++        tile=Image.fromarray(np.uint8(np.clip(a,0,255))).resize((836,470),Image.Resampling.LANCZOS)
++        sheet.paste(tile,(x,y)); d.rectangle((x+8,y+8,x+130,y+37),fill=(15,15,15)); d.text((x+18,y+12),label,font=font,fill='white')
++    sheet.save(ROOT/'check-三張.png')
++    assert all(Image.open(ROOT/('mask-'+n+'.png')).mode=='L' for n in masks)
++    assert all(Image.open(p).size==SIZE for p in ROOT.glob('*.png'))
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    unchanged=np.all(np.uint8(np.rint(day))==orig.astype(np.uint8),axis=2)
++    report={'canvas_size':list(SIZE),'source_sha256':SOURCE_SHA,'source_unchanged':True,'outside_day_edit_mask_pixels_exact':bool(unchanged[edit==0].all()),'day_unchanged_pixel_fraction':float(unchanged.mean()),'bulb_count':len(bulbs),'png_modes':{p.name:Image.open(p).mode for p in ROOT.glob('*.png')},'method':'Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement.'}
++    dump('validation.json',report)
++    print(json.dumps(report,ensure_ascii=False,indent=2))
++    # Completion marker is created only after programmatic checks; visual QA done separately.
++    (ROOT/'.done').touch()
++
++if __name__=='__main__': main()
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+diff --git a/docs/健力健身房2/01-拆景/build_plates.py b/docs/健力健身房2/01-拆景/build_plates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b7d848cc37a294fcf9eeac069209a9b564faacd1
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/build_plates.py
+@@ -0,0 +1,121 @@
++"""Rebuild all deliverables: python build_plates.py (Pillow, numpy, opencv-python)."""
++from pathlib import Path
++import json, hashlib
++import numpy as np
++import cv2
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++ROOT = Path(__file__).resolve().parent
++SIZE = (1672, 941)
++SOURCE_SHA = '42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660'
++def read(name):
++    im = Image.open(ROOT/name).convert('RGB')
++    if im.size != SIZE:
++        im = im.resize(SIZE, Image.Resampling.LANCZOS)
++    return np.asarray(im).astype(np.float32)
++def save(a, name):
++    Image.fromarray(np.uint8(np.clip(np.rint(a),0,255))).save(ROOT/name)
++def poly(points, blur=1):
++    im = Image.new('L',SIZE); ImageDraw.Draw(im).polygon(points,fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def circles(items, blur=1):
++    im = Image.new('L',SIZE); d=ImageDraw.Draw(im)
++    for item in items:
++        x,y=item['center']; r=item['radius']; d.ellipse((x-r,y-r,x+r,y+r),fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def blend(a,b,m): return a*(1-m[...,None])+b*m[...,None]
++def dump(name,data): (ROOT/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++def gauss(a,s): return cv2.GaussianBlur(a,(0,0),s)
++
++def main():
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    (ROOT/'.done').unlink(missing_ok=True)
++    orig=read('gym4.png'); gen=read('generated-day.png')
++    for n in ['day','shade','night']:
++        save(read('generated-'+n+'.png'),'generated-'+n+'.png')
++    board_points=[(1521,166),(1671,142),(1671,455),(1537,465)]
++    mirror=poly([(803,263),(1478,158),(1503,637),(800,625)],0.8)
++    board=poly(board_points,0.8)
++    fan={'center':[1182,65],'radius':216,'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left','note':'Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical.'}
++    lamps=[{'name':n,'center':c,'radius':r} for n,c,r in [('red',[123,338],19),('yellow',[177,347],18),('white',[231,355],18)]]
++    bulbs=[{'name':n,'center':[x,y],'radius':r,'in_mirror':ref} for n,x,y,r,ref in [
++        ('left_wall',49,140,12,False),('bar_rack_wall',474,379,8,False),('pillar_wall',595,366,10,False),
++        ('mirror_pendant_1',1061,347,6,True),('mirror_pendant_2',1194,343,11,True),
++        ('mirror_pendant_3',1238,343,7,True),('mirror_pendant_4',1258,369,9,True),
++        ('mirror_pendant_5',1371,341,11,True),('mirror_pendant_6',1470,309,12,True),
++        ('mirror_distant_1',865,466,5,True),('mirror_distant_2',909,475,6,True),
++        ('mirror_distant_3',1003,508,6,True),('mirror_distant_4',1250,517,7,True)]]
++    windows=Image.new('L',SIZE); d=ImageDraw.Draw(windows)
++    for p in [[(374,0),(547,0),(545,110),(374,28)],[(615,64),(768,157),(767,235),(614,160)],[(807,201),(854,230),(807,237)]]: d.polygon(p,fill=255)
++    for p,w in [([(432,0),(430,57)],7), ([(474,0),(473,78)],7), ([(513,0),(511,98)],6), ([(376,4),(545,80)],5), ([(639,78),(637,174)],5), ([(662,94),(660,191)],5), ([(687,110),(685,205)],5), ([(712,125),(710,214)],6), ([(739,143),(737,224)],5), ([(614,111),(768,196)],5), ([(824,211),(824,235)],4), ([(841,220),(841,232)],4)]: d.line(p,fill=0,width=w)
++    windows=np.asarray(windows.filter(ImageFilter.GaussianBlur(.65))).astype(np.float32)/255
++    # Local replacement regions. Untouched pixels outside this mask remain identical.
++    roof=poly([(956,0),(1409,0),(1404,131),(1205,169),(1055,165),(959,117)],3)
++    motor=poly([(1171,0),(1193,0),(1197,45),(1206,57),(1204,74),(1189,83),(1170,77),(1163,65),(1172,49)],1)
++    roof*=1-motor
++    haze=poly([(561,108),(609,60),(790,176),(790,627),(685,626),(679,526),(615,520),(608,431),(559,429)],5)
++    # Keep physical lamp, pillar hardware and foreground equipment unchanged.
++    haze*=1-circles([{'center':[595,366],'radius':25}],4)
++    edit=np.maximum.reduce([mirror,board,roof,haze])
++    day=blend(orig,gen,edit)
++    save(edit*255,'mask-edit-day.png')
++    # Transfer illumination only. All high-frequency geometry comes from day.
++    # Foreground objects are protected against accidental omissions in generated sources.
++    equipment=np.maximum.reduce([
++        poly([(0,395),(287,394),(293,676),(0,704)],5),
++        poly([(301,151),(482,164),(481,572),(527,605),(533,675),(306,678)],4),
++        poly([(1477,552),(1671,541),(1671,940),(1434,916),(1435,837),(1509,827),(1514,654),(1470,635)],4)])
++    plates={}
++    for name,gain in [('shade',.74),('night',.30)]:
++        target=read('generated-'+name+'.png')
++        base_low=gauss(day,3)
++        target_low=gauss(target,3)
++        ratio=np.clip((target_low+2)/(base_low+2),.025,3.0)
++        ratio=blend(ratio,np.ones_like(ratio)*gain,equipment)
++        out=np.clip((day+2)*ratio-2,0,255)
++        # Mirror is intentionally soft, so use the generated mirror directly.
++        out=blend(out,target,mirror)
++        if name=='shade':
++            out=blend(out,day,circles(lamps,2))
++        else:
++            # Exact dark lens silhouettes, no residual signal-light emission.
++            out=blend(out,target,circles([dict(v,radius=v['radius']+9) for v in lamps],3))
++        plates[name]=out
++    shade,night=plates['shade'],plates['night']
++    for name,a in [('day',day),('shade',shade),('night',night)]: save(a,'plate-'+name+'.png')
++    floor=poly([(0,699),(673,671),(1450,712),(1484,805),(1422,940),(0,940)],1)
++    lum=lambda a: a@np.array([.2126,.7152,.0722])
++    difference=gauss(lum(day)-lum(shade),1)
++    sun=np.clip((difference-26)/48,0,1)*floor
++    sun=gauss(sun,.8)
++    masks={'windows':windows,'mirror':mirror,'floor-sun':sun,'fan':circles([fan]),'lamps':circles(lamps),'board':board,'bulbs':circles(bulbs)}
++    for name,m in masks.items(): save(m*255,'mask-'+name+'.png')
++    meta={'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left'}
++    dump('fan.json',fan); dump('lamps.json',dict(meta,lamps=lamps))
++    dump('board.json',dict(meta,corner_order=['top-left','top-right','bottom-right','bottom-left'],corners=board_points))
++    dump('bulbs.json',dict(meta,bulbs=bulbs))
++    colors=[(80,190,255),(200,100,255),(255,208,40),(70,255,130),(255,80,100),(50,240,225),(255,145,40)]
++    overlay=orig.copy()
++    for (name,m),c in zip(masks.items(),colors): overlay=blend(overlay,np.full_like(orig,c),m*.46)
++    im=Image.fromarray(np.uint8(np.clip(overlay,0,255))); d=ImageDraw.Draw(im)
++    font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',18)
++    for i,((name,m),c) in enumerate(zip(masks.items(),colors)):
++        x=18+i*232; d.rectangle((x,904,x+224,933),fill=(18,20,24)); d.rectangle((x+6,913,x+18,925),fill=c);d.text((x+25,908),name,fill='white',font=font)
++    im.save(ROOT/'check-遮罩.png')
++    sheet=Image.new('RGB',SIZE,(15,15,15)); d=ImageDraw.Draw(sheet)
++    for i,(label,a) in enumerate([('ORIGINAL',orig),('DAY',day),('SHADE',shade),('NIGHT',night)]):
++        x=(i%2)*836; y=(i//2)*470
++        tile=Image.fromarray(np.uint8(np.clip(a,0,255))).resize((836,470),Image.Resampling.LANCZOS)
++        sheet.paste(tile,(x,y)); d.rectangle((x+8,y+8,x+130,y+37),fill=(15,15,15)); d.text((x+18,y+12),label,font=font,fill='white')
++    sheet.save(ROOT/'check-三張.png')
++    assert all(Image.open(ROOT/('mask-'+n+'.png')).mode=='L' for n in masks)
++    assert all(Image.open(p).size==SIZE for p in ROOT.glob('*.png'))
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    unchanged=np.all(np.uint8(np.rint(day))==orig.astype(np.uint8),axis=2)
++    report={'canvas_size':list(SIZE),'source_sha256':SOURCE_SHA,'source_unchanged':True,'outside_day_edit_mask_pixels_exact':bool(unchanged[edit==0].all()),'day_unchanged_pixel_fraction':float(unchanged.mean()),'bulb_count':len(bulbs),'png_modes':{p.name:Image.open(p).mode for p in ROOT.glob('*.png')},'method':'Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement.'}
++    dump('validation.json',report)
++    print(json.dumps(report,ensure_ascii=False,indent=2))
++    # Completion marker is created only after programmatic checks; visual QA done separately.
++    (ROOT/'.done').touch()
++
++if __name__=='__main__': main()
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+diff --git a/docs/健力健身房2/01-拆景/build_plates.py b/docs/健力健身房2/01-拆景/build_plates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b7d848cc37a294fcf9eeac069209a9b564faacd1
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/build_plates.py
+@@ -0,0 +1,121 @@
++"""Rebuild all deliverables: python build_plates.py (Pillow, numpy, opencv-python)."""
++from pathlib import Path
++import json, hashlib
++import numpy as np
++import cv2
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++ROOT = Path(__file__).resolve().parent
++SIZE = (1672, 941)
++SOURCE_SHA = '42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660'
++def read(name):
++    im = Image.open(ROOT/name).convert('RGB')
++    if im.size != SIZE:
++        im = im.resize(SIZE, Image.Resampling.LANCZOS)
++    return np.asarray(im).astype(np.float32)
++def save(a, name):
++    Image.fromarray(np.uint8(np.clip(np.rint(a),0,255))).save(ROOT/name)
++def poly(points, blur=1):
++    im = Image.new('L',SIZE); ImageDraw.Draw(im).polygon(points,fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def circles(items, blur=1):
++    im = Image.new('L',SIZE); d=ImageDraw.Draw(im)
++    for item in items:
++        x,y=item['center']; r=item['radius']; d.ellipse((x-r,y-r,x+r,y+r),fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def blend(a,b,m): return a*(1-m[...,None])+b*m[...,None]
++def dump(name,data): (ROOT/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++def gauss(a,s): return cv2.GaussianBlur(a,(0,0),s)
++
++def main():
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    (ROOT/'.done').unlink(missing_ok=True)
++    orig=read('gym4.png'); gen=read('generated-day.png')
++    for n in ['day','shade','night']:
++        save(read('generated-'+n+'.png'),'generated-'+n+'.png')
++    board_points=[(1521,166),(1671,142),(1671,455),(1537,465)]
++    mirror=poly([(803,263),(1478,158),(1503,637),(800,625)],0.8)
++    board=poly(board_points,0.8)
++    fan={'center':[1182,65],'radius':216,'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left','note':'Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical.'}
++    lamps=[{'name':n,'center':c,'radius':r} for n,c,r in [('red',[123,338],19),('yellow',[177,347],18),('white',[231,355],18)]]
++    bulbs=[{'name':n,'center':[x,y],'radius':r,'in_mirror':ref} for n,x,y,r,ref in [
++        ('left_wall',49,140,12,False),('bar_rack_wall',474,379,8,False),('pillar_wall',595,366,10,False),
++        ('mirror_pendant_1',1061,347,6,True),('mirror_pendant_2',1194,343,11,True),
++        ('mirror_pendant_3',1238,343,7,True),('mirror_pendant_4',1258,369,9,True),
++        ('mirror_pendant_5',1371,341,11,True),('mirror_pendant_6',1470,309,12,True),
++        ('mirror_distant_1',865,466,5,True),('mirror_distant_2',909,475,6,True),
++        ('mirror_distant_3',1003,508,6,True),('mirror_distant_4',1250,517,7,True)]]
++    windows=Image.new('L',SIZE); d=ImageDraw.Draw(windows)
++    for p in [[(374,0),(547,0),(545,110),(374,28)],[(615,64),(768,157),(767,235),(614,160)],[(807,201),(854,230),(807,237)]]: d.polygon(p,fill=255)
++    for p,w in [([(432,0),(430,57)],7), ([(474,0),(473,78)],7), ([(513,0),(511,98)],6), ([(376,4),(545,80)],5), ([(639,78),(637,174)],5), ([(662,94),(660,191)],5), ([(687,110),(685,205)],5), ([(712,125),(710,214)],6), ([(739,143),(737,224)],5), ([(614,111),(768,196)],5), ([(824,211),(824,235)],4), ([(841,220),(841,232)],4)]: d.line(p,fill=0,width=w)
++    windows=np.asarray(windows.filter(ImageFilter.GaussianBlur(.65))).astype(np.float32)/255
++    # Local replacement regions. Untouched pixels outside this mask remain identical.
++    roof=poly([(956,0),(1409,0),(1404,131),(1205,169),(1055,165),(959,117)],3)
++    motor=poly([(1171,0),(1193,0),(1197,45),(1206,57),(1204,74),(1189,83),(1170,77),(1163,65),(1172,49)],1)
++    roof*=1-motor
++    haze=poly([(561,108),(609,60),(790,176),(790,627),(685,626),(679,526),(615,520),(608,431),(559,429)],5)
++    # Keep physical lamp, pillar hardware and foreground equipment unchanged.
++    haze*=1-circles([{'center':[595,366],'radius':25}],4)
++    edit=np.maximum.reduce([mirror,board,roof,haze])
++    day=blend(orig,gen,edit)
++    save(edit*255,'mask-edit-day.png')
++    # Transfer illumination only. All high-frequency geometry comes from day.
++    # Foreground objects are protected against accidental omissions in generated sources.
++    equipment=np.maximum.reduce([
++        poly([(0,395),(287,394),(293,676),(0,704)],5),
++        poly([(301,151),(482,164),(481,572),(527,605),(533,675),(306,678)],4),
++        poly([(1477,552),(1671,541),(1671,940),(1434,916),(1435,837),(1509,827),(1514,654),(1470,635)],4)])
++    plates={}
++    for name,gain in [('shade',.74),('night',.30)]:
++        target=read('generated-'+name+'.png')
++        base_low=gauss(day,3)
++        target_low=gauss(target,3)
++        ratio=np.clip((target_low+2)/(base_low+2),.025,3.0)
++        ratio=blend(ratio,np.ones_like(ratio)*gain,equipment)
++        out=np.clip((day+2)*ratio-2,0,255)
++        # Mirror is intentionally soft, so use the generated mirror directly.
++        out=blend(out,target,mirror)
++        if name=='shade':
++            out=blend(out,day,circles(lamps,2))
++        else:
++            # Exact dark lens silhouettes, no residual signal-light emission.
++            out=blend(out,target,circles([dict(v,radius=v['radius']+9) for v in lamps],3))
++        plates[name]=out
++    shade,night=plates['shade'],plates['night']
++    for name,a in [('day',day),('shade',shade),('night',night)]: save(a,'plate-'+name+'.png')
++    floor=poly([(0,699),(673,671),(1450,712),(1484,805),(1422,940),(0,940)],1)
++    lum=lambda a: a@np.array([.2126,.7152,.0722])
++    difference=gauss(lum(day)-lum(shade),1)
++    sun=np.clip((difference-26)/48,0,1)*floor
++    sun=gauss(sun,.8)
++    masks={'windows':windows,'mirror':mirror,'floor-sun':sun,'fan':circles([fan]),'lamps':circles(lamps),'board':board,'bulbs':circles(bulbs)}
++    for name,m in masks.items(): save(m*255,'mask-'+name+'.png')
++    meta={'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left'}
++    dump('fan.json',fan); dump('lamps.json',dict(meta,lamps=lamps))
++    dump('board.json',dict(meta,corner_order=['top-left','top-right','bottom-right','bottom-left'],corners=board_points))
++    dump('bulbs.json',dict(meta,bulbs=bulbs))
++    colors=[(80,190,255),(200,100,255),(255,208,40),(70,255,130),(255,80,100),(50,240,225),(255,145,40)]
++    overlay=orig.copy()
++    for (name,m),c in zip(masks.items(),colors): overlay=blend(overlay,np.full_like(orig,c),m*.46)
++    im=Image.fromarray(np.uint8(np.clip(overlay,0,255))); d=ImageDraw.Draw(im)
++    font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',18)
++    for i,((name,m),c) in enumerate(zip(masks.items(),colors)):
++        x=18+i*232; d.rectangle((x,904,x+224,933),fill=(18,20,24)); d.rectangle((x+6,913,x+18,925),fill=c);d.text((x+25,908),name,fill='white',font=font)
++    im.save(ROOT/'check-遮罩.png')
++    sheet=Image.new('RGB',SIZE,(15,15,15)); d=ImageDraw.Draw(sheet)
++    for i,(label,a) in enumerate([('ORIGINAL',orig),('DAY',day),('SHADE',shade),('NIGHT',night)]):
++        x=(i%2)*836; y=(i//2)*470
++        tile=Image.fromarray(np.uint8(np.clip(a,0,255))).resize((836,470),Image.Resampling.LANCZOS)
++        sheet.paste(tile,(x,y)); d.rectangle((x+8,y+8,x+130,y+37),fill=(15,15,15)); d.text((x+18,y+12),label,font=font,fill='white')
++    sheet.save(ROOT/'check-三張.png')
++    assert all(Image.open(ROOT/('mask-'+n+'.png')).mode=='L' for n in masks)
++    assert all(Image.open(p).size==SIZE for p in ROOT.glob('*.png'))
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    unchanged=np.all(np.uint8(np.rint(day))==orig.astype(np.uint8),axis=2)
++    report={'canvas_size':list(SIZE),'source_sha256':SOURCE_SHA,'source_unchanged':True,'outside_day_edit_mask_pixels_exact':bool(unchanged[edit==0].all()),'day_unchanged_pixel_fraction':float(unchanged.mean()),'bulb_count':len(bulbs),'png_modes':{p.name:Image.open(p).mode for p in ROOT.glob('*.png')},'method':'Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement.'}
++    dump('validation.json',report)
++    print(json.dumps(report,ensure_ascii=False,indent=2))
++    # Completion marker is created only after programmatic checks; visual QA done separately.
++    (ROOT/'.done').touch()
++
++if __name__=='__main__': main()
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18ea3-98c4-78a1-95af-6fbe3d6223ea\\exec-fbbb7ad5-b511-415c-804e-4384a70d48d2.png' -Destination 'generated-night.png'
+python build_plates.py" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 6556ms:
+{
+  "canvas_size": [
+    1672,
+    941
+  ],
+  "source_sha256": "42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660",
+  "source_unchanged": true,
+  "outside_day_edit_mask_pixels_exact": true,
+  "day_unchanged_pixel_fraction": 0.666592091280273,
+  "bulb_count": 13,
+  "png_modes": {
+    "gym4.png": "RGB",
+    "generated-day.png": "RGB",
+    "generated-shade.png": "RGB",
+    "generated-night.png": "RGB",
+    "mask-edit-day.png": "L",
+    "plate-day.png": "RGB",
+    "plate-shade.png": "RGB",
+    "plate-night.png": "RGB",
+    "mask-windows.png": "L",
+    "mask-mirror.png": "L",
+    "mask-floor-sun.png": "L",
+    "mask-fan.png": "L",
+    "mask-lamps.png": "L",
+    "mask-board.png": "L",
+    "mask-bulbs.png": "L",
+    "check-�B�n.png": "RGB",
+    "check-�T�i.png": "RGB"
+  },
+  "method": "Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement."
+}
+
+diff --git a/docs/健力健身房2/01-拆景/build_plates.py b/docs/健力健身房2/01-拆景/build_plates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b7d848cc37a294fcf9eeac069209a9b564faacd1
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/build_plates.py
+@@ -0,0 +1,121 @@
++"""Rebuild all deliverables: python build_plates.py (Pillow, numpy, opencv-python)."""
++from pathlib import Path
++import json, hashlib
++import numpy as np
++import cv2
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++ROOT = Path(__file__).resolve().parent
++SIZE = (1672, 941)
++SOURCE_SHA = '42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660'
++def read(name):
++    im = Image.open(ROOT/name).convert('RGB')
++    if im.size != SIZE:
++        im = im.resize(SIZE, Image.Resampling.LANCZOS)
++    return np.asarray(im).astype(np.float32)
++def save(a, name):
++    Image.fromarray(np.uint8(np.clip(np.rint(a),0,255))).save(ROOT/name)
++def poly(points, blur=1):
++    im = Image.new('L',SIZE); ImageDraw.Draw(im).polygon(points,fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def circles(items, blur=1):
++    im = Image.new('L',SIZE); d=ImageDraw.Draw(im)
++    for item in items:
++        x,y=item['center']; r=item['radius']; d.ellipse((x-r,y-r,x+r,y+r),fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def blend(a,b,m): return a*(1-m[...,None])+b*m[...,None]
++def dump(name,data): (ROOT/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++def gauss(a,s): return cv2.GaussianBlur(a,(0,0),s)
++
++def main():
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    (ROOT/'.done').unlink(missing_ok=True)
++    orig=read('gym4.png'); gen=read('generated-day.png')
++    for n in ['day','shade','night']:
++        save(read('generated-'+n+'.png'),'generated-'+n+'.png')
++    board_points=[(1521,166),(1671,142),(1671,455),(1537,465)]
++    mirror=poly([(803,263),(1478,158),(1503,637),(800,625)],0.8)
++    board=poly(board_points,0.8)
++    fan={'center':[1182,65],'radius':216,'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left','note':'Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical.'}
++    lamps=[{'name':n,'center':c,'radius':r} for n,c,r in [('red',[123,338],19),('yellow',[177,347],18),('white',[231,355],18)]]
++    bulbs=[{'name':n,'center':[x,y],'radius':r,'in_mirror':ref} for n,x,y,r,ref in [
++        ('left_wall',49,140,12,False),('bar_rack_wall',474,379,8,False),('pillar_wall',595,366,10,False),
++        ('mirror_pendant_1',1061,347,6,True),('mirror_pendant_2',1194,343,11,True),
++        ('mirror_pendant_3',1238,343,7,True),('mirror_pendant_4',1258,369,9,True),
++        ('mirror_pendant_5',1371,341,11,True),('mirror_pendant_6',1470,309,12,True),
++        ('mirror_distant_1',865,466,5,True),('mirror_distant_2',909,475,6,True),
++        ('mirror_distant_3',1003,508,6,True),('mirror_distant_4',1250,517,7,True)]]
++    windows=Image.new('L',SIZE); d=ImageDraw.Draw(windows)
++    for p in [[(374,0),(547,0),(545,110),(374,28)],[(615,64),(768,157),(767,235),(614,160)],[(807,201),(854,230),(807,237)]]: d.polygon(p,fill=255)
++    for p,w in [([(432,0),(430,57)],7), ([(474,0),(473,78)],7), ([(513,0),(511,98)],6), ([(376,4),(545,80)],5), ([(639,78),(637,174)],5), ([(662,94),(660,191)],5), ([(687,110),(685,205)],5), ([(712,125),(710,214)],6), ([(739,143),(737,224)],5), ([(614,111),(768,196)],5), ([(824,211),(824,235)],4), ([(841,220),(841,232)],4)]: d.line(p,fill=0,width=w)
++    windows=np.asarray(windows.filter(ImageFilter.GaussianBlur(.65))).astype(np.float32)/255
++    # Local replacement regions. Untouched pixels outside this mask remain identical.
++    roof=poly([(956,0),(1409,0),(1404,131),(1205,169),(1055,165),(959,117)],3)
++    motor=poly([(1171,0),(1193,0),(1197,45),(1206,57),(1204,74),(1189,83),(1170,77),(1163,65),(1172,49)],1)
++    roof*=1-motor
++    haze=poly([(561,108),(609,60),(790,176),(790,627),(685,626),(679,526),(615,520),(608,431),(559,429)],5)
++    # Keep physical lamp, pillar hardware and foreground equipment unchanged.
++    haze*=1-circles([{'center':[595,366],'radius':25}],4)
++    edit=np.maximum.reduce([mirror,board,roof,haze])
++    day=blend(orig,gen,edit)
++    save(edit*255,'mask-edit-day.png')
++    # Transfer illumination only. All high-frequency geometry comes from day.
++    # Foreground objects are protected against accidental omissions in generated sources.
++    equipment=np.maximum.reduce([
++        poly([(0,395),(287,394),(293,676),(0,704)],5),
++        poly([(301,151),(482,164),(481,572),(527,605),(533,675),(306,678)],4),
++        poly([(1477,552),(1671,541),(1671,940),(1434,916),(1435,837),(1509,827),(1514,654),(1470,635)],4)])
++    plates={}
++    for name,gain in [('shade',.74),('night',.30)]:
++        target=read('generated-'+name+'.png')
++        base_low=gauss(day,3)
++        target_low=gauss(target,3)
++        ratio=np.clip((target_low+2)/(base_low+2),.025,3.0)
++        ratio=blend(ratio,np.ones_like(ratio)*gain,equipment)
++        out=np.clip((day+2)*ratio-2,0,255)
++        # Mirror is intentionally soft, so use the generated mirror directly.
++        out=blend(out,target,mirror)
++        if name=='shade':
++            out=blend(out,day,circles(lamps,2))
++        else:
++            # Exact dark lens silhouettes, no residual signal-light emission.
++            out=blend(out,target,circles([dict(v,radius=v['radius']+9) for v in lamps],3))
++        plates[name]=out
++    shade,night=plates['shade'],plates['night']
++    for name,a in [('day',day),('shade',shade),('night',night)]: save(a,'plate-'+name+'.png')
++    floor=poly([(0,699),(673,671),(1450,712),(1484,805),(1422,940),(0,940)],1)
++    lum=lambda a: a@np.array([.2126,.7152,.0722])
++    difference=gauss(lum(day)-lum(shade),1)
++    sun=np.clip((difference-26)/48,0,1)*floor
++    sun=gauss(sun,.8)
++    masks={'windows':windows,'mirror':mirror,'floor-sun':sun,'fan':circles([fan]),'lamps':circles(lamps),'board':board,'bulbs':circles(bulbs)}
++    for name,m in masks.items(): save(m*255,'mask-'+name+'.png')
++    meta={'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left'}
++    dump('fan.json',fan); dump('lamps.json',dict(meta,lamps=lamps))
++    dump('board.json',dict(meta,corner_order=['top-left','top-right','bottom-right','bottom-left'],corners=board_points))
++    dump('bulbs.json',dict(meta,bulbs=bulbs))
++    colors=[(80,190,255),(200,100,255),(255,208,40),(70,255,130),(255,80,100),(50,240,225),(255,145,40)]
++    overlay=orig.copy()
++    for (name,m),c in zip(masks.items(),colors): overlay=blend(overlay,np.full_like(orig,c),m*.46)
++    im=Image.fromarray(np.uint8(np.clip(overlay,0,255))); d=ImageDraw.Draw(im)
++    font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',18)
++    for i,((name,m),c) in enumerate(zip(masks.items(),colors)):
++        x=18+i*232; d.rectangle((x,904,x+224,933),fill=(18,20,24)); d.rectangle((x+6,913,x+18,925),fill=c);d.text((x+25,908),name,fill='white',font=font)
++    im.save(ROOT/'check-遮罩.png')
++    sheet=Image.new('RGB',SIZE,(15,15,15)); d=ImageDraw.Draw(sheet)
++    for i,(label,a) in enumerate([('ORIGINAL',orig),('DAY',day),('SHADE',shade),('NIGHT',night)]):
++        x=(i%2)*836; y=(i//2)*470
++        tile=Image.fromarray(np.uint8(np.clip(a,0,255))).resize((836,470),Image.Resampling.LANCZOS)
++        sheet.paste(tile,(x,y)); d.rectangle((x+8,y+8,x+130,y+37),fill=(15,15,15)); d.text((x+18,y+12),label,font=font,fill='white')
++    sheet.save(ROOT/'check-三張.png')
++    assert all(Image.open(ROOT/('mask-'+n+'.png')).mode=='L' for n in masks)
++    assert all(Image.open(p).size==SIZE for p in ROOT.glob('*.png'))
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    unchanged=np.all(np.uint8(np.rint(day))==orig.astype(np.uint8),axis=2)
++    report={'canvas_size':list(SIZE),'source_sha256':SOURCE_SHA,'source_unchanged':True,'outside_day_edit_mask_pixels_exact':bool(unchanged[edit==0].all()),'day_unchanged_pixel_fraction':float(unchanged.mean()),'bulb_count':len(bulbs),'png_modes':{p.name:Image.open(p).mode for p in ROOT.glob('*.png')},'method':'Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement.'}
++    dump('validation.json',report)
++    print(json.dumps(report,ensure_ascii=False,indent=2))
++    # Completion marker is created only after programmatic checks; visual QA done separately.
++    (ROOT/'.done').touch()
++
++if __name__=='__main__': main()
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+codex
+三張底圖與遮罩已完成初步檢查，全部為 1672×941，底圖是 RGB、遮罩是 L 灰階。白天版約 66.7% 的像素保持原圖不變；陰天與夜晚版也已保留前景器材。我正在修整長凳遮住鏡面的邊界，完成後會重新驗證並建立 `.done`。
+apply patch
+patch: completed
+E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景\README.md
+E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景\build_plates.py
+diff --git a/docs/健力健身房2/01-拆景/README.md b/docs/健力健身房2/01-拆景/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..de3b7b74cd2bb3e29e97cd99d54e8fffe0d1cb3a
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/README.md
+@@ -0,0 +1,27 @@
++# 動態桌布底圖與遮罩
++
++所有 PNG 均為 **1672 × 941**。座標原點為左上角，單位為像素。
++
++- `plate-day.png`、`plate-shade.png`、`plate-night.png`：RGB 底圖。
++- `mask-windows.png`、`mask-mirror.png`、`mask-floor-sun.png`、`mask-fan.png`、`mask-lamps.png`、`mask-board.png`、`mask-bulbs.png`：L 灰階遮罩，255 表示範圍內。
++- `fan.json`、`lamps.json`、`board.json`、`bulbs.json`：座標資料。三色燈依紅、黃、白排序；白板依左上、右上、右下、左下排序。
++- `check-遮罩.png`：原圖疊加遮罩與英文色彩圖例。
++- `check-三張.png`：左上原圖、右上白天、左下陰天、右下夜晚。
++- `generated-*.png`：內建 image_gen 的補景／光照生成中間檔。
++- `generation-prompts.md`：三次生成使用的完整提示詞。
++- `mask-edit-day.png`：額外保留的白天局部補景遮罩；此遮罩外像素逐像素維持原圖。
++- `validation.json`：尺寸、模式、原圖雜湊與像素檢查結果。
++
++## 重跑
++
++環境需要 Python、Pillow、numpy、opencv-python；執行 `python build_plates.py`。
++腳本從本資料夾的原圖及三張生成中間檔重建全部成品，不需再次呼叫生圖服務。
++程式以 SHA-256 確認原圖未修改，驗證通過後建立空檔 `.done`。
++
++## 合成方式
++
++白天採用局部補景合成，保留原圖窗光地板、海報、前景器材及框架。
++陰天與夜晚採生成圖的光照場轉移至白天底圖；前景器材另外保護，避免生成模型刪除槓片。
++鏡面因原本即失焦，直接採局部生成內容。鏡面遮罩排除前方長凳遮擋處。
++扇葉遮罩依需求是以馬達為中心的完整圓盤，影像外部分裁切；不是透視橢圓。
++燈泡資料含實體壁燈與鏡內可見的燈點，`in_mirror` 可區分兩者；包含補景後鏡內的遠處燈點。
+diff --git a/docs/健力健身房2/01-拆景/build_plates.py b/docs/健力健身房2/01-拆景/build_plates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0971d715bfb5589ce5f1a70ec2b07461563a1f81
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/build_plates.py
+@@ -0,0 +1,123 @@
++"""Rebuild all deliverables: python build_plates.py (Pillow, numpy, opencv-python)."""
++from pathlib import Path
++import json, hashlib
++import numpy as np
++import cv2
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++ROOT = Path(__file__).resolve().parent
++SIZE = (1672, 941)
++SOURCE_SHA = '42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660'
++def read(name):
++    im = Image.open(ROOT/name).convert('RGB')
++    if im.size != SIZE:
++        im = im.resize(SIZE, Image.Resampling.LANCZOS)
++    return np.asarray(im).astype(np.float32)
++def save(a, name):
++    Image.fromarray(np.uint8(np.clip(np.rint(a),0,255))).save(ROOT/name)
++def poly(points, blur=1):
++    im = Image.new('L',SIZE); ImageDraw.Draw(im).polygon(points,fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def circles(items, blur=1):
++    im = Image.new('L',SIZE); d=ImageDraw.Draw(im)
++    for item in items:
++        x,y=item['center']; r=item['radius']; d.ellipse((x-r,y-r,x+r,y+r),fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def blend(a,b,m): return a*(1-m[...,None])+b*m[...,None]
++def dump(name,data): (ROOT/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++def gauss(a,s): return cv2.GaussianBlur(a,(0,0),s)
++
++def main():
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    (ROOT/'.done').unlink(missing_ok=True)
++    orig=read('gym4.png'); gen=read('generated-day.png')
++    for n in ['day','shade','night']:
++        save(read('generated-'+n+'.png'),'generated-'+n+'.png')
++    board_points=[(1521,166),(1671,142),(1671,455),(1537,465)]
++    mirror=poly([(803,263),(1478,158),(1503,637),(800,625)],0.8)
++    # Foreground bench occludes the lower right mirror: it is not mirror glass.
++    mirror*=1-poly([(1513,551),(1490,561),(1482,576),(1478,597),(1484,617),(1510,627),(1671,627),(1671,540)],0.8)
++    board=poly(board_points,0.8)
++    fan={'center':[1182,65],'radius':216,'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left','note':'Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical.'}
++    lamps=[{'name':n,'center':c,'radius':r} for n,c,r in [('red',[123,338],19),('yellow',[177,347],18),('white',[231,355],18)]]
++    bulbs=[{'name':n,'center':[x,y],'radius':r,'in_mirror':ref} for n,x,y,r,ref in [
++        ('left_wall',49,140,12,False),('bar_rack_wall',474,379,8,False),('pillar_wall',595,366,10,False),
++        ('mirror_pendant_1',1061,347,6,True),('mirror_pendant_2',1194,343,11,True),
++        ('mirror_pendant_3',1238,343,7,True),('mirror_pendant_4',1258,369,9,True),
++        ('mirror_pendant_5',1371,341,11,True),('mirror_pendant_6',1470,309,12,True),
++        ('mirror_distant_1',865,466,5,True),('mirror_distant_2',909,475,6,True),
++        ('mirror_distant_3',1003,508,6,True),('mirror_distant_4',1250,517,7,True)]]
++    windows=Image.new('L',SIZE); d=ImageDraw.Draw(windows)
++    for p in [[(374,0),(547,0),(545,110),(374,28)],[(615,64),(768,157),(767,235),(614,160)],[(807,201),(854,230),(807,237)]]: d.polygon(p,fill=255)
++    for p,w in [([(432,0),(430,57)],7), ([(474,0),(473,78)],7), ([(513,0),(511,98)],6), ([(376,4),(545,80)],5), ([(639,78),(637,174)],5), ([(662,94),(660,191)],5), ([(687,110),(685,205)],5), ([(712,125),(710,214)],6), ([(739,143),(737,224)],5), ([(614,111),(768,196)],5), ([(824,211),(824,235)],4), ([(841,220),(841,232)],4)]: d.line(p,fill=0,width=w)
++    windows=np.asarray(windows.filter(ImageFilter.GaussianBlur(.65))).astype(np.float32)/255
++    # Local replacement regions. Untouched pixels outside this mask remain identical.
++    roof=poly([(956,0),(1409,0),(1404,131),(1205,169),(1055,165),(959,117)],3)
++    motor=poly([(1171,0),(1193,0),(1197,45),(1206,57),(1204,74),(1189,83),(1170,77),(1163,65),(1172,49)],1)
++    roof*=1-motor
++    haze=poly([(561,108),(609,60),(790,176),(790,627),(685,626),(679,526),(615,520),(608,431),(559,429)],5)
++    # Keep physical lamp, pillar hardware and foreground equipment unchanged.
++    haze*=1-circles([{'center':[595,366],'radius':25}],4)
++    edit=np.maximum.reduce([mirror,board,roof,haze])
++    day=blend(orig,gen,edit)
++    save(edit*255,'mask-edit-day.png')
++    # Transfer illumination only. All high-frequency geometry comes from day.
++    # Foreground objects are protected against accidental omissions in generated sources.
++    equipment=np.maximum.reduce([
++        poly([(0,395),(287,394),(293,676),(0,704)],5),
++        poly([(301,151),(482,164),(481,572),(527,605),(533,675),(306,678)],4),
++        poly([(1477,552),(1671,541),(1671,940),(1434,916),(1435,837),(1509,827),(1514,654),(1470,635)],4)])
++    plates={}
++    for name,gain in [('shade',.74),('night',.30)]:
++        target=read('generated-'+name+'.png')
++        base_low=gauss(day,3)
++        target_low=gauss(target,3)
++        ratio=np.clip((target_low+2)/(base_low+2),.025,3.0)
++        ratio=blend(ratio,np.ones_like(ratio)*gain,equipment)
++        out=np.clip((day+2)*ratio-2,0,255)
++        # Mirror is intentionally soft, so use the generated mirror directly.
++        out=blend(out,target,mirror)
++        if name=='shade':
++            out=blend(out,day,circles(lamps,2))
++        else:
++            # Exact dark lens silhouettes, no residual signal-light emission.
++            out=blend(out,target,circles([dict(v,radius=v['radius']+9) for v in lamps],3))
++        plates[name]=out
++    shade,night=plates['shade'],plates['night']
++    for name,a in [('day',day),('shade',shade),('night',night)]: save(a,'plate-'+name+'.png')
++    floor=poly([(0,699),(673,671),(1450,712),(1484,805),(1422,940),(0,940)],1)
++    lum=lambda a: a@np.array([.2126,.7152,.0722])
++    difference=gauss(lum(day)-lum(shade),1)
++    sun=np.clip((difference-26)/48,0,1)*floor
++    sun=gauss(sun,.8)
++    masks={'windows':windows,'mirror':mirror,'floor-sun':sun,'fan':circles([fan]),'lamps':circles(lamps),'board':board,'bulbs':circles(bulbs)}
++    for name,m in masks.items(): save(m*255,'mask-'+name+'.png')
++    meta={'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left'}
++    dump('fan.json',fan); dump('lamps.json',dict(meta,lamps=lamps))
++    dump('board.json',dict(meta,corner_order=['top-left','top-right','bottom-right','bottom-left'],corners=board_points))
++    dump('bulbs.json',dict(meta,bulbs=bulbs))
++    colors=[(80,190,255),(200,100,255),(255,208,40),(70,255,130),(255,80,100),(50,240,225),(255,145,40)]
++    overlay=orig.copy()
++    for (name,m),c in zip(masks.items(),colors): overlay=blend(overlay,np.full_like(orig,c),m*.46)
++    im=Image.fromarray(np.uint8(np.clip(overlay,0,255))); d=ImageDraw.Draw(im)
++    font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',18)
++    for i,((name,m),c) in enumerate(zip(masks.items(),colors)):
++        x=18+i*232; d.rectangle((x,904,x+224,933),fill=(18,20,24)); d.rectangle((x+6,913,x+18,925),fill=c);d.text((x+25,908),name,fill='white',font=font)
++    im.save(ROOT/'check-遮罩.png')
++    sheet=Image.new('RGB',SIZE,(15,15,15)); d=ImageDraw.Draw(sheet)
++    for i,(label,a) in enumerate([('ORIGINAL',orig),('DAY',day),('SHADE',shade),('NIGHT',night)]):
++        x=(i%2)*836; y=(i//2)*470
++        tile=Image.fromarray(np.uint8(np.clip(a,0,255))).resize((836,470),Image.Resampling.LANCZOS)
++        sheet.paste(tile,(x,y)); d.rectangle((x+8,y+8,x+130,y+37),fill=(15,15,15)); d.text((x+18,y+12),label,font=font,fill='white')
++    sheet.save(ROOT/'check-三張.png')
++    assert all(Image.open(ROOT/('mask-'+n+'.png')).mode=='L' for n in masks)
++    assert all(Image.open(p).size==SIZE for p in ROOT.glob('*.png'))
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    unchanged=np.all(np.uint8(np.rint(day))==orig.astype(np.uint8),axis=2)
++    report={'canvas_size':list(SIZE),'source_sha256':SOURCE_SHA,'source_unchanged':True,'outside_day_edit_mask_pixels_exact':bool(unchanged[edit==0].all()),'day_unchanged_pixel_fraction':float(unchanged.mean()),'bulb_count':len(bulbs),'png_modes':{p.name:Image.open(p).mode for p in ROOT.glob('*.png')},'method':'Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement.'}
++    dump('validation.json',report)
++    print(json.dumps(report,ensure_ascii=False,indent=2))
++    # Completion marker is created only after programmatic checks; visual QA done separately.
++    (ROOT/'.done').touch()
++
++if __name__=='__main__': main()
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command 'python build_plates.py' in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房2\01-拆景
+ succeeded in 6339ms:
+{
+  "canvas_size": [
+    1672,
+    941
+  ],
+  "source_sha256": "42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660",
+  "source_unchanged": true,
+  "outside_day_edit_mask_pixels_exact": true,
+  "day_unchanged_pixel_fraction": 0.66729632021315,
+  "bulb_count": 13,
+  "png_modes": {
+    "gym4.png": "RGB",
+    "generated-day.png": "RGB",
+    "generated-shade.png": "RGB",
+    "generated-night.png": "RGB",
+    "mask-edit-day.png": "L",
+    "plate-day.png": "RGB",
+    "plate-shade.png": "RGB",
+    "plate-night.png": "RGB",
+    "mask-windows.png": "L",
+    "mask-mirror.png": "L",
+    "mask-floor-sun.png": "L",
+    "mask-fan.png": "L",
+    "mask-lamps.png": "L",
+    "mask-board.png": "L",
+    "mask-bulbs.png": "L",
+    "check-�B�n.png": "RGB",
+    "check-�T�i.png": "RGB"
+  },
+  "method": "Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement."
+}
+
+diff --git a/docs/健力健身房2/01-拆景/README.md b/docs/健力健身房2/01-拆景/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..de3b7b74cd2bb3e29e97cd99d54e8fffe0d1cb3a
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/README.md
+@@ -0,0 +1,27 @@
++# 動態桌布底圖與遮罩
++
++所有 PNG 均為 **1672 × 941**。座標原點為左上角，單位為像素。
++
++- `plate-day.png`、`plate-shade.png`、`plate-night.png`：RGB 底圖。
++- `mask-windows.png`、`mask-mirror.png`、`mask-floor-sun.png`、`mask-fan.png`、`mask-lamps.png`、`mask-board.png`、`mask-bulbs.png`：L 灰階遮罩，255 表示範圍內。
++- `fan.json`、`lamps.json`、`board.json`、`bulbs.json`：座標資料。三色燈依紅、黃、白排序；白板依左上、右上、右下、左下排序。
++- `check-遮罩.png`：原圖疊加遮罩與英文色彩圖例。
++- `check-三張.png`：左上原圖、右上白天、左下陰天、右下夜晚。
++- `generated-*.png`：內建 image_gen 的補景／光照生成中間檔。
++- `generation-prompts.md`：三次生成使用的完整提示詞。
++- `mask-edit-day.png`：額外保留的白天局部補景遮罩；此遮罩外像素逐像素維持原圖。
++- `validation.json`：尺寸、模式、原圖雜湊與像素檢查結果。
++
++## 重跑
++
++環境需要 Python、Pillow、numpy、opencv-python；執行 `python build_plates.py`。
++腳本從本資料夾的原圖及三張生成中間檔重建全部成品，不需再次呼叫生圖服務。
++程式以 SHA-256 確認原圖未修改，驗證通過後建立空檔 `.done`。
++
++## 合成方式
++
++白天採用局部補景合成，保留原圖窗光地板、海報、前景器材及框架。
++陰天與夜晚採生成圖的光照場轉移至白天底圖；前景器材另外保護，避免生成模型刪除槓片。
++鏡面因原本即失焦，直接採局部生成內容。鏡面遮罩排除前方長凳遮擋處。
++扇葉遮罩依需求是以馬達為中心的完整圓盤，影像外部分裁切；不是透視橢圓。
++燈泡資料含實體壁燈與鏡內可見的燈點，`in_mirror` 可區分兩者；包含補景後鏡內的遠處燈點。
+diff --git a/docs/健力健身房2/01-拆景/build_plates.py b/docs/健力健身房2/01-拆景/build_plates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0971d715bfb5589ce5f1a70ec2b07461563a1f81
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/build_plates.py
+@@ -0,0 +1,123 @@
++"""Rebuild all deliverables: python build_plates.py (Pillow, numpy, opencv-python)."""
++from pathlib import Path
++import json, hashlib
++import numpy as np
++import cv2
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++ROOT = Path(__file__).resolve().parent
++SIZE = (1672, 941)
++SOURCE_SHA = '42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660'
++def read(name):
++    im = Image.open(ROOT/name).convert('RGB')
++    if im.size != SIZE:
++        im = im.resize(SIZE, Image.Resampling.LANCZOS)
++    return np.asarray(im).astype(np.float32)
++def save(a, name):
++    Image.fromarray(np.uint8(np.clip(np.rint(a),0,255))).save(ROOT/name)
++def poly(points, blur=1):
++    im = Image.new('L',SIZE); ImageDraw.Draw(im).polygon(points,fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def circles(items, blur=1):
++    im = Image.new('L',SIZE); d=ImageDraw.Draw(im)
++    for item in items:
++        x,y=item['center']; r=item['radius']; d.ellipse((x-r,y-r,x+r,y+r),fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def blend(a,b,m): return a*(1-m[...,None])+b*m[...,None]
++def dump(name,data): (ROOT/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++def gauss(a,s): return cv2.GaussianBlur(a,(0,0),s)
++
++def main():
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    (ROOT/'.done').unlink(missing_ok=True)
++    orig=read('gym4.png'); gen=read('generated-day.png')
++    for n in ['day','shade','night']:
++        save(read('generated-'+n+'.png'),'generated-'+n+'.png')
++    board_points=[(1521,166),(1671,142),(1671,455),(1537,465)]
++    mirror=poly([(803,263),(1478,158),(1503,637),(800,625)],0.8)
++    # Foreground bench occludes the lower right mirror: it is not mirror glass.
++    mirror*=1-poly([(1513,551),(1490,561),(1482,576),(1478,597),(1484,617),(1510,627),(1671,627),(1671,540)],0.8)
++    board=poly(board_points,0.8)
++    fan={'center':[1182,65],'radius':216,'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left','note':'Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical.'}
++    lamps=[{'name':n,'center':c,'radius':r} for n,c,r in [('red',[123,338],19),('yellow',[177,347],18),('white',[231,355],18)]]
++    bulbs=[{'name':n,'center':[x,y],'radius':r,'in_mirror':ref} for n,x,y,r,ref in [
++        ('left_wall',49,140,12,False),('bar_rack_wall',474,379,8,False),('pillar_wall',595,366,10,False),
++        ('mirror_pendant_1',1061,347,6,True),('mirror_pendant_2',1194,343,11,True),
++        ('mirror_pendant_3',1238,343,7,True),('mirror_pendant_4',1258,369,9,True),
++        ('mirror_pendant_5',1371,341,11,True),('mirror_pendant_6',1470,309,12,True),
++        ('mirror_distant_1',865,466,5,True),('mirror_distant_2',909,475,6,True),
++        ('mirror_distant_3',1003,508,6,True),('mirror_distant_4',1250,517,7,True)]]
++    windows=Image.new('L',SIZE); d=ImageDraw.Draw(windows)
++    for p in [[(374,0),(547,0),(545,110),(374,28)],[(615,64),(768,157),(767,235),(614,160)],[(807,201),(854,230),(807,237)]]: d.polygon(p,fill=255)
++    for p,w in [([(432,0),(430,57)],7), ([(474,0),(473,78)],7), ([(513,0),(511,98)],6), ([(376,4),(545,80)],5), ([(639,78),(637,174)],5), ([(662,94),(660,191)],5), ([(687,110),(685,205)],5), ([(712,125),(710,214)],6), ([(739,143),(737,224)],5), ([(614,111),(768,196)],5), ([(824,211),(824,235)],4), ([(841,220),(841,232)],4)]: d.line(p,fill=0,width=w)
++    windows=np.asarray(windows.filter(ImageFilter.GaussianBlur(.65))).astype(np.float32)/255
++    # Local replacement regions. Untouched pixels outside this mask remain identical.
++    roof=poly([(956,0),(1409,0),(1404,131),(1205,169),(1055,165),(959,117)],3)
++    motor=poly([(1171,0),(1193,0),(1197,45),(1206,57),(1204,74),(1189,83),(1170,77),(1163,65),(1172,49)],1)
++    roof*=1-motor
++    haze=poly([(561,108),(609,60),(790,176),(790,627),(685,626),(679,526),(615,520),(608,431),(559,429)],5)
++    # Keep physical lamp, pillar hardware and foreground equipment unchanged.
++    haze*=1-circles([{'center':[595,366],'radius':25}],4)
++    edit=np.maximum.reduce([mirror,board,roof,haze])
++    day=blend(orig,gen,edit)
++    save(edit*255,'mask-edit-day.png')
++    # Transfer illumination only. All high-frequency geometry comes from day.
++    # Foreground objects are protected against accidental omissions in generated sources.
++    equipment=np.maximum.reduce([
++        poly([(0,395),(287,394),(293,676),(0,704)],5),
++        poly([(301,151),(482,164),(481,572),(527,605),(533,675),(306,678)],4),
++        poly([(1477,552),(1671,541),(1671,940),(1434,916),(1435,837),(1509,827),(1514,654),(1470,635)],4)])
++    plates={}
++    for name,gain in [('shade',.74),('night',.30)]:
++        target=read('generated-'+name+'.png')
++        base_low=gauss(day,3)
++        target_low=gauss(target,3)
++        ratio=np.clip((target_low+2)/(base_low+2),.025,3.0)
++        ratio=blend(ratio,np.ones_like(ratio)*gain,equipment)
++        out=np.clip((day+2)*ratio-2,0,255)
++        # Mirror is intentionally soft, so use the generated mirror directly.
++        out=blend(out,target,mirror)
++        if name=='shade':
++            out=blend(out,day,circles(lamps,2))
++        else:
++            # Exact dark lens silhouettes, no residual signal-light emission.
++            out=blend(out,target,circles([dict(v,radius=v['radius']+9) for v in lamps],3))
++        plates[name]=out
++    shade,night=plates['shade'],plates['night']
++    for name,a in [('day',day),('shade',shade),('night',night)]: save(a,'plate-'+name+'.png')
++    floor=poly([(0,699),(673,671),(1450,712),(1484,805),(1422,940),(0,940)],1)
++    lum=lambda a: a@np.array([.2126,.7152,.0722])
++    difference=gauss(lum(day)-lum(shade),1)
++    sun=np.clip((difference-26)/48,0,1)*floor
++    sun=gauss(sun,.8)
++    masks={'windows':windows,'mirror':mirror,'floor-sun':sun,'fan':circles([fan]),'lamps':circles(lamps),'board':board,'bulbs':circles(bulbs)}
++    for name,m in masks.items(): save(m*255,'mask-'+name+'.png')
++    meta={'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left'}
++    dump('fan.json',fan); dump('lamps.json',dict(meta,lamps=lamps))
++    dump('board.json',dict(meta,corner_order=['top-left','top-right','bottom-right','bottom-left'],corners=board_points))
++    dump('bulbs.json',dict(meta,bulbs=bulbs))
++    colors=[(80,190,255),(200,100,255),(255,208,40),(70,255,130),(255,80,100),(50,240,225),(255,145,40)]
++    overlay=orig.copy()
++    for (name,m),c in zip(masks.items(),colors): overlay=blend(overlay,np.full_like(orig,c),m*.46)
++    im=Image.fromarray(np.uint8(np.clip(overlay,0,255))); d=ImageDraw.Draw(im)
++    font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',18)
++    for i,((name,m),c) in enumerate(zip(masks.items(),colors)):
++        x=18+i*232; d.rectangle((x,904,x+224,933),fill=(18,20,24)); d.rectangle((x+6,913,x+18,925),fill=c);d.text((x+25,908),name,fill='white',font=font)
++    im.save(ROOT/'check-遮罩.png')
++    sheet=Image.new('RGB',SIZE,(15,15,15)); d=ImageDraw.Draw(sheet)
++    for i,(label,a) in enumerate([('ORIGINAL',orig),('DAY',day),('SHADE',shade),('NIGHT',night)]):
++        x=(i%2)*836; y=(i//2)*470
++        tile=Image.fromarray(np.uint8(np.clip(a,0,255))).resize((836,470),Image.Resampling.LANCZOS)
++        sheet.paste(tile,(x,y)); d.rectangle((x+8,y+8,x+130,y+37),fill=(15,15,15)); d.text((x+18,y+12),label,font=font,fill='white')
++    sheet.save(ROOT/'check-三張.png')
++    assert all(Image.open(ROOT/('mask-'+n+'.png')).mode=='L' for n in masks)
++    assert all(Image.open(p).size==SIZE for p in ROOT.glob('*.png'))
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    unchanged=np.all(np.uint8(np.rint(day))==orig.astype(np.uint8),axis=2)
++    report={'canvas_size':list(SIZE),'source_sha256':SOURCE_SHA,'source_unchanged':True,'outside_day_edit_mask_pixels_exact':bool(unchanged[edit==0].all()),'day_unchanged_pixel_fraction':float(unchanged.mean()),'bulb_count':len(bulbs),'png_modes':{p.name:Image.open(p).mode for p in ROOT.glob('*.png')},'method':'Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement.'}
++    dump('validation.json',report)
++    print(json.dumps(report,ensure_ascii=False,indent=2))
++    # Completion marker is created only after programmatic checks; visual QA done separately.
++    (ROOT/'.done').touch()
++
++if __name__=='__main__': main()
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+codex
+已完成，全部輸出存於本資料夾，並建立空檔 `.done`。
+
+包含三張底圖、七張遮罩、座標 JSON、兩張驗收圖、生圖中間檔、提示詞及可重跑的 `build_plates.py`。
+
+已驗證所有圖片為 **1672×941**、底圖 RGB、遮罩 L；`gym4.png` 未修改。使用內建 image_gen 補景，再以 Python 遮罩合成。
+diff --git a/docs/健力健身房2/01-拆景/README.md b/docs/健力健身房2/01-拆景/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..de3b7b74cd2bb3e29e97cd99d54e8fffe0d1cb3a
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/README.md
+@@ -0,0 +1,27 @@
++# 動態桌布底圖與遮罩
++
++所有 PNG 均為 **1672 × 941**。座標原點為左上角，單位為像素。
++
++- `plate-day.png`、`plate-shade.png`、`plate-night.png`：RGB 底圖。
++- `mask-windows.png`、`mask-mirror.png`、`mask-floor-sun.png`、`mask-fan.png`、`mask-lamps.png`、`mask-board.png`、`mask-bulbs.png`：L 灰階遮罩，255 表示範圍內。
++- `fan.json`、`lamps.json`、`board.json`、`bulbs.json`：座標資料。三色燈依紅、黃、白排序；白板依左上、右上、右下、左下排序。
++- `check-遮罩.png`：原圖疊加遮罩與英文色彩圖例。
++- `check-三張.png`：左上原圖、右上白天、左下陰天、右下夜晚。
++- `generated-*.png`：內建 image_gen 的補景／光照生成中間檔。
++- `generation-prompts.md`：三次生成使用的完整提示詞。
++- `mask-edit-day.png`：額外保留的白天局部補景遮罩；此遮罩外像素逐像素維持原圖。
++- `validation.json`：尺寸、模式、原圖雜湊與像素檢查結果。
++
++## 重跑
++
++環境需要 Python、Pillow、numpy、opencv-python；執行 `python build_plates.py`。
++腳本從本資料夾的原圖及三張生成中間檔重建全部成品，不需再次呼叫生圖服務。
++程式以 SHA-256 確認原圖未修改，驗證通過後建立空檔 `.done`。
++
++## 合成方式
++
++白天採用局部補景合成，保留原圖窗光地板、海報、前景器材及框架。
++陰天與夜晚採生成圖的光照場轉移至白天底圖；前景器材另外保護，避免生成模型刪除槓片。
++鏡面因原本即失焦，直接採局部生成內容。鏡面遮罩排除前方長凳遮擋處。
++扇葉遮罩依需求是以馬達為中心的完整圓盤，影像外部分裁切；不是透視橢圓。
++燈泡資料含實體壁燈與鏡內可見的燈點，`in_mirror` 可區分兩者；包含補景後鏡內的遠處燈點。
+diff --git a/docs/健力健身房2/01-拆景/build_plates.py b/docs/健力健身房2/01-拆景/build_plates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0971d715bfb5589ce5f1a70ec2b07461563a1f81
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/build_plates.py
+@@ -0,0 +1,123 @@
++"""Rebuild all deliverables: python build_plates.py (Pillow, numpy, opencv-python)."""
++from pathlib import Path
++import json, hashlib
++import numpy as np
++import cv2
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++ROOT = Path(__file__).resolve().parent
++SIZE = (1672, 941)
++SOURCE_SHA = '42536ce8b7fa90d41cfca3ac31eda8d04a61104877acb7e32b0c97f332185660'
++def read(name):
++    im = Image.open(ROOT/name).convert('RGB')
++    if im.size != SIZE:
++        im = im.resize(SIZE, Image.Resampling.LANCZOS)
++    return np.asarray(im).astype(np.float32)
++def save(a, name):
++    Image.fromarray(np.uint8(np.clip(np.rint(a),0,255))).save(ROOT/name)
++def poly(points, blur=1):
++    im = Image.new('L',SIZE); ImageDraw.Draw(im).polygon(points,fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def circles(items, blur=1):
++    im = Image.new('L',SIZE); d=ImageDraw.Draw(im)
++    for item in items:
++        x,y=item['center']; r=item['radius']; d.ellipse((x-r,y-r,x+r,y+r),fill=255)
++    return np.asarray(im.filter(ImageFilter.GaussianBlur(blur))).astype(np.float32)/255
++def blend(a,b,m): return a*(1-m[...,None])+b*m[...,None]
++def dump(name,data): (ROOT/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++def gauss(a,s): return cv2.GaussianBlur(a,(0,0),s)
++
++def main():
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    (ROOT/'.done').unlink(missing_ok=True)
++    orig=read('gym4.png'); gen=read('generated-day.png')
++    for n in ['day','shade','night']:
++        save(read('generated-'+n+'.png'),'generated-'+n+'.png')
++    board_points=[(1521,166),(1671,142),(1671,455),(1537,465)]
++    mirror=poly([(803,263),(1478,158),(1503,637),(800,625)],0.8)
++    # Foreground bench occludes the lower right mirror: it is not mirror glass.
++    mirror*=1-poly([(1513,551),(1490,561),(1482,576),(1478,597),(1484,617),(1510,627),(1671,627),(1671,540)],0.8)
++    board=poly(board_points,0.8)
++    fan={'center':[1182,65],'radius':216,'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left','note':'Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical.'}
++    lamps=[{'name':n,'center':c,'radius':r} for n,c,r in [('red',[123,338],19),('yellow',[177,347],18),('white',[231,355],18)]]
++    bulbs=[{'name':n,'center':[x,y],'radius':r,'in_mirror':ref} for n,x,y,r,ref in [
++        ('left_wall',49,140,12,False),('bar_rack_wall',474,379,8,False),('pillar_wall',595,366,10,False),
++        ('mirror_pendant_1',1061,347,6,True),('mirror_pendant_2',1194,343,11,True),
++        ('mirror_pendant_3',1238,343,7,True),('mirror_pendant_4',1258,369,9,True),
++        ('mirror_pendant_5',1371,341,11,True),('mirror_pendant_6',1470,309,12,True),
++        ('mirror_distant_1',865,466,5,True),('mirror_distant_2',909,475,6,True),
++        ('mirror_distant_3',1003,508,6,True),('mirror_distant_4',1250,517,7,True)]]
++    windows=Image.new('L',SIZE); d=ImageDraw.Draw(windows)
++    for p in [[(374,0),(547,0),(545,110),(374,28)],[(615,64),(768,157),(767,235),(614,160)],[(807,201),(854,230),(807,237)]]: d.polygon(p,fill=255)
++    for p,w in [([(432,0),(430,57)],7), ([(474,0),(473,78)],7), ([(513,0),(511,98)],6), ([(376,4),(545,80)],5), ([(639,78),(637,174)],5), ([(662,94),(660,191)],5), ([(687,110),(685,205)],5), ([(712,125),(710,214)],6), ([(739,143),(737,224)],5), ([(614,111),(768,196)],5), ([(824,211),(824,235)],4), ([(841,220),(841,232)],4)]: d.line(p,fill=0,width=w)
++    windows=np.asarray(windows.filter(ImageFilter.GaussianBlur(.65))).astype(np.float32)/255
++    # Local replacement regions. Untouched pixels outside this mask remain identical.
++    roof=poly([(956,0),(1409,0),(1404,131),(1205,169),(1055,165),(959,117)],3)
++    motor=poly([(1171,0),(1193,0),(1197,45),(1206,57),(1204,74),(1189,83),(1170,77),(1163,65),(1172,49)],1)
++    roof*=1-motor
++    haze=poly([(561,108),(609,60),(790,176),(790,627),(685,626),(679,526),(615,520),(608,431),(559,429)],5)
++    # Keep physical lamp, pillar hardware and foreground equipment unchanged.
++    haze*=1-circles([{'center':[595,366],'radius':25}],4)
++    edit=np.maximum.reduce([mirror,board,roof,haze])
++    day=blend(orig,gen,edit)
++    save(edit*255,'mask-edit-day.png')
++    # Transfer illumination only. All high-frequency geometry comes from day.
++    # Foreground objects are protected against accidental omissions in generated sources.
++    equipment=np.maximum.reduce([
++        poly([(0,395),(287,394),(293,676),(0,704)],5),
++        poly([(301,151),(482,164),(481,572),(527,605),(533,675),(306,678)],4),
++        poly([(1477,552),(1671,541),(1671,940),(1434,916),(1435,837),(1509,827),(1514,654),(1470,635)],4)])
++    plates={}
++    for name,gain in [('shade',.74),('night',.30)]:
++        target=read('generated-'+name+'.png')
++        base_low=gauss(day,3)
++        target_low=gauss(target,3)
++        ratio=np.clip((target_low+2)/(base_low+2),.025,3.0)
++        ratio=blend(ratio,np.ones_like(ratio)*gain,equipment)
++        out=np.clip((day+2)*ratio-2,0,255)
++        # Mirror is intentionally soft, so use the generated mirror directly.
++        out=blend(out,target,mirror)
++        if name=='shade':
++            out=blend(out,day,circles(lamps,2))
++        else:
++            # Exact dark lens silhouettes, no residual signal-light emission.
++            out=blend(out,target,circles([dict(v,radius=v['radius']+9) for v in lamps],3))
++        plates[name]=out
++    shade,night=plates['shade'],plates['night']
++    for name,a in [('day',day),('shade',shade),('night',night)]: save(a,'plate-'+name+'.png')
++    floor=poly([(0,699),(673,671),(1450,712),(1484,805),(1422,940),(0,940)],1)
++    lum=lambda a: a@np.array([.2126,.7152,.0722])
++    difference=gauss(lum(day)-lum(shade),1)
++    sun=np.clip((difference-26)/48,0,1)*floor
++    sun=gauss(sun,.8)
++    masks={'windows':windows,'mirror':mirror,'floor-sun':sun,'fan':circles([fan]),'lamps':circles(lamps),'board':board,'bulbs':circles(bulbs)}
++    for name,m in masks.items(): save(m*255,'mask-'+name+'.png')
++    meta={'canvas_size':list(SIZE),'units':'px','coordinate_origin':'top-left'}
++    dump('fan.json',fan); dump('lamps.json',dict(meta,lamps=lamps))
++    dump('board.json',dict(meta,corner_order=['top-left','top-right','bottom-right','bottom-left'],corners=board_points))
++    dump('bulbs.json',dict(meta,bulbs=bulbs))
++    colors=[(80,190,255),(200,100,255),(255,208,40),(70,255,130),(255,80,100),(50,240,225),(255,145,40)]
++    overlay=orig.copy()
++    for (name,m),c in zip(masks.items(),colors): overlay=blend(overlay,np.full_like(orig,c),m*.46)
++    im=Image.fromarray(np.uint8(np.clip(overlay,0,255))); d=ImageDraw.Draw(im)
++    font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',18)
++    for i,((name,m),c) in enumerate(zip(masks.items(),colors)):
++        x=18+i*232; d.rectangle((x,904,x+224,933),fill=(18,20,24)); d.rectangle((x+6,913,x+18,925),fill=c);d.text((x+25,908),name,fill='white',font=font)
++    im.save(ROOT/'check-遮罩.png')
++    sheet=Image.new('RGB',SIZE,(15,15,15)); d=ImageDraw.Draw(sheet)
++    for i,(label,a) in enumerate([('ORIGINAL',orig),('DAY',day),('SHADE',shade),('NIGHT',night)]):
++        x=(i%2)*836; y=(i//2)*470
++        tile=Image.fromarray(np.uint8(np.clip(a,0,255))).resize((836,470),Image.Resampling.LANCZOS)
++        sheet.paste(tile,(x,y)); d.rectangle((x+8,y+8,x+130,y+37),fill=(15,15,15)); d.text((x+18,y+12),label,font=font,fill='white')
++    sheet.save(ROOT/'check-三張.png')
++    assert all(Image.open(ROOT/('mask-'+n+'.png')).mode=='L' for n in masks)
++    assert all(Image.open(p).size==SIZE for p in ROOT.glob('*.png'))
++    assert hashlib.sha256((ROOT/'gym4.png').read_bytes()).hexdigest()==SOURCE_SHA
++    unchanged=np.all(np.uint8(np.rint(day))==orig.astype(np.uint8),axis=2)
++    report={'canvas_size':list(SIZE),'source_sha256':SOURCE_SHA,'source_unchanged':True,'outside_day_edit_mask_pixels_exact':bool(unchanged[edit==0].all()),'day_unchanged_pixel_fraction':float(unchanged.mean()),'bulb_count':len(bulbs),'png_modes':{p.name:Image.open(p).mode for p in ROOT.glob('*.png')},'method':'Masked day inpainting; shade/night illumination transfer preserving day geometry, protected equipment and local mirror replacement.'}
++    dump('validation.json',report)
++    print(json.dumps(report,ensure_ascii=False,indent=2))
++    # Completion marker is created only after programmatic checks; visual QA done separately.
++    (ROOT/'.done').touch()
++
++if __name__=='__main__': main()
+diff --git a/docs/健力健身房2/01-拆景/generation-prompts.md b/docs/健力健身房2/01-拆景/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28be133a5055101687783995f547dca18d5bf6f0
+--- /dev/null
++++ b/docs/健力健身房2/01-拆景/generation-prompts.md
+@@ -0,0 +1,13 @@
++# Generation prompts
++
++Built-in image_gen image editing; source gym4.png; final canvas 1672 × 941.
++Generated results are compositing sources. build_plates.py preserves source geometry and protects foreground equipment against generative omissions.
++
++## generated-day.png
++Use case: precise-object-edit. Edit the supplied gym photograph into a clean animation background plate. Preserve EXACT camera framing, perspective, geometry and placement of every remaining object. Output 1672x941 landscape. Remove ALL airborne volumetric sun rays, fog/haze and floating dust specks, especially the bright diagonal haze between left high windows and mirror. Keep warm late afternoon illumination on solid surfaces and keep ALL bright rectangular window sun patches on floor unchanged. Remove the athlete AND all barbells, weight plates and squat rack structures INSIDE the large mirror only; fill entire mirror with softly out of focus warm empty gym interior with architectural columns, high windows, distant indistinct equipment and hanging bulbs. Keep mirror frame and bottom metal frame. Remove ALL ceiling fan blades, leaving ONLY central motor and vertical suspension rod; reconstruct corrugated roof and structural rafters behind blades. Erase ALL handwriting and tally marks on whiteboard at right, leaving dirty wiped blank board surface; preserve frame, marker tray and markers. Preserve powerlifting poster, red yellow white signal lamps, wall lights, foreground barbells and weights, bench and floor exactly. No new objects. No text additions. This is an editing source for masked compositing, so absolute pixel alignment and unchanged framing are critical.
++
++## generated-shade.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to sun hidden behind a thick cloud. Remove ALL rectangular sun patches and direct sunlight on entire floor, walls, pillars and equipment. Floor must have uniform dark shaded illumination while preserving original slab seams and texture exactly. High windows stay bright with soft neutral overcast skylight. Wall tungsten lights and reflected hanging bulbs remain lit, red yellow white signal lights remain lit. No new objects, no changed framing. No remaining golden sunlight on floor or mirror.
++
++## generated-night.png
++Use case: lighting-weather. Edit this clean gym plate, preserving EXACT pixel coordinates, camera, all geometry, all objects and their shapes. Output 1672x941. Keep blank dirty whiteboard, bladeless ceiling fan motor and rod, empty softly blurred mirror with NO person, NO barbells, NO weight plates and NO squat rack. No airborne dust, haze or volumetric beams. Change to nighttime. High window glass is deep blue night, with visible original mullions. NO sunlight, NO floor window patches. All tungsten wall lamps and ceiling pendant bulbs on with warm yellow local glows on brick walls. Mirror dark and softly defocused, only a few warm bulb reflections, no bright window reflections. Red yellow and white three circular signal lamps under left poster are ALL OFF with dim dark tinted covers, no glow. Overall dark nighttime ambience with legible brick, roof and floor textures. Keep original geometry exactly.
+
+tokens used
+53,047
+已完成，全部輸出存於本資料夾，並建立空檔 `.done`。
+
+包含三張底圖、七張遮罩、座標 JSON、兩張驗收圖、生圖中間檔、提示詞及可重跑的 `build_plates.py`。
+
+已驗證所有圖片為 **1672×941**、底圖 RGB、遮罩 L；`gym4.png` 未修改。使用內建 image_gen 補景，再以 Python 遮罩合成。

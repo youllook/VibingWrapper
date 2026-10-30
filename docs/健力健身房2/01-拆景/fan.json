@@ -1,0 +1,14 @@
+{
+  "center": [
+    1182,
+    65
+  ],
+  "radius": 216,
+  "canvas_size": [
+    1672,
+    941
+  ],
+  "units": "px",
+  "coordinate_origin": "top-left",
+  "note": "Full circular blade sweep, clipped at image edge; ceiling perspective makes visible blades elliptical."
+}

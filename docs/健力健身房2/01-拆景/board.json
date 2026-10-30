@@ -1,0 +1,32 @@
+{
+  "canvas_size": [
+    1672,
+    941
+  ],
+  "units": "px",
+  "coordinate_origin": "top-left",
+  "corner_order": [
+    "top-left",
+    "top-right",
+    "bottom-right",
+    "bottom-left"
+  ],
+  "corners": [
+    [
+      1521,
+      166
+    ],
+    [
+      1671,
+      142
+    ],
+    [
+      1671,
+      455
+    ],
+    [
+      1537,
+      465
+    ]
+  ]
+}
