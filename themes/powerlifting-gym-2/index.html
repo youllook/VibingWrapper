@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>健力健身房 2</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<script type="module">
+// 健力健身房 2：氛圍靠鏡面模糊和光影（docs/健力健身房2/00-分析.md）。
+// 底圖是 Codex 修好的平面圖（白天／陰天／夜晚），3D 只有兩樣：吊扇扇葉、鏡中倒影（選手＋槓＋架，畫進小畫面後模糊）。
+// 網址參數：?clip=Squat&t=1.8 選手停在單一姿勢（靜態驗收）｜?blur=1|2|3 倒影模糊檔｜?tune={json} 覆寫 LAYOUT｜?day=1／?night=1 固定日夜
+import * as THREE from 'three';
+import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { makeBarbell, makeRack, setPlates, setBend } from './assets/iron.js';
+import { makeBench } from './assets/props.js';
+import { makeFan } from './assets/fx.js';
+import { makeBoardInk, drawBoard } from './assets/board.js';
+import { surfaceReady } from './lib/surface.js';
+import { makePlate, unproject, W0, H0 } from './assets/plate.js';
+import { makeMirror, BLUR } from './assets/mirror.js';
+import { makeBeams, makeDust } from './assets/light.js';
+import { makeArmFix } from './assets/armfix.js';
+
+const q = new URLSearchParams(location.search);
+const STATIC = q.has('clip') || q.has('t') || q.has('tune');
+
+// 擺放。主鏡頭只拿來放吊扇；鏡中另有一台鏡頭（倒影是另一個「房間」，選手背對我們）
+const LAYOUT = {
+  cam: { y: 0.45, pitch: 12, fov: 58 },                 // 低機位、微仰（gym4 是貼地往上看）
+  fan: { x: 1182, y: 62, depth: 8.6, diameter: 3.7, tilt: 6, blades: 7 },   // 馬達像素位置（01-拆景/fan.json）
+  mirror: { x: 1318, y: 640, depth: 7.6, yaw: 180, fov: 40, sun: 14, hemi: 0.25, bulb: 2.5, fill: 0.1, exp: 1.2, haze: 0.1 },   // 倒影裡選手腳底的像素位置；選手身高 1.8 m 約 165 px
+  lifter: { x: 0, z: 0, clip: 'Squat', t: 1.8 },
+  plates: 6,
+  rack: { x: -0.05, z: 0.06, depth: 0.6, hook: 1.466 },
+  bench: { x: 1.48, z: 0.98, yaw: -38 },
+};
+if (q.get('tune')) {
+  const t = JSON.parse(q.get('tune'));
+  for (const k in t) LAYOUT[k] = typeof t[k] === 'object' && !Array.isArray(t[k]) ? { ...LAYOUT[k], ...t[k] } : t[k];
+}
+if (q.get('clip')) LAYOUT.lifter.clip = q.get('clip');
+if (q.get('t')) LAYOUT.lifter.t = +q.get('t');
+
+// 朋友的比賽日（白板倒數）與三項成績（kg，2026-10-30 朋友給的）
+const PARAMS = { meetDate: '2027-02-15', lines: ['Squat 120', 'Bench 100', 'Deadlift 110', 'Total 330'], basePlates: 4, maxPlates: 6, plateEvery: 60 };
+const tally = {
+  key: () => 'gym.tally.' + new Date().toDateString(),
+  get() { try { return +localStorage.getItem(this.key()) || 0; } catch { return 0; } },
+  add() { const n = this.get() + 1; try { localStorage.setItem(this.key(), n); } catch {} return n; },
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+const SCALE = STATIC ? 1 : +(q.get('scale') || 0.5);
+renderer.setPixelRatio((STATIC ? 1 : devicePixelRatio || 1) * SCALE);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const loader = new THREE.TextureLoader();
+const tex = f => loader.loadAsync('./textures/' + f);
+const [tDay, tShade, tNight, tMask, tBulbs] = await Promise.all(['plate-day.jpg', 'plate-shade.jpg', 'plate-night.jpg', 'mask-a.png', 'mask-b.png'].map(tex));
+
+// ---------- 鏡中倒影 ----------
+const MRES = +(q.get('mres') || 1);   // 除錯：鏡中小畫面放大幾倍（看清楚姿勢用）
+const mirror = makeMirror(renderer, { width: 418 * MRES, height: 235 * MRES });
+const mscene = new THREE.Scene();
+{   // 環境光：白天底圖當全景，金屬反射到健身房的暖色
+  const env = tDay.clone(); env.colorSpace = THREE.SRGBColorSpace; env.mapping = THREE.EquirectangularReflectionMapping;
+  mscene.environment = new THREE.PMREMGenerator(renderer).fromEquirectangular(env).texture; mscene.environmentIntensity = 0.25;
+}
+const mcam = new THREE.PerspectiveCamera(LAYOUT.mirror.fov, W0 / H0, 0.1, 80);
+mcam.position.set(0, 1.0, 0); mcam.lookAt(0, 1.0, -1); mcam.updateMatrixWorld();
+const set = new THREE.Group();   // 倒影裡的「架子區」：原點＝選手深蹲點，面朝 set 的 +Z（轉 180° 就背對鏡頭）
+set.position.copy(unproject(mcam, LAYOUT.mirror.x, LAYOUT.mirror.y, LAYOUT.mirror.depth)).setY(0);
+set.rotation.y = THREE.MathUtils.degToRad(LAYOUT.mirror.yaw);
+mscene.add(set);
+// 倒影的光（04）：目標圖的選手是背光的暗剪影 → 主光是選手身後左上方的窗光（只打亮輪廓），頭頂燈泡、鏡頭側補光都很弱
+const mhemi = new THREE.HemisphereLight('#ffd9b0', '#2a1c12', 0.5);
+const msun = new THREE.DirectionalLight('#ffbb77', 3.0); msun.position.set(-4, 4.5, -5).add(set.position); msun.target = set;
+const mbulb = new THREE.PointLight('#ffb35c', 6, 6, 1.5); mbulb.position.set(0, 3.0, -0.6).add(set.position);
+const mfill = new THREE.DirectionalLight('#ffad6b', 0.4); mfill.position.set(1, 2, 4).add(set.position); mfill.target = set;
+mscene.add(mhemi, msun, mbulb, mfill);
+
+const put = (o, p) => { o.position.set(p.x || 0, p.y || 0, p.z || 0); o.rotation.y = THREE.MathUtils.degToRad(p.yaw || 0); set.add(o); return o; };
+const rack = put(makeRack({ hookHeight: LAYOUT.rack.hook, depth: LAYOUT.rack.depth }), LAYOUT.rack);
+const bench = put(makeBench(), LAYOUT.bench);
+const barbell = makeBarbell({ platesPerSide: LAYOUT.plates, kinds: [25] }); set.add(barbell);
+// 04 倒影裡的鐵器、凳子壓暗：目標圖的槓片是黑的，架子幾乎融進背景的柱子（材質只有鏡中在用，直接改）
+const darkened = new Set();
+bench.traverse(m => { for (const mt of m.isMesh ? [m.material].flat() : []) if (!darkened.has(mt)) { darkened.add(mt); mt.color?.multiplyScalar(0.3); mt.envMapIntensity = 0.15; } });
+// 架子：不受光的黑（一受窗光、反射白天全景就發灰）；槓片：近黑、低反射，只留一點窗光高光
+const rackMat = new THREE.MeshBasicMaterial({ color: '#0b0908' });
+rack.traverse(m => { if (m.isMesh) m.material = rackMat; });
+const ironMat = new THREE.MeshStandardMaterial({ color: '#040404', roughness: 0.5, metalness: 0.6, envMapIntensity: 0.1 });
+const paintIron = () => barbell.traverse(m => { if (m.isMesh) m.material = ironMat; });
+paintIron();
+
+const gltf = await new GLTFLoader().loadAsync('./models/powerlifter.glb');
+const lifter = gltf.scene;
+// Tripo 匯出的材質是半透明混合 → 改不透明（不然模糊後身體會透出後面的窗光）
+lifter.traverse(o => { if (o.isMesh) { o.frustumCulled = false; for (const m of [o.material].flat()) { m.transparent = false; m.opacity = 1; m.depthWrite = true; } } });
+put(lifter, LAYOUT.lifter);
+const barBone = lifter.getObjectByName('Bar');
+const mixer = new THREE.AnimationMixer(lifter);
+const A = {}; for (const c of gltf.animations) A[c.name] = mixer.clipAction(c);
+// Unrack／Rack 自帶前後位移（髖骨 Z）：改由容器帶，動作本身變原地（同第一版）
+const HIP_Z = -0.025, ROOT = {};
+if (!STATIC) for (const n of ['Unrack', 'Rack']) {
+  const tr = A[n].getClip().tracks.find(t => t.name === 'mixamorigHips.position'), v = tr.values, ts = tr.times, dz = [];
+  for (let i = 0; i < ts.length; i++) { dz.push(v[i * 3 + 2] - HIP_Z); v[i * 3 + 2] = HIP_Z; }
+  ROOT[n] = t => { let i = 1; while (i < ts.length - 1 && ts[i] < t) i++; const k = THREE.MathUtils.clamp((t - ts[i - 1]) / (ts[i] - ts[i - 1]), 0, 1); return dz[i - 1] + (dz[i] - dz[i - 1]) * k; };
+}
+if (STATIC) { const a = A[LAYOUT.lifter.clip] || Object.values(A)[0]; a.play(); mixer.setTime(Math.min(LAYOUT.lifter.t, a.getClip().duration)); }
+const fix = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+const setQ = new THREE.Quaternion();
+function syncBar() {   // 槓跟著 Bar 骨（槓是 set 的子物件 → 世界座標換回 set 的座標）
+  lifter.updateMatrixWorld(true);
+  barbell.position.copy(set.worldToLocal(barBone.getWorldPosition(new THREE.Vector3())));
+  barbell.quaternion.copy(set.getWorldQuaternion(setQ).invert().multiply(barBone.getWorldQuaternion(new THREE.Quaternion()))).multiply(fix);
+}
+const blurLevel = BLUR[q.get('blur')] ?? BLUR[2];
+const armFix = makeArmFix(lifter);   // 扛槓時肩膀抬高、手肘朝地板（用戶 2026-10-31）
+const BAR_CLIPS = /^(Unrack|Hold|Squat|Grind|Rack)$/;
+let armW = 0;
+
+// ---------- 底圖、白板、吊扇 ----------
+const ink = makeBoardInk({ meetDate: PARAMS.meetDate, tally: tally.get(), lines: PARAMS.lines });
+const plate = makePlate({ day: tDay, shade: tShade, night: tNight, mask: tMask, maskB: tBulbs, ink, mirror: mirror.texture });
+const beams = makeBeams(renderer, { day: tDay, mask: tMask });
+plate.u.tBeam.value = beams.texture;
+const dust = makeDust({ beam: beams.texture, maskB: tBulbs });
+
+const scene = new THREE.Scene();
+const cam = new THREE.PerspectiveCamera(LAYOUT.cam.fov, W0 / H0, 0.05, 60);
+function aimCam(c, fov) {
+  c.fov = fov; c.position.set(0, LAYOUT.cam.y, 0);
+  c.lookAt(0, LAYOUT.cam.y + Math.tan(THREE.MathUtils.degToRad(LAYOUT.cam.pitch)), -1);
+  c.updateProjectionMatrix(); c.updateMatrixWorld();
+}
+aimCam(cam, LAYOUT.cam.fov);
+const fan = makeFan({ diameter: LAYOUT.fan.diameter, rod: 0.4, blades: LAYOUT.fan.blades });
+{
+  const c0 = cam.clone(); c0.aspect = W0 / H0; aimCam(c0, LAYOUT.cam.fov);
+  fan.position.copy(unproject(c0, LAYOUT.fan.x, LAYOUT.fan.y, LAYOUT.fan.depth)).add(new THREE.Vector3(0, 0.4 + 0.11, 0));
+  fan.rotation.x = THREE.MathUtils.degToRad(LAYOUT.fan.tilt);   // 扇面往鏡頭傾，對上底圖扇葉的橢圓
+  const BLADE = new THREE.Color('#5c4230'), bladeMat = new THREE.MeshBasicMaterial({ color: BLADE, toneMapped: false });
+  fan.traverse(o => { if (o.isMesh && /^blade\d/.test(o.name)) o.material = bladeMat; });
+  fan.userData.mat = bladeMat; fan.userData.col = BLADE.clone();
+  scene.add(fan);
+}
+const blades = fan.getObjectByName('blades');
+scene.add(dust.pts);
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  plate.setAspect(innerWidth / innerHeight);
+  dust.u.uCover.value.copy(plate.u.uCover.value); dust.u.uPx.value = renderer.getDrawingBufferSize(new THREE.Vector2()).y / H0 * 1.5;
+  const a = innerWidth / innerHeight, a0 = W0 / H0;
+  cam.aspect = a;
+  aimCam(cam, a >= a0 ? THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(LAYOUT.cam.fov) / 2) * a0 / a)) : LAYOUT.cam.fov);
+}
+resize(); addEventListener('resize', resize);
+
+// ---------- 狀態機（沿用第一版的 8 段動作與走位；座標在 set 裡） ----------
+const CONFIG = { polling: true, clockHours: null };
+const v2 = (x, z) => new THREE.Vector2(x, z);
+const SQ = v2(LAYOUT.lifter.x, LAYOUT.lifter.z), RACK0 = v2(SQ.x, SQ.y + 0.30);
+const by = THREE.MathUtils.degToRad(LAYOUT.bench.yaw);
+const BF = v2(Math.sin(by), Math.cos(by)), BL = v2(Math.cos(by), -Math.sin(by));
+const SIT = v2(LAYOUT.bench.x, LAYOUT.bench.z).addScaledVector(BF, 0.10).addScaledVector(BL, -0.35);
+const BENCH_W = SIT.clone().addScaledVector(BF, 0.45);
+const OFF = v2(6.2, 1.6);                 // 鏡子左外（set 轉了 180°，set 的 +X 在畫面左邊）
+const BAR_FRONT = v2(RACK0.x, 0.80);
+const P = { exit: v2(2.4, 1.6) };
+
+const hook = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
+function grabHook() {
+  lifter.position.set(RACK0.x, 0, RACK0.y + ROOT.Unrack(0)); lifter.rotation.y = 0;
+  A.Unrack.reset().play(); mixer.setTime(0); syncBar();
+  hook.p.copy(barbell.position); hook.q.copy(barbell.quaternion); A.Unrack.stop();
+}
+let cur = null, barOnBone = false, where = 'away', busy = false, gen = null, nextPlan = null, state = null;
+function play(name, { loop = false, fade = 0.4, at = 0, speed = 1, pause = false } = {}) {
+  const a = A[name];
+  if (cur && cur !== a) cur.fadeOut(fade);
+  a.reset(); a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce); a.clampWhenFinished = true;
+  a.time = at; a.timeScale = speed; a.paused = pause;
+  if (cur !== a) a.fadeIn(fade);
+  a.play(); cur = a; return a;
+}
+function* wait(sec) { let t = 0; while (t < sec) t += yield; }
+function* clip(name, o = {}) { const a = play(name, o); yield* wait((o.dur ?? a.getClip().duration - (o.at || 0)) / (o.speed || 1)); }
+const yawTo = (y0, y1, k) => { let d = y1 - y0; d = Math.atan2(Math.sin(d), Math.cos(d)); return y0 + d * k; };
+function* walkTo(p) {
+  if (cur !== A.Walk) play('Walk', { loop: true, fade: 0.3 });
+  const at = () => v2(lifter.position.x, lifter.position.z);
+  while (at().distanceTo(p) > 0.02) {
+    const dt = yield, d = p.clone().sub(at()), step = Math.min(d.length(), 1.0 * dt);
+    lifter.rotation.y = yawTo(lifter.rotation.y, Math.atan2(d.x, d.y), Math.min(1, dt * 6));
+    lifter.position.x += d.x / d.length() * step; lifter.position.z += d.y / d.length() * step;
+  }
+}
+function* turnTo(yaw, sec = 0.7) {
+  if (cur !== A.Walk) play('Walk', { loop: true, fade: 0.3 });
+  const y0 = lifter.rotation.y; let t = 0;
+  while (t < sec) { t += yield; lifter.rotation.y = yawTo(y0, yaw, Math.min(1, t / sec)); }
+}
+const setAt = (p, yaw = 0) => { lifter.position.set(p.x, 0, p.y); lifter.rotation.y = yaw; };
+function appear() { if (where !== 'away') return; lifter.visible = true; setAt(OFF, -Math.PI * 0.5); where = 'free'; }
+function* slideZ(z0, z1, sec) { let t = 0; while (t < sec) { t += yield; lifter.position.z = z0 + (z1 - z0) * THREE.MathUtils.smootherstep(Math.min(t / sec, 1), 0, 1); } }
+// 進出槓下：半蹲著踏小碎步（Walk 疊在停住的半蹲上各半；倒退時 Walk 倒著播）。原本是整個人平移滑進去（用戶 2026-10-31 改）
+function* stepZ(z0, z1, sec) {
+  const w = A.Walk;
+  w.reset(); w.setLoop(THREE.LoopRepeat); w.timeScale = z1 < z0 ? -0.8 : 0.8; w.setEffectiveWeight(1); w.fadeIn(0.25); w.play();
+  yield* slideZ(z0, z1, sec);
+  w.fadeOut(0.3);
+}
+function* rootClip(name, anchor, { fade = 0.3, at = -1, hit } = {}) {
+  const a = play(name, { fade }), d = a.getClip().duration; let t = 0;
+  lifter.position.z = anchor.y + ROOT[name](0);
+  while (t < d) {
+    const t0 = t; t += yield;
+    if (t0 < at && t >= at) hit();
+    lifter.position.z = anchor.y + ROOT[name](Math.min(t, d));
+  }
+}
+const BRACE = 1.05;
+function* toBar() {
+  if (where === 'bar' || barOnBone) return;
+  appear();
+  const route = where === 'bench' ? [BENCH_W] : lifter.position.x > 2 ? [P.exit] : [];
+  where = 'free';
+  for (const p of [...route, BAR_FRONT]) yield* walkTo(p);
+  yield* turnTo(0);
+  play('Squat', { pause: true, at: 1.3, fade: 0.5 });
+  yield* wait(0.3);
+  yield* stepZ(BAR_FRONT.y, RACK0.y, 1.4);
+  play('Squat', { pause: true, at: BRACE, fade: 0.6 }); where = 'bar';
+  yield* wait(0.6);
+}
+function* leaveBar() {
+  if (where !== 'bar') return;
+  play('Squat', { pause: true, at: 1.3, fade: 0.4 });
+  yield* wait(0.3);
+  yield* stepZ(lifter.position.z, BAR_FRONT.y, 1.2);
+  where = 'free';
+}
+function* doUnrack() { busy = true; barOnBone = true; where = 'free'; yield* rootClip('Unrack', RACK0, { fade: 0.3 }); busy = false; }
+function* doRack() {
+  busy = true;
+  yield* rootClip('Rack', RACK0, { fade: 0.3, at: 1.80, hit: () => { barOnBone = false; onRackContact(); } });
+  busy = false;
+}
+function* toBench() {
+  yield* leaveBar();
+  const route = where === 'away' ? [P.exit] : [];
+  appear(); where = 'free';
+  for (const p of [...route, BENCH_W, SIT]) yield* walkTo(p);
+  yield* turnTo(by);
+  play('Sit', { loop: true, fade: 0.7 }); where = 'bench';
+}
+function* chalk() { play('Chalk', { fade: 0.6 }); yield* wait(3.0); }
+function* plan(s) {
+  FX.win = s === 'clearing'; FX.holding = false; FX.grinding = false;
+  if (s === 'none') {
+    if (barOnBone) yield* doRack();
+    yield* leaveBar();
+    if (where !== 'away') {
+      const route = where === 'bench' ? [BENCH_W, P.exit] : [P.exit];
+      where = 'free';
+      for (const p of [...route, OFF]) yield* walkTo(p);
+      lifter.visible = false; where = 'away'; cur?.stop(); cur = null;
+    }
+    return;
+  }
+  if (s === 'clear' || s === 'clearing') {
+    if (barOnBone) yield* doRack(); else if (FX.win) judge();
+    if (where !== 'bench') yield* toBench();
+    for (let n = 0; ; n++) {
+      yield* wait(n ? 20 + 20 * Math.random() : 6 + 4 * Math.random());
+      yield* chalk(); play('Sit', { loop: true, fade: 0.7 });
+    }
+  }
+  if (s === 'overcast') {
+    if (barOnBone) { play('Hold', { loop: true }); return; }
+    yield* toBar();
+    for (let t = 0; ; ) { t += yield; if (A.Squat === cur) A.Squat.time = BRACE + 0.05 * (1 - Math.cos(t * Math.PI * 2 / 5)); }
+  }
+  if (!barOnBone) { yield* toBar(); yield* doUnrack(); }
+  if (s === 'waiting') { play('Hold', { loop: true, fade: 0.5 }); yield* wait(0.8); FX.holding = true; FX.waitT = 0; return; }
+  for (let rep = 1; ; rep++) {
+    if (rep % 3) yield* clip('Squat', { fade: 0.25 });
+    else { yield* clip('Squat', { fade: 0.25, dur: 2.33 }); FX.grinding = true; yield* clip('Grind', { loop: true, dur: 3, fade: 0.3 }); FX.grinding = false; yield* clip('Squat', { at: 2.33, fade: 0.3 }); }
+    yield* clip('Hold', { loop: true, dur: 0.8, fade: 0.3 });
+  }
+}
+function applyState(s) { s = s || 'none'; if (s === state) return; state = s; nextPlan = s; FX.stateT = 0; }
+function setSessions(arr) { if (!arr || !arr.some(x => x)) applyState('none'); }
+function onRackContact() { FX.stormT = 0; if (FX.win) judge(); }
+// 判決：三盞燈一起變白＋白板多一筆劃記（每次收尾只判一次）
+function judge() { FX.win = false; FX.judgeWhite = JUDGE_SEC; FX.stirT = 0; drawBoard(ink, { tally: tally.add() }); }   // 判決那一刻粉塵揚起
+if (!STATIC) { grabHook(); lifter.visible = false; }
+
+// ---------- 燈光、光束、粉塵、地板光斑（05） ----------
+const FX = { t: 0, stateT: 0, stormT: 0, house: 1, sun: 1, beam: 1, dust: 0.7, stir: 0, stirT: 99, judgeWhite: 0, win: false, holding: false, waitT: 0, grinding: false, plates: STATIC ? LAYOUT.plates : PARAMS.basePlates, bend: 0 };
+const JUDGE_SEC = 3.8;
+if (!STATIC) { setPlates(barbell, FX.plates); paintIron(); }
+const dayOf = h => THREE.MathUtils.smoothstep(h, 5.5, 7) * (1 - THREE.MathUtils.smoothstep(h, 17.8, 19.3));
+function hours() {
+  if (CONFIG.clockHours != null) return CONFIG.clockHours;
+  if (q.has('day')) return 10.5;
+  if (q.has('night')) return 22;
+  const d = new Date(); return d.getHours() + d.getMinutes() / 60;
+}
+const FAN = { none: 0.5, storm: 2.6 };
+// 各狀態的光與灰：beam 光束強度、dust 粉塵量；思考時雲一陣一陣飄過（sun 忽明忽暗），其他狀態偶爾才有一朵
+const MOOD = { none: { beam: 0.8, dust: 0.35 }, clear: { beam: 1, dust: 0.65 }, overcast: { beam: 1, dust: 0.85 }, storm: { beam: 1.25, dust: 1 }, waiting: { beam: 1, dust: 0.75 }, clearing: { beam: 1.1, dust: 0.9 } };
+const hash = n => { const x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); };
+const vnoise = x => { const i = Math.floor(x), f = x - i, s = f * f * (3 - 2 * f); return hash(i) + (hash(i + 1) - hash(i)) * s; };
+function cloud(st, t) {   // 0＝晴、1＝整片遮住
+  if (st === 'overcast') return THREE.MathUtils.smoothstep(vnoise(t / 6), 0.35, 0.75) * 0.8;            // 每幾秒一朵
+  return THREE.MathUtils.smoothstep(vnoise(t / 45 + 7.3), 0.72, 0.95) * 0.6;                             // 一兩分鐘偶爾一朵
+}
+function lighting(dt) {
+  const st = state || 'clear', day = dayOf(hours()), k = 1 - Math.exp(-dt * 2.5);
+  FX.t += dt; FX.stateT += dt;
+  FX.house += ((st === 'none' ? 0.45 : 1) - FX.house) * (STATIC ? 1 : k);
+  FX.judgeWhite -= dt; FX.waitT += dt;
+  const jt = FX.judgeWhite, jw = jt > 0 ? Math.min(1, (JUDGE_SEC - jt) / 0.2) * Math.min(1, jt / 0.8) : 0;
+  const breath = st === 'waiting' && FX.holding ? 0.06 + 0.1 * (0.5 - 0.5 * Math.cos(FX.waitT * Math.PI * 2 / 5.5)) * Math.min(1, FX.waitT) : 0;
+  const u = plate.u;
+  u.uDay.value = day; u.uHouse.value = FX.house; u.uBulb.value = 1 + (1 - day) * 0.6; u.uTime.value = FX.t;
+  u.uJudge.value.set(jw, Math.max(jw, breath), jw);
+  // 倒影的光跟日夜：白天窗光當輪廓光，晚上只剩頭頂燈泡
+  const ML = LAYOUT.mirror;
+  msun.intensity = ML.sun * day; mbulb.intensity = ML.bulb * (0.5 + (1 - day)) * FX.house; mhemi.intensity = ML.hemi * (0.3 + 0.7 * day) * FX.house;
+  mfill.intensity = ML.fill * FX.house;
+  u.uMirrorExp.value = ML.exp; u.uMirrorHaze.value = ML.haze;
+  // 雲、光束、粉塵（STATIC 時固定在晴天）
+  const mood = MOOD[st] || MOOD.clear, h = hours();
+  const sunTo = STATIC ? 1 : 1 - cloud(st, FX.t);
+  FX.sun += (sunTo - FX.sun) * (STATIC ? 1 : 1 - Math.exp(-dt * 1.2));
+  FX.beam += (mood.beam - FX.beam) * (STATIC ? 1 : k * 0.4);
+  FX.dust += (mood.dust - FX.dust) * (STATIC ? 1 : k * 0.4);
+  FX.stirT += dt; FX.stir = FX.stirT < 6 ? Math.sin(Math.PI * FX.stirT / 6) : 0;   // 收尾揚起：6 秒內浮起再落回
+  u.uSun.value = FX.sun; u.uBeam.value = 1.4 * FX.beam;
+  // 太陽隨時間移動：下午越晚光越斜、地上光斑往右挪；另外有很慢的晃動（樹影、熱氣），看得出光是活的
+  const late = THREE.MathUtils.clamp((h - 15) / 3, -1, 1);
+  beams.u.uDir.value.set(0.62 + 0.08 * late + 0.02 * Math.sin(FX.t / 23), 1);   // 左上往右下斜（用戶 2026-10-31）
+  beams.u.uTime.value = FX.t; beams.u.uDrift.value = FX.t * 0.015;
+  u.uFloorShift.value.set(40 * late + 6 * Math.sin(FX.t / 31), 3 * Math.sin(FX.t / 47));
+  dust.u.uTime.value = FX.t; dust.u.uDay.value = day; dust.u.uSun.value = FX.sun;
+  dust.u.uAmount.value = FX.dust; dust.u.uStir.value = FX.stir;
+  blades.rotation.y += dt * (FAN[st] ?? 1.6);
+  fan.userData.mat.color.copy(fan.userData.col).multiplyScalar((0.12 + 0.88 * day) * (0.5 + 0.5 * FX.house));
+  if (STATIC) return;
+  if (st === 'storm') FX.stormT += dt;
+  const want = barOnBone || st === 'storm' ? Math.min(PARAMS.maxPlates, PARAMS.basePlates + Math.floor(FX.stormT / PARAMS.plateEvery)) : PARAMS.basePlates;
+  if (want !== FX.plates && (barOnBone || !busy)) { FX.plates = want; setPlates(barbell, want); paintIron(); }
+  const bend = barOnBone ? (FX.grinding ? 0.035 + 0.004 * Math.sin(FX.t * 45) : 0.010 + 0.002 * (FX.plates - 4)) : 0;
+  FX.bend += (bend - FX.bend) * Math.min(1, dt * 8);
+  if (Math.abs((barbell.userData.bend || 0) - FX.bend) > 2e-4) setBend(barbell, FX.bend);
+}
+function draw() {
+  mirror.render(mscene, mcam, blurLevel);
+  beams.render();
+  renderer.clear();
+  renderer.render(plate.scene, plate.cam);
+  renderer.render(scene, cam);
+}
+
+const FRAME_MS = 1000 / 30;
+let raf = 0, nextFrame = 0, hostPaused = false;
+const clock = new THREE.Clock();
+function tick(ms) {
+  raf = requestAnimationFrame(tick);
+  if (ms < nextFrame) return;
+  nextFrame += FRAME_MS;
+  if (nextFrame < ms) nextFrame = ms + FRAME_MS;
+  frame();
+}
+function start() { if (!raf) { clock.getDelta(); raf = requestAnimationFrame(tick); } }
+function stop() { cancelAnimationFrame(raf); raf = 0; }
+document.addEventListener('visibilitychange', () => (document.hidden || hostPaused ? stop() : start()));
+window.wpPause = on => { hostPaused = !!on; if (hostPaused) stop(); else if (!document.hidden) start(); };
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (!STATIC) {
+    if (nextPlan && !busy) { gen = plan(nextPlan); gen.next(); nextPlan = null; }
+    if (gen && gen.next(dt).done) gen = null;
+    mixer.update(dt);
+  }
+  armW += ((STATIC ? BAR_CLIPS.test(LAYOUT.lifter.clip) : barOnBone || where === 'bar' || busy) ? 1 - armW : -armW) * Math.min(1, dt * 4 + (STATIC ? 1 : 0));
+  if (!q.has('noarm')) armFix.apply(armW);   // ?noarm：看動作檔原本的手臂（除錯）
+  lighting(dt);
+  if (STATIC || barOnBone) syncBar(); else { barbell.position.copy(hook.p); barbell.quaternion.copy(hook.q); }
+  draw();
+  armFix.restore();
+}
+await surfaceReady;
+if (!document.hidden) start();
+if (!STATIC) {
+  const poll = async () => {
+    if (CONFIG.polling) try {
+      const j = await (await fetch('state.json', { cache: 'no-store' })).json();
+      applyState(j.sessions && !j.sessions.some(x => x) ? 'none' : j.state);
+    } catch {}
+    setTimeout(poll, 1000);
+  };
+  poll();
+}
+window.theme = { renderer, scene, cam, mscene, mcam, set, LAYOUT, CONFIG, PARAMS, FX, plate, mirror, applyState, setSessions, render: draw,
+  dbg: { lifter, barbell, hook, A, mixer, P, SIT, BENCH_W, RACK0, SQ, fan } };
+window.__ready = true;
+</script>
+</body>
+</html>
