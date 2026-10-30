@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>紙片燈塔・海鷗帆船（開發頁）</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #6fa8dc; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<script type="module">
+// 海鷗與帆船的開發頁：index.html（2026-10-30 上午版、還沒企鵝）複製來，把整張 gulls／boats 換成 lib/flyers.js。
+// 跟 index.html 一樣的參數，另外：
+//   fly=0          用回整張 gulls.png／boats.png（基準）
+//   boats=n        一開始幾艘（0–5，直接在場上）；預設 5
+//   boatsto=n&at=s 第 s 秒呼叫 setBoats(n)（看滑入／滑出；at 預設 0）
+//   t=秒           固定時間（逐格錄影）；anim=0 → 海鷗、帆船、浪都停在 t=0
+import * as THREE from './vendor/three.module.min.js';
+import { FOV, ASPECT, IMG_H, createPaperLayer, createShadow, updateLayers, createPost, frameSize, stepTime } from './lib/paper.js';
+import { createFlyers } from './lib/flyers.js';
+
+const Q = new URLSearchParams(location.search);
+const num = (k, v) => Q.has(k) ? +Q.get(k) : v;
+const MODE = Q.get('mode') || 'paper', LAYER_DIR = Q.get('set') || 'layers-full';
+const THICK = num('thick', 1), SHADOW = num('shadow', 0.6), DOF = num('dof', 1);
+const SWAY = Q.get('sway') !== '0', LAYERS = Q.get('layers') === '1', ANIM = Q.get('anim') !== '0';
+const WAVES = Q.get('waves') !== '0' && LAYER_DIR === 'layers-full';
+const FLY = Q.get('fly') !== '0' && MODE === 'paper' && !LAYERS && LAYER_DIR === 'layers-full';
+const CAM = (Q.get('cam') || '').split(',').map(Number);
+const FIXED_CAM = CAM.length === 2 && CAM.every(Number.isFinite);
+
+const LAYER_DEFS = [
+  { key: 'far',   d: 60, blur: 0,   color: '#3355ff' },
+  { key: 'boats', d: 52, blur: 0,   color: '#00c8ff' },
+  { key: 'mid',   d: 30, blur: 0,   color: '#ffd000' },
+  { key: 'gulls', d: 26, blur: 0,   color: '#ff00ff' },
+  { key: 'near',  d: 16, blur: 0,   color: '#ff8000' },
+  { key: 'reefs', d: 15, blur: 0,   color: '#8800ff' },
+  { key: 'fg',    d: 9,  blur: 0,   color: '#ff0000' },
+];
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(FOV, ASPECT, 0.1, 200);
+const post = createPost(renderer, { res: num('res', 1) });
+post.uniforms.uFiber.value *= num('fiber', 1);
+post.uniforms.uGrain.value *= num('grain', 1);
+post.uniforms.uNight.value = num('night', 0);
+if (MODE === 'flat' || LAYERS) post.uniforms.uFiber.value = post.uniforms.uGrain.value = 0;
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  post.setSize(w, h);
+  camera.aspect = w / h;
+  camera.fov = w / h >= ASPECT ? 2 * Math.atan(Math.tan(FOV * Math.PI / 360) * ASPECT / (w / h)) * 180 / Math.PI : FOV;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+const loadImg = src => new Promise((ok, err) => { const i = new Image(); i.onload = () => ok(i); i.onerror = err; i.src = src; });
+const paperLayers = [];
+let flyers = null;
+
+function flatPlane(src, d) {
+  const { w, h } = frameSize(d);
+  const t = new THREE.CanvasTexture(src instanceof HTMLCanvasElement ? src : (() => { const c = document.createElement('canvas'); c.width = src.width; c.height = src.height; c.getContext('2d').drawImage(src, 0, 0); return c; })());
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * src.width / 1672, h * src.height / 941),
+    new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false }));
+  m.position.z = -d; m.renderOrder = paperLayers.length + scene.children.length;
+  scene.add(m);
+}
+
+function solid(img, color) {
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+  g.globalCompositeOperation = 'source-in'; g.fillStyle = color; g.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
+const WAVE_D = [21, 19.5, 18, 16, 13.5, 11.5];
+const WAVE_AMP = [0.6, 1, 1.8, 2.8, 4, 5];
+const WAVE_PERIOD = [4.4, 4.0, 3.7, 3.4, 3.1, 2.9];
+const waves = [];
+
+async function items() {
+  const list = LAYER_DEFS.filter(L => !(WAVES && (L.key === 'near' || L.key === 'reefs')))
+    .filter(L => !(FLY && (L.key === 'gulls' || L.key === 'boats')))   // 海鷗、帆船改由 flyers.js 建
+    .map(L => ({ ...L, src: `assets/${LAYER_DIR}/${L.key}.png` }));
+  if (WAVES) {
+    WAVE_D.forEach((d, k) => list.push({ key: `wave${k}`, d, blur: 0, color: k % 2 ? '#ff8000' : '#ffb060', src: `assets/waves/wave${k}.png`, wave: k }));
+    const reefs = await (await fetch('assets/waves/reefs.json')).json();
+    for (const r of reefs) {
+      const j = r.behindWave;
+      const d = j >= WAVE_D.length ? WAVE_D.at(-1) - 0.8 : j === 0 ? WAVE_D[0] + 0.5 : (WAVE_D[j - 1] + WAVE_D[j]) / 2;
+      list.push({ key: r.file, d, blur: 0, color: '#8800ff', src: `assets/waves/${r.file}` });
+    }
+  }
+  return list.sort((a, b) => b.d - a.d);
+}
+
+async function build() {
+  for (const L of await items()) {
+    let img;
+    try { img = await loadImg(L.src); } catch { console.warn('缺圖層', L.src); continue; }
+    if (LAYERS) { flatPlane(solid(img, L.color), L.d); continue; }
+    if (MODE === 'flat') { flatPlane(img, L.d); continue; }
+    let shadow = null;
+    if (SHADOW > 0 && L.key !== 'far') scene.add(shadow = createShadow(img, { d: L.d, strength: SHADOW }));
+    const m = createPaperLayer(img, { d: L.d, thick: 0.004 * THICK * (L.key === 'far' ? 0 : 1), blur: L.blur * DOF });
+    scene.add(m); paperLayers.push(m);
+    if (L.wave !== undefined) waves.push({ k: L.wave, m, shadow, y0: m.position.y, s0: shadow?.position.y, px: frameSize(L.d).h / IMG_H, phase: L.wave * 1.7 });
+  }
+  if (FLY) {
+    flyers = await createFlyers(scene, { loadImg, camera, boats: num('boats', 5), shadow: SHADOW, thick: 0.004 * THICK });
+    if (Q.has('boatsto')) flyers.setBoats(+Q.get('boatsto'), { at: num('at', 0) });
+    window.flyers = flyers;
+  }
+  window.__ready = true;
+}
+
+function animateWaves(t) {
+  const ts = stepTime(t, 12);
+  for (const w of waves) {
+    const dy = ANIM ? WAVE_AMP[w.k] * Math.sin(ts * Math.PI * 2 / WAVE_PERIOD[w.k] + w.phase) * w.px : 0;
+    w.m.position.y = w.y0 + dy;
+    if (w.shadow) w.shadow.position.y = w.s0 + dy;
+  }
+}
+
+const t0 = performance.now();
+let paused = false;
+function render() {
+  const t = Q.has('t') ? +Q.get('t') : (performance.now() - t0) / 1000;
+  if (FIXED_CAM) camera.position.set(CAM[0], CAM[1], 0);
+  else if (SWAY) camera.position.set(Math.sin(t * 0.21) * 0.06, Math.sin(t * 0.17) * 0.03, 0);
+  camera.lookAt(camera.position.x * 0.2, camera.position.y * 0.2, -30);
+  animateWaves(t);
+  updateLayers(paperLayers, camera);
+  flyers?.update(ANIM ? t : 0);
+  post.uniforms.uTime.value = t;
+  post.render(scene, camera);
+}
+function loop() {
+  if (!document.hidden && !paused) render();
+  setTimeout(() => requestAnimationFrame(loop), 1000 / 30);
+}
+window.wpPause = on => { paused = !!on; };
+window.theme = { renderer, render, scene, camera, post };
+build().then(loop);
+</script>
+</body>
+</html>

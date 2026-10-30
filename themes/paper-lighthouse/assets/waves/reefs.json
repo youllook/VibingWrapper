@@ -1,0 +1,26 @@
+[
+ {
+  "file": "reef0.png",
+  "cx": 956,
+  "bottom": 656,
+  "behindWave": 3
+ },
+ {
+  "file": "reef1.png",
+  "cx": 1129,
+  "bottom": 702,
+  "behindWave": 3
+ },
+ {
+  "file": "reef2.png",
+  "cx": 1014,
+  "bottom": 786,
+  "behindWave": 4
+ },
+ {
+  "file": "reef3.png",
+  "cx": 1243,
+  "bottom": 996,
+  "behindWave": 6
+ }
+]
