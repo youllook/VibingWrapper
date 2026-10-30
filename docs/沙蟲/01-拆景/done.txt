@@ -1,0 +1,6 @@
+layer-near.png: 1672x941 RGBA; 1,257,840 bytes; opaque pixels 39.8409%
+layer-midnear.png: 1672x941 RGBA; 484,129 bytes; opaque pixels 14.7731%
+layer-mid.png: 1672x941 RGBA; 898,679 bytes; opaque pixels 27.7830%
+layer-far.png: 1672x941 RGBA; 465,749 bytes; opaque pixels 17.6029%
+Validation: exactly one layer per pixel; original RGB preserved; exact reconstruction.
+Dust edges use exclusive coverage dithering, not overlapping alpha feathering.

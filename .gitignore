@@ -9,6 +9,7 @@ prototype/vendor/
 godot/*/.godot/
 godot/*/textures/previews/
 themes/crossing/index.*
+themes/sandworm/index.*
 themes/crossing/*.worklet.js
 themes/sea-monster-2/index.*
 themes/sea-monster-3/index.*
