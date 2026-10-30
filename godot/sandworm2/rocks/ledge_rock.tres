@@ -1,0 +1,12 @@
+[gd_resource type="StandardMaterial3D" load_steps=2 format=3]
+
+[ext_resource type="Texture2D" path="res://rocks/tex/rock_basecolor.jpg" id="1"]
+
+[resource]
+vertex_color_use_as_albedo = true
+albedo_color = Color(1, 0.94, 0.88, 1)
+albedo_texture = ExtResource("1")
+roughness = 0.95
+uv1_scale = Vector3(0.1, 0.26, 0.1)
+uv1_triplanar = true
+uv1_triplanar_sharpness = 4.0

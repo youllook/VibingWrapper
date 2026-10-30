@@ -1,0 +1,9 @@
+{
+  "name": "大海怪3",
+  "order": 62,
+  "entry": "index.html",
+  "enabled": false,
+  "bundled": false,
+  "description": "暴風雨裡的小木船，從漁夫肩後看出去（Godot 4 網頁匯出）：待命是平靜的海、思考時浪湧起；Claude 執行時，巨魷的眼睛頂起海面浮上來、腕足捲出水面揮舞，頭和眼露出水面盯著鏡頭；做完牠沉回去，海面劇烈翻騰、漁夫緊抓船緣。原始碼在 godot/sea-monster-3/。",
+  "tags": ["海"]
+}

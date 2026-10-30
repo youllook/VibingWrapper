@@ -1,0 +1,12 @@
+{
+  "size": [
+    1672,
+    941
+  ],
+  "magenta_like_pixels": 915647,
+  "exact_FF00FF_pixels": 3,
+  "changed_pixels_outside_magenta_region": 652201,
+  "pixels_outside_magenta_region": 657705,
+  "pixel_perfect_pass": false,
+  "lines_reference": "Manual visible structure tracing of mc1.png; approximate, not calibrated"
+}

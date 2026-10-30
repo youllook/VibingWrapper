@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>麥塊世界・素材總覽</title>
+<style>
+  body { margin: 0; background: #15181d; color: #cfd6df; font: 13px/1.4 "Segoe UI", sans-serif; }
+  h2 { font-size: 14px; margin: 14px 16px 6px; color: #9fb0c4; font-weight: 600; }
+  #tex { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 16px; }
+  .t { text-align: center; font-size: 11px; color: #8a96a6; }
+  .t canvas { width: 96px; height: 96px; image-rendering: pixelated; display: block; background:
+    repeating-conic-gradient(#2a2f37 0 25%, #20242b 0 50%) 0 0 / 12px 12px; border: 1px solid #2c323b; }
+  #view { width: 100%; height: 560px; display: block; }
+</style>
+</head>
+<body>
+<h2>貼圖（16 px，放大 6 倍；苦力怕 8 px）</h2>
+<div id="tex"></div>
+<h2>模型與方塊（轉檯）</h2>
+<canvas id="view"></canvas>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import { TEX, makeCanvas, blockMaterial, BLOCKS, creeper, lantern, spruce, torch, hut, rng } from './assets.js';
+
+const wrap = document.getElementById('tex');
+for (const name in TEX) {
+  const d = document.createElement('div'); d.className = 't';
+  d.append(makeCanvas(name), name); wrap.append(d);
+}
+
+const cv = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1b2028);
+const cam = new THREE.PerspectiveCamera(35, 2, 0.1, 200);
+cam.position.set(0, 10, 22); cam.lookAt(0, 1.5, -1);
+scene.add(new THREE.HemisphereLight(0xdde6ff, 0x3a3328, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(5, 10, 7); scene.add(sun);
+
+const turn = [];
+const place = (obj, x, z = 0) => { obj.position.x = x; obj.position.z = z; scene.add(obj); turn.push(obj); return obj; };
+const cube = new THREE.BoxGeometry(1, 1, 1);
+function fromLists(lists, scale = 1) {                     // block lists → a group of meshes
+  const g = new THREE.Group();
+  for (const kind in lists) for (const [x, y, z] of lists[kind]) {
+    const m = new THREE.Mesh(cube, blockMaterial(kind)); m.position.set(x + 0.5, y + 0.5, z + 0.5); g.add(m);
+  }
+  g.scale.setScalar(scale); return g;
+}
+
+// back row: every block type
+BLOCKS.forEach((k, i) => { const m = new THREE.Mesh(cube, blockMaterial(k)); m.position.set((i - (BLOCKS.length - 1) / 2) * 1.6, 0.5, -5); scene.add(m); turn.push(m); });
+// front row: models
+const c = creeper(1); c.scale.setScalar(2.4); place(c, -6.5, 3);
+const l = lantern(); l.scale.setScalar(6); place(l, -3.2, 3);
+const t = torch(); t.scale.setScalar(4); place(t, -1.2, 3);
+const sp = spruce(8, rng(3)); const tree = fromLists({ spruce_log: sp.logs, spruce_leaves: sp.leaves }, 0.55);
+const treeWrap = new THREE.Group(); tree.position.set(-0.27, 0, -0.27); treeWrap.add(tree); place(treeWrap, 2.2, 2);
+const h = fromLists(hut(5, 4, 3), 0.6); const hutWrap = new THREE.Group(); h.position.set(-1.5, 0, -1.2); hutWrap.add(h); place(hutWrap, 6.5, 2);
+
+function size() { const w = cv.clientWidth, hh = cv.clientHeight; renderer.setSize(w, hh, false); cam.aspect = w / hh; cam.updateProjectionMatrix(); }
+addEventListener('resize', size); size();
+const t0 = performance.now();
+renderer.setAnimationLoop(() => {
+  const a = (performance.now() - t0) / 1000 * 0.5 + 0.6;
+  for (const o of turn) o.rotation.y = a;
+  renderer.render(scene, cam);
+});
+window.assets = { scene, renderer };
+</script>
+</body>
+</html>

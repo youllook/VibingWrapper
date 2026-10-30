@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>麥塊世界 mc3 素材檢視</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #6f5a86; overflow: hidden; font: 14px system-ui, sans-serif; }
+  #info { position: fixed; left: 8px; top: 6px; color: #fff; text-shadow: 0 1px 2px #000; white-space: pre; }
+  .tag { position: fixed; color: #fff; text-shadow: 0 1px 2px #000; transform: translate(-50%, 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="info"></div>
+<script type="module">
+// 素材檢視：assets.html?m=<模組>[&i=<項目>][&yaw=-35&pitch=35][&grid=1]
+// m = creeper | terrain | flora | far；模組檔在 assets/<m>.js，匯出 items = { 名稱: { build: () => Object3D, note } }
+// 沒給 i 就把該模組全部項目排成一列；grid=1 畫 1 方塊格線（地面 y=0）
+import * as THREE from './vendor/three.module.min.js';
+import { countTris } from './lib/voxel.js';
+
+const q = new URLSearchParams(location.search);
+const mod = q.get('m') || 'creeper', only = q.get('i');
+const yaw = THREE.MathUtils.degToRad(+(q.get('yaw') ?? -35)), pitch = THREE.MathUtils.degToRad(+(q.get('pitch') ?? 35));
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#6f5a86');
+scene.add(new THREE.HemisphereLight('#f3e6ff', '#5a4466', 1.4));
+const sun = new THREE.DirectionalLight('#fff1cf', 2.2);
+sun.position.set(-3, 5, 2);
+scene.add(sun);
+
+const { items } = await import(`./assets/${mod}.js`);
+const names = only ? [only] : Object.keys(items);
+const row = new THREE.Group(), labels = [];
+let x = 0, lines = [];
+for (const name of names) {
+  const t0 = performance.now();
+  const obj = items[name].build();
+  const ms = performance.now() - t0;
+  const box = new THREE.Box3().setFromObject(obj), size = box.getSize(new THREE.Vector3());
+  obj.position.x += x - box.min.x;
+  row.add(obj);
+  labels.push([name, new THREE.Vector3(x + size.x / 2, box.max.y + 0.3, (box.min.z + box.max.z) / 2)]);
+  lines.push(`${name}  ${size.x.toFixed(1)}×${size.y.toFixed(1)}×${size.z.toFixed(1)}  ${countTris(obj)} tris  ${ms.toFixed(0)} ms` + (items[name].note ? '  ' + items[name].note : ''));
+  x += size.x + Math.max(2, size.x * 0.25);
+}
+scene.add(row);
+if (q.get('grid')) {
+  const g = new THREE.GridHelper(Math.ceil(x + 10), Math.ceil(x + 10), '#ffffff', '#ffffff');
+  g.material.opacity = 0.25; g.material.transparent = true;
+  g.position.x = x / 2;
+  scene.add(g);
+}
+document.getElementById('info').textContent = `m=${mod}\n` + lines.join('\n');
+
+// 相機自動框住整列
+const bb = new THREE.Box3().setFromObject(row), c = bb.getCenter(new THREE.Vector3()), r = bb.getBoundingSphere(new THREE.Sphere()).radius;
+const cam = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 5000);
+const dist = r / Math.sin(THREE.MathUtils.degToRad(35) / 2) * (innerWidth < innerHeight * 1.2 ? 1.4 : 1.0);
+cam.position.set(c.x + dist * Math.cos(pitch) * Math.sin(yaw), c.y + dist * Math.sin(pitch), c.z + dist * Math.cos(pitch) * Math.cos(yaw));
+cam.lookAt(c);
+renderer.render(scene, cam);
+for (const [name, p] of labels) {
+  const v = p.clone().project(cam), el = document.createElement('div');
+  el.className = 'tag'; el.textContent = name;
+  el.style.left = (v.x + 1) / 2 * innerWidth + 'px'; el.style.top = (1 - v.y) / 2 * innerHeight - 20 + 'px';
+  document.body.appendChild(el);
+}
+window.__ready = true;
+</script>
+</body>
+</html>

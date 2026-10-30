@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>紙片燈塔</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #6fa8dc; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<script type="module">
+// 紙片燈塔：Codex 扣好、補完的分層，各自放在自己的深度，用 lib/paper.js 做成有厚度的紙片。
+// 網址參數（驗證、調整用）：
+//   mode=flat      純貼圖（基準）；預設 paper
+//   set=layers     原始扣圖（無補完、無出血；2026-10-30 已移出 repo）；預設 layers-full
+//   thick=1        厚度倍率      shadow=0.6  陰影強度     dof=1  景深倍率
+//   fiber=1 grain=1 紙紋／顆粒倍率   night=0..1  夜晚程度   res=0.75  渲染解析度
+//   waves=0        近海不分條   anim=0  浪不動（量相似度用）
+//   fly=0          海鷗、帆船用原圖整層（不擺、不滑）   boats=0..5  帆船數
+//   state=clear|overcast|storm|clearing|waiting|none  固定狀態（不讀 state.json）   day=1 / night=1  固定白天／夜晚
+//   clouds=0       雲不拆（遠景整張）
+//   peng=0         不放企鵝卡（用原圖的企鵝）   act=idle|sleep|lookup|catch|sign  企鵝動作
+//   lights=1       夜晚／暴風雨局部打光池倍率（燈室、窗戶、月亮、地平線層縫；0 關）   pinhole=1  針孔星星密度倍率（0 關）
+//   vig=0.14       vignette 強度（0 關）   vigc=0.62,0.52  vignette 中心（畫面比例）   emis=1  發光遮罩（0＝星星也被夜色壓）
+//   sidelight=0.12 紙芯側面受光對比（0 關）   nfiber=0.8  夜晚纖維加強倍率（0 關）   jitter=1  主角卡停格微抖倍率（0 關）
+//   sway=1         打開鏡頭呼吸（預設固定）   shadow=0.6 sdist=1 sblur=6  陰影強度／偏移倍率／模糊   wshadow=1.6 wshift=12  浪間陰影（預設關）   cam=x,y  固定鏡頭偏移   layers=1  每層塗純色（給 layercheck）
+import * as THREE from './vendor/three.module.min.js';
+import { createPenguin } from './lib/penguin.js';
+import { createFlyers } from './lib/flyers.js';
+import { createDirector } from './lib/director.js';
+import { createNight } from './lib/night.js';
+import { createClouds } from './lib/clouds.js';
+import { FOV, ASPECT, IMG_H, SHADOW_DEFAULTS, PAPER_DEFAULTS, createPaperLayer, createShadow, updateLayers, createPost, frameSize, stepTime } from './lib/paper.js';
+
+const Q = new URLSearchParams(location.search);
+const num = (k, v) => Q.has(k) ? +Q.get(k) : v;
+const MODE = Q.get('mode') || 'paper', LAYER_DIR = Q.get('set') || 'layers-full';
+const THICK = num('thick', 1), SHADOW = num('shadow', 0.6), DOF = num('dof', 1);
+const SDIST = num('sdist', 1), SBLUR = num('sblur', 6);   // 陰影偏移倍率、模糊（px）
+const WSHADOW = num('wshadow', 0),   // 2026-10-30 試過、關掉：素材切邊不夠乾淨，陰影會把毛邊描出來
+      WSHIFT = num('wshift', 12);   // 浪與浪之間的陰影：強度、往上偏幾 px
+PAPER_DEFAULTS.sideLight = num('sidelight', PAPER_DEFAULTS.sideLight);
+Object.assign(SHADOW_DEFAULTS, { strength: SHADOW, blur: SBLUR, dir: [0.012 * SDIST, -0.016 * SDIST] });
+const SWAY = Q.get('sway') === '1',   // 鏡頭呼吸預設關（用戶 2026-10-30：前景會晃）；sway=1 打開
+      LAYERS = Q.get('layers') === '1', ANIM = Q.get('anim') !== '0';
+const WAVES = Q.get('waves') !== '0' && LAYER_DIR === 'layers-full';   // waves=0：近海用整張 near.png
+const FLY = Q.get('fly') !== '0' && !LAYERS && MODE === 'paper';   // 海鷗吊線擺盪＋帆船滑行（lib/flyers.js）
+const PENG = Q.get('peng') !== '0' && WAVES && !LAYERS && MODE === 'paper';   // 企鵝換成卡組＋程式釣線
+const CLOUDS = Q.get('clouds') !== '0' && MODE === 'paper' && !LAYERS && LAYER_DIR === 'layers-full';   // 雲拆出來慢慢飄（lib/clouds.js）；clouds=0 用原遠景
+const DIRECT = PENG && !Q.has('act');   // 狀態驅動演出（lib/director.js）；act= 時只演那段動作（測試用）
+const CONFIG = { polling: !Q.has('state'), clockHours: Q.has('day') ? 10.5 : Q.get('night') === '1' ? 22 : null };
+const CAM = (Q.get('cam') || '').split(',').map(Number);
+const FIXED_CAM = CAM.length === 2 && CAM.every(Number.isFinite);
+
+// 由後往前；d = 離鏡頭距離；blur = 景深（px，烘在貼圖上）。
+// 目標圖本身已經畫好景深（前景糊、中景清楚），靜態層不再加；之後新加的會動物件才用 blur 對齊各層的糊度。
+const LAYER_DEFS = [
+  { key: 'far',   d: 60, blur: 0,   color: '#3355ff' },
+  { key: 'boats', d: 52, blur: 0,   color: '#00c8ff' },
+  { key: 'mid',   d: 30, blur: 0,   color: '#ffd000' },
+  { key: 'gulls', d: 26, blur: 0,   color: '#ff00ff' },
+  { key: 'near',  d: 16, blur: 0,   color: '#ff8000' },   // 有浪條時不用
+  { key: 'reefs', d: 15, blur: 0,   color: '#8800ff' },   // 有浪條時改用逐群的 reef*.png
+  { key: 'fg',    d: 9,  blur: 0,   color: '#ff0000' },
+];
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;   // 全程 sRGB 原值直通（見 lib/paper.js）
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(FOV, ASPECT, 0.1, 200);
+const post = createPost(renderer, { res: num('res', 1) });
+post.uniforms.uFiber.value *= num('fiber', 1);
+post.uniforms.uGrain.value *= num('grain', 1);
+post.uniforms.uNight.value = num('night', 0);
+post.uniforms.uVig.value = num('vig', 0.14);
+post.uniforms.uEmis.value = num('emis', 1);
+post.uniforms.uNightFiber.value = num('nfiber', 0.8);
+{ const vc = (Q.get('vigc') || '0.62,0.52').split(',').map(Number); if (vc.length === 2 && vc.every(Number.isFinite)) post.uniforms.uVigC.value.set(vc[0], vc[1]); }
+if (MODE === 'flat' || LAYERS) post.uniforms.uFiber.value = post.uniforms.uGrain.value = post.uniforms.uVig.value = 0;
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  post.setSize(w, h);
+  // 畫面比例跟目標圖不同時，以「蓋滿」為準
+  camera.aspect = w / h;
+  camera.fov = w / h >= ASPECT ? 2 * Math.atan(Math.tan(FOV * Math.PI / 360) * ASPECT / (w / h)) * 180 / Math.PI : FOV;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+const loadImg = src => new Promise((ok, err) => { const i = new Image(); i.onload = () => ok(i); i.onerror = err; i.src = src; });
+const paperLayers = [];
+
+function flatPlane(src, d) {
+  const { w, h } = frameSize(d);
+  const t = new THREE.CanvasTexture(src instanceof HTMLCanvasElement ? src : (() => { const c = document.createElement('canvas'); c.width = src.width; c.height = src.height; c.getContext('2d').drawImage(src, 0, 0); return c; })());
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * src.width / 1672, h * src.height / 941),
+    new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false }));
+  m.position.z = -d; m.renderOrder = paperLayers.length + scene.children.length;
+  scene.add(m);
+}
+
+function solid(img, color) {
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+  g.globalCompositeOperation = 'source-in'; g.fillStyle = color; g.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
+// 海浪分層：近海沿浪花上緣切成 6 條（tools/wavesplit.py），由遠到近；礁石逐群插在浪條之間（tools/reefsplit.py）
+const WAVE_D = [21, 19.5, 18, 16, 13.5, 11.5];
+const WAVE_AMP = [0.6, 1, 1.8, 2.8, 4, 5];          // 起伏幅度（目標圖 px），越近越大
+const WAVE_PERIOD = [4.4, 4.0, 3.7, 3.4, 3.1, 2.9];  // 秒
+const waves = [];
+let peng = null, flyers = null, director = null, night = null, clouds = null;
+
+async function items() {
+  const list = LAYER_DEFS.filter(L => !(WAVES && (L.key === 'near' || L.key === 'reefs')) && !(FLY && (L.key === 'gulls' || L.key === 'boats')))
+    .map(L => ({ ...L, src: `assets/${LAYER_DIR}/${L.key}.png` }));
+  // 雲素材到位（assets/clouds/animation.json 存在）才拆雲；還沒到位就用原遠景，天空不會消失
+  if (CLOUDS && (await fetch('assets/clouds/animation.json', { method: 'HEAD' }).then(r => r.ok, () => false))) {
+    list.find(L => L.key === 'far').src = 'assets/clouds/sky.png';
+    list.push({ key: 'clouds', d: 57 });   // 雲卡由 createClouds 建（要夾在天空與帆船之間）
+  }
+  // 企鵝卡組：前景拿掉企鵝、中景補企鵝後方
+  if (PENG) for (const L of list) {
+    if (L.key === 'fg') L.src = 'assets/penguin/fg_nopeng.png';
+    if (L.key === 'mid') L.src = 'assets/penguin/mid_fill.png';
+  }
+  if (WAVES) {
+    WAVE_D.forEach((d, k) => list.push({ key: `wave${k}`, d, blur: 0, color: k % 2 ? '#ff8000' : '#ffb060', src: `assets/waves/wave${k}.png`, wave: k }));
+    const reefs = await (await fetch('assets/waves/reefs.json')).json();
+    for (const r of reefs) {
+      const j = r.behindWave;
+      const d = j >= WAVE_D.length ? WAVE_D.at(-1) - 0.8 : j === 0 ? WAVE_D[0] + 0.5 : (WAVE_D[j - 1] + WAVE_D[j]) / 2;
+      list.push({ key: r.file, d, blur: 0, color: '#8800ff', src: `assets/waves/${r.file}` });
+    }
+  }
+  return list.sort((a, b) => b.d - a.d);   // 由後往前建，renderOrder 才對
+}
+
+async function build() {
+  for (const L of await items()) {
+    if (L.key === 'clouds') { clouds = await createClouds(scene, { loadImg, paperLayers }); continue; }
+    let img;
+    try { img = await loadImg(L.src); } catch { console.warn('缺圖層', L.src); continue; }
+    if (LAYERS) { flatPlane(solid(img, L.color), L.d); continue; }
+    if (MODE === 'flat') { flatPlane(img, L.d); continue; }
+    let shadow = null;
+    // 浪條（與夾在中間的礁石）：陰影往上偏，落在後面那條浪的浪峰上方，像一張張疊起來的紙卡
+    const crest = (L.wave > 0 || L.key.startsWith('reef')) && WSHADOW > 0;
+    if (crest) scene.add(shadow = createShadow(img, { d: L.d, gap: 0.3, strength: WSHADOW, blur: 8, dir: [0.001, WSHIFT / 1755] }));
+    else if (SHADOW > 0 && L.key !== 'far') scene.add(shadow = createShadow(img, { d: L.d, strength: SHADOW }));
+    const m = createPaperLayer(img, { d: L.d, thick: 0.004 * THICK * (L.key === 'far' ? 0 : 1), blur: L.blur * DOF });
+    scene.add(m); paperLayers.push(m);
+    if (L.wave !== undefined) waves.push({ k: L.wave, m, shadow, y0: m.position.y, s0: shadow?.position.y, px: frameSize(L.d).h / IMG_H, phase: L.wave * 1.7 });
+  }
+  // 海鷗、帆船：模組自己依深度插 renderOrder、自己算厚度（不進 paperLayers）
+  if (FLY) flyers = await createFlyers(scene, { loadImg, camera, boats: num('boats', DIRECT ? 0 : 5), shadow: SHADOW, thick: 0.004 * THICK });   // 狀態驅動時帆船數由 setSessions 決定
+  if (PENG) {
+    peng = await createPenguin(scene, { loadImg, paperLayers, waveDy: k => waves.find(w => w.k === k)?.dy || 0, jitter: ANIM ? num('jitter', 1) : 0 });
+    const w3 = waves.find(w => w.k === 3);
+    if (w3) peng.bobber.renderOrder = w3.m.renderOrder + 0.5;   // 浮標夾在第 3、4 條浪之間
+    peng.play(Q.get('act') || 'sleep');
+  }
+  director = createDirector({ peng: DIRECT ? peng : null, flyers, post });
+  if (MODE === 'paper' && !LAYERS) night = await createNight({ loadImg, peng, post, mainScene: scene, paperLayers, lights: num('lights', 1), pinhole: num('pinhole', 1) });
+  if (Q.has('state')) { const s = Q.get('state'); director.setSessions([s === 'none' ? null : s]); director.applyState(s); }
+  window.__ready = true;
+}
+
+// 浪條起伏：停格（每秒 12 格），各條相位錯開；影子跟著動。gain＝狀態給的浪幅倍率
+function animateWaves(t, gain = 1) {
+  const ts = stepTime(t, 12);
+  for (const w of waves) {
+    const dy = ANIM ? gain * WAVE_AMP[w.k] * Math.sin(ts * Math.PI * 2 / WAVE_PERIOD[w.k] + w.phase) * w.px : 0;
+    w.m.position.y = w.y0 + dy; w.dy = dy;
+    if (w.shadow) w.shadow.position.y = w.s0 + dy;
+  }
+}
+
+// 狀態：每秒讀一次 state.json（bridge 提供）
+async function poll() {
+  if (CONFIG.polling && director) try {
+    const j = await (await fetch('state.json', { cache: 'no-store' })).json();
+    director.setSessions(j.sessions); director.applyState(j.state);
+  } catch {}
+  setTimeout(poll, 1000);
+}
+
+// 日夜：跟時鐘（CONFIG.clockHours 固定時用它）；17–19 點變暗、5–7 點天亮
+function nightness() {
+  if (Q.has('night') && Q.get('night') !== '1') return +Q.get('night');   // night=0.5：固定夜晚程度
+  const d = new Date(), h = CONFIG.clockHours ?? d.getHours() + d.getMinutes() / 60;
+  const s = x => Math.min(1, Math.max(0, x)), dusk = s((h - 17) / 2), dawn = s((7 - h) / 2);
+  return Math.max(h >= 12 ? dusk : 0, h < 12 ? dawn : 0);
+}
+
+const t0 = performance.now();
+let paused = false, lastT = 0, waveT = 0;
+function render() {
+  const t = Q.has('t') ? +Q.get('t') : (performance.now() - t0) / 1000;   // t=秒：固定時間（逐格錄影用）
+  const dt = Math.min(0.2, Math.max(0, t - lastT)); lastT = t;
+  if (FIXED_CAM) camera.position.set(CAM[0], CAM[1], 0);
+  else if (SWAY) camera.position.set(Math.sin(t * 0.21) * 0.06, Math.sin(t * 0.17) * 0.03, 0);   // 呼吸：很小、連續（鏡頭不停格）
+  camera.lookAt(camera.position.x * 0.2, camera.position.y * 0.2, -30);
+  const cue = director ? director.update(t) : { waveGain: 1, freeze: false };
+  if (!cue.freeze) waveT += dt;                       // 高潮停住：浪的時間停住
+  animateWaves(Q.has('t') ? t : waveT, cue.waveGain);
+  peng?.update(t);
+  clouds?.update(ANIM ? t : 0);
+  if (!Q.has('t') || Q.has('night') || Q.has('day')) post.uniforms.uNight.value = nightness();   // t= 的靜止截圖預設白天（量相似度）
+  updateLayers(paperLayers, camera);
+  flyers?.update(ANIM ? t : 0);
+  post.uniforms.uTime.value = t;
+  const nv = post.uniforms.uNight.value;
+  night?.update(t, { night: nv, lamp: Math.max(nv, Math.min(1, Math.max(0, (post.uniforms.uGloom.value - 0.4) / 0.2))) });   // 暴風雨時燈塔也亮
+  post.render(scene, camera, night?.scene);
+}
+let lastFrame = -1e9;
+function loop(ts) {
+  requestAnimationFrame(loop);
+  if (document.hidden || paused || ts - lastFrame < 1000 / 30 - 1) return;   // 30 fps 上限
+  lastFrame = ts; render();
+}
+window.wpPause = on => { paused = !!on; };
+window.theme = { renderer, render, scene, camera, post, get peng() { return peng; }, get flyers() { return flyers; },
+  CONFIG, applyState: s => director?.applyState(s), setSessions: a => director?.setSessions(a) };
+build().then(() => { poll(); requestAnimationFrame(loop); });
+</script>
+</body>
+</html>

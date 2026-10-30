@@ -1,0 +1,14 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://sky/backdrop.gd" id="1"]
+[ext_resource type="Shader" path="res://sky/backdrop.gdshader" id="2"]
+[ext_resource type="Texture2D" path="res://sky/far.png" id="3"]
+
+[sub_resource type="ShaderMaterial" id="mat"]
+shader = ExtResource("2")
+shader_parameter/plate = ExtResource("3")
+
+[node name="Backdrop" type="MeshInstance3D"]
+material_override = SubResource("mat")
+script = ExtResource("1")
+plate = ExtResource("3")
