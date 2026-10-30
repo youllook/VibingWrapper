@@ -1,0 +1,605 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.0
+--------
+workdir: E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a18b93-9540-7313-975b-926e08086435
+--------
+user
+讀 prompt.md 並照做，完成後建立 .done
+2026-10-30T06:51:09.544750Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 404: {\"error\": \"not found\"}")
+codex
+我會先讀取 `prompt.md`，依照內容完成工作，最後建立 `.done`。
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command 'Get-Content -LiteralPath prompt.md -Raw' in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+ succeeded in 557ms:
+# 任務：產生 Tripo3D 建模用的人物多視圖（同一個人、A-pose）
+
+參考圖：本資料夾的 `ref-gym1-lifter.png`（從目標圖裁下的健力選手）。請照這個人的長相、體型、服裝畫，用你內建的圖像生成工具。
+
+## 人物（要寫實、逼真，像真人照片或高品質 3D 掃描，不要卡通、不要誇張漫畫肌肉）
+- 重量級健力選手，男，約 35 歲，身高約 180 cm、體重約 120 kg：粗脖子、厚斜方肌、寬背、厚實的胸和肚子（力量型，不是健美選手那種低體脂）、非常粗壯的大腿和臀部、粗前臂。
+- 深色短捲髮、濃密短鬍子，皮膚曬成小麥色，有一點汗光。
+- 服裝：黑色舉重連身衣（singlet，肩帶式）外面套一件黑色無袖背心；寬版深棕色舊皮革舉重腰帶（有金屬扣）；黑色護膝（膝蓋套，上下緣有紅色條紋）；黑色護腕（紅色條紋）；黑色長襪到小腿；黑色平底舉重鞋。
+- **雙手空著、手指張開自然放鬆**（不要握拳、不要拿東西）。不要槓鈴、不要任何道具。
+
+## 姿勢與構圖（建模用，嚴格遵守）
+- **A-pose**：站直、雙腳與肩同寬、腳尖朝前，雙臂向兩側斜下張開約 45°，手臂與身體分開不要碰到，雙腿也分開看得到中間縫隙。表情平靜，嘴閉著。
+- **全身入鏡**，頭頂到腳底完整，上下留一點邊；人物置中。
+- 背景：純淺灰（#d9d9d9）無漸層、無地面陰影、無其他物體。
+- 光線：均勻柔和的攝影棚光，正面打光，不要強烈陰影或戲劇光（之後貼圖會烘焙進模型，要乾淨）。
+- 直式 3:4（例如 1024×1365）。
+- 不要文字、浮水印、logo。
+
+## 輸出（存在本資料夾）
+1. `view-front.png`：正面。
+2. `view-left.png`：人物的左側面（人物面朝畫面右邊），**同一個人、同一個姿勢、同一套服裝**。
+3. `view-back.png`：背面。
+4. `view-right.png`：人物的右側面（面朝畫面左邊）。
+5. `view-34.png`：前 3/4 角度（單圖生成用的備案，最清楚的一張）。
+
+先做 view-front，之後的每張都以 view-front 為參考圖編輯產生，確保臉、髮型、鬍子、體型、服裝、護具顏色完全一致；四個正交視圖的人物高度、腳底位置要對齊（同一個比例）。
+全部完成後建立空檔 `.done`。
+
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command 'Get-ChildItem -Force -Name; rg --files -g AGENTS.md' in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+ exited 1 in 548ms:
+codex.log
+prompt.md
+ref-gym1-lifter.png
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Get-Content -LiteralPath 'D:/codex_workspace/appdata/.codex/skills/.system/imagegen/SKILL.md' -Raw" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+ succeeded in 792ms:
+---
+name: "imagegen"
+description: "Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas."
+---
+
+# Image Generation Skill
+
+Generates or edits images for the current project (for example website assets, game assets, UI mockups, product mockups, wireframes, logo design, photorealistic images, or infographics).
+
+## Top-level modes and rules
+
+This skill has exactly two top-level modes:
+
+- **Default built-in tool mode (preferred):** built-in `image_gen` tool for image generation, editing, and transparent-image requests. Does not require `OPENAI_API_KEY`.
+- **Fallback CLI mode:** `scripts/image_gen.py` CLI. Use when the user explicitly asks for or confirms the CLI/API/model path. Requires `OPENAI_API_KEY`.
+
+Within CLI fallback, the CLI exposes three subcommands:
+
+- `generate`
+- `edit`
+- `generate-batch`
+
+Rules:
+- Use the built-in `image_gen` tool by default for normal image generation and editing requests.
+- Do not switch to CLI fallback for ordinary quality, size, or file-path control.
+- For transparent images, ask built-in `image_gen` for a transparent background and preserve the generated alpha.
+- Never silently switch from built-in `image_gen` or CLI `gpt-image-2` to CLI `gpt-image-1.5`; ask the user first unless they explicitly requested `gpt-image-1.5`.
+- The word `batch` by itself does not mean CLI fallback. If the user asks for many assets or says to batch-generate assets without explicitly asking for CLI/API/model controls, stay on the built-in path and issue one built-in call per requested asset or variant.
+- If the built-in tool fails or is unavailable, tell the user the CLI fallback exists and that it requires `OPENAI_API_KEY`. Proceed only if the user explicitly asks for that fallback.
+- If the user explicitly asks for CLI mode, use the bundled `scripts/image_gen.py` workflow. Do not create one-off SDK runners.
+- Never modify `scripts/image_gen.py`. If something is missing, ask the user before doing anything else.
+
+Built-in save-path policy:
+- In built-in tool mode, Codex saves generated images under `$CODEX_HOME/*` by default.
+- Do not describe or rely on OS temp as the default built-in destination.
+- Do not describe or rely on a destination-path argument (if any) on the built-in `image_gen` tool. If a specific location is needed, generate first and then move or copy the selected output from `$CODEX_HOME/generated_images/...`.
+- Save-path precedence in built-in mode:
+  1. If the user names a destination, move or copy the selected output there.
+  2. If the image is meant for the current project, move or copy the final selected image into the workspace before finishing.
+  3. If the image is only for preview or brainstorming, render it inline; the underlying file can remain at the default `$CODEX_HOME/*` path.
+- Never leave a project-referenced asset only at the default `$CODEX_HOME/*` path.
+- Do not overwrite an existing asset unless the user explicitly asked for replacement; otherwise create a sibling versioned filename such as `hero-v2.png` or `item-icon-edited.png`.
+
+Shared prompt guidance for both modes lives in `references/prompting.md` and `references/sample-prompts.md`.
+
+Fallback-only docs/resources for CLI mode:
+- `references/cli.md`
+- `references/image-api.md`
+- `references/codex-network.md`
+- `scripts/image_gen.py`
+
+## When to use
+- Generate a new image (concept art, product shot, cover, website hero)
+- Generate a new image using one or more reference images for style, composition, or mood
+- Edit an existing image (inpainting, lighting or weather transformations, background replacement, object removal, compositing, transparent background)
+- Produce many assets or variants for one task
+
+## When not to use
+- Extending or matching an existing SVG/vector icon set, logo system, or illustration library inside the repo
+- Creating simple shapes, diagrams, wireframes, or icons that are better produced directly in SVG, HTML/CSS, or canvas
+- Making a small project-local asset edit when the source file already exists in an editable native format
+- Any task where the user clearly wants deterministic code-native output instead of a generated bitmap
+
+## Decision tree
+
+Think about two separate questions:
+
+1. **Intent:** is this a new image or an edit of an existing image?
+2. **Execution strategy:** is this one asset or many assets/variants?
+
+Intent:
+- If the user wants to modify an existing image while preserving parts of it, treat the request as **edit**.
+- If the user provides images only as references for style, composition, mood, or subject guidance, treat the request as **generate**.
+- If the user provides no images, treat the request as **generate**.
+
+Built-in edit semantics:
+- Built-in edit mode is for images already visible in the conversation context, such as attached images or images generated earlier in the thread.
+- If the user wants to edit a local image file with the built-in tool, first load it with built-in `view_image` tool so the image is visible in the conversation context, then proceed with the built-in edit flow.
+- Do not promise arbitrary filesystem-path editing through the built-in tool.
+- If a local file still needs direct file-path control, masks, or other explicit CLI-only parameters, use the explicit CLI fallback only when the user asks for it.
+- For edits, preserve invariants aggressively and save non-destructively by default.
+
+Execution strategy:
+- In the built-in default path, produce many assets or variants by issuing one `image_gen` call per requested asset or variant.
+- In the CLI fallback path, use the CLI `generate-batch` subcommand only when the user explicitly chose CLI mode and needs many prompts/assets.
+- For many distinct assets, do not use `n` as a substitute for separate prompts. `n` is for variants of one prompt; distinct assets need distinct built-in calls or distinct CLI `generate-batch` jobs.
+
+Assume the user wants a new image unless they clearly ask to change an existing one.
+
+## Workflow
+1. Decide the top-level mode: built-in by default, including transparent-output requests; fallback CLI only if explicitly requested or confirmed.
+2. Decide the intent: `generate` or `edit`.
+3. Decide whether the output is preview-only or meant to be consumed by the current project.
+4. Decide the execution strategy: single asset vs repeated built-in calls vs CLI `generate-batch`.
+5. Collect inputs up front: prompt(s), exact text (verbatim), constraints/avoid list, and any input images.
+6. For every input image, label its role explicitly:
+   - reference image
+   - edit target
+   - supporting insert/style/compositing input
+7. If the edit target is only on the local filesystem and you are staying on the built-in path, inspect it with `view_image` first so the image is available in conversation context.
+8. If the user asked for a photo, illustration, sprite, product image, banner, or other explicitly raster-style asset, use `image_gen` rather than substituting SVG/HTML/CSS placeholders. If the request is for an icon, logo, or UI graphic that should match existing repo-native SVG/vector/code assets, prefer editing those directly instead.
+9. Augment the prompt based on specificity:
+   - If the user's prompt is already specific and detailed, normalize it into a clear spec without adding creative requirements.
+   - If the user's prompt is generic, add tasteful augmentation only when it materially improves output quality.
+10. Use the built-in `image_gen` tool by default.
+11. For transparent-output requests, ask built-in `image_gen` for a transparent background and preserve the generated alpha channel.
+12. Inspect outputs and validate: subject, style, composition, text accuracy, and invariants/avoid items.
+13. Iterate with a single targeted change, then re-check.
+14. For preview-only work, render the image inline; the underlying file may remain at the default `$CODEX_HOME/generated_images/...` path.
+15. For project-bound work, move or copy the selected artifact into the workspace and update any consuming code or references. Never leave a project-referenced asset only at the default `$CODEX_HOME/generated_images/...` path.
+16. For batches or multi-asset requests, persist every requested deliverable final in the workspace unless the user explicitly asked to keep outputs preview-only. Discarded variants do not need to be kept unless requested.
+17. If the user explicitly chooses or confirms the CLI fallback, then use the fallback-only docs for model, quality, size, `input_fidelity`, masks, output format, output paths, and network setup.
+18. Always report the final saved path(s) for any workspace-bound asset(s), plus the final prompt or prompt set and whether the built-in tool or fallback CLI mode was used.
+
+## Transparent image requests
+
+Ask built-in `image_gen` for a genuinely transparent background and preserve its alpha.
+
+## Prompt augmentation
+
+Reformat user prompts into a structured, production-oriented spec. Make the user's goal clearer and more actionable, but do not blindly add detail.
+
+Treat this as prompt-shaping guidance, not a closed schema. Use only the lines that help, and add a short extra labeled line when it materially improves clarity.
+
+### Specificity policy
+
+Use the user's prompt specificity to decide how much augmentation is appropriate:
+
+- If the prompt is already specific and detailed, preserve that specificity and only normalize/structure it.
+- If the prompt is generic, you may add tasteful augmentation when it will materially improve the result.
+
+Allowed augmentations:
+- composition or framing hints
+- polish level or intended-use hints
+- practical layout guidance
+- reasonable scene concreteness that supports the stated request
+
+Not allowed augmentations:
+- extra characters or objects that are not implied by the request
+- brand names, slogans, palettes, or narrative beats that are not implied
+- arbitrary side-specific placement unless the surrounding layout supports it
+
+## Use-case taxonomy (exact slugs)
+
+Classify each request into one of these buckets and keep the slug consistent across prompts and references.
+
+Generate:
+- photorealistic-natural — candid/editorial lifestyle scenes with real texture and natural lighting.
+- product-mockup — product/packaging shots, catalog imagery, merch concepts.
+- ui-mockup — app/web interface mockups and wireframes; specify the desired fidelity.
+- infographic-diagram — diagrams/infographics with structured layout and text.
+- scientific-educational — classroom explainers, scientific diagrams, and learning visuals with required labels and accuracy constraints.
+- ads-marketing — campaign concepts and ad creatives with audience, brand position, scene, and exact tagline/copy.
+- productivity-visual — slide, chart, workflow, and data-heavy business visuals.
+- logo-brand — logo/mark exploration, vector-friendly.
+- illustration-story — comics, children’s book art, narrative scenes.
+- stylized-concept — style-driven concept art, 3D/stylized renders.
+- historical-scene — period-accurate/world-knowledge scenes.
+
+Edit:
+- text-localization — translate/replace in-image text, preserve layout.
+- identity-preserve — try-on, person-in-scene; lock face/body/pose.
+- precise-object-edit — remove/replace a specific element (including interior swaps).
+- lighting-weather — time-of-day/season/atmosphere changes only.
+- background-extraction — transparent background / clean cutout. Ask built-in `image_gen` for actual transparency.
+- style-transfer — apply reference style while changing subject/scene.
+- compositing — multi-image insert/merge with matched lighting/perspective.
+- sketch-to-render — drawing/line art to photoreal render.
+
+## Shared prompt schema
+
+Use the following labeled spec as shared prompt scaffolding for both top-level modes:
+
+```text
+Use case: <taxonomy slug>
+Asset type: <where the asset will be used>
+Primary request: <user's main prompt>
+Input images: <Image 1: role; Image 2: role> (optional)
+Scene/backdrop: <environment>
+Subject: <main subject>
+Style/medium: <photo/illustration/3D/etc>
+Composition/framing: <wide/close/top-down; placement>
+Lighting/mood: <lighting + mood>
+Color palette: <palette notes>
+Materials/textures: <surface details>
+Text (verbatim): "<exact text>"
+Constraints: <must keep/must avoid>
+Avoid: <negative constraints>
+```
+
+Notes:
+- `Asset type` and `Input images` are prompt scaffolding, not dedicated CLI flags.
+- `Scene/backdrop` refers to the visual setting. It is not the same as the fallback CLI `background` parameter, which controls output transparency behavior.
+- Fallback-only execution notes such as `Quality:`, `Input fidelity:`, masks, output format, and output paths belong in the CLI path only. Do not treat them as built-in `image_gen` tool arguments.
+
+Augmentation rules:
+- Keep it short.
+- Add only the details needed to improve the prompt materially.
+- For edits, explicitly list invariants (`change only X; keep Y unchanged`).
+- If any critical detail is missing and blocks success, ask a question; otherwise proceed.
+
+## Examples
+
+### Generation example (hero image)
+```text
+Use case: product-mockup
+Asset type: landing page hero
+Primary request: a minimal hero image of a ceramic coffee mug
+Style/medium: clean product photography
+Composition/framing: wide composition with usable negative space for page copy if needed
+Lighting/mood: soft studio lighting
+Constraints: no logos, no text, no watermark
+```
+
+### Edit example (invariants)
+```text
+Use case: precise-object-edit
+Asset type: product photo background replacement
+Primary request: replace only the background with a warm sunset gradient
+Constraints: change only the background; keep the product and its edges unchanged; no text; no watermark
+```
+
+## Prompting best practices
+- Structure prompt as scene/backdrop -> subject -> details -> constraints.
+- Include intended use (ad, UI mock, infographic) to set the mode and polish level.
+- Use camera/composition language for photorealism.
+- Only use SVG/vector stand-ins when the user explicitly asked for vector output or a non-image placeholder.
+- Quote exact text and specify typography + placement.
+- For tricky words, spell them letter-by-letter and require verbatim rendering.
+- For multi-image inputs, reference images by index and describe how they should be used.
+- For edits, repeat invariants every iteration to reduce drift.
+- Iterate with single-change follow-ups.
+- If the prompt is generic, add only the extra detail that will materially help.
+- If the prompt is already detailed, normalize it instead of expanding it.
+- For CLI fallback only, see `references/cli.md` and `references/image-api.md` for model, `quality`, `input_fidelity`, masks, output format, and output-path guidance.
+- For transparent images, ask built-in `image_gen` for actual transparency and preserve its alpha.
+
+More principles shared by both modes: `references/prompting.md`.
+Copy/paste specs shared by both modes: `references/sample-prompts.md`.
+
+## Guidance by asset type
+Asset-type templates (website assets, game assets, wireframes, logo) are consolidated in `references/sample-prompts.md`.
+
+## gpt-image-2 guidance for CLI fallback
+
+The fallback CLI defaults to `gpt-image-2`.
+
+- Use `gpt-image-2` for new CLI/API workflows unless the user confirms a different model.
+- CLI `gpt-image-2` does not support `background=transparent`; ask before using `gpt-image-1.5` unless the user explicitly requested that model.
+- `gpt-image-2` always uses high fidelity for image inputs; do not set `input_fidelity` with this model.
+- `gpt-image-2` supports `quality` values `low`, `medium`, `high`, and `auto`.
+- Use `quality low` for fast drafts, thumbnails, and quick iterations. Use `medium`, `high`, or `auto` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
+- Square images are typically fastest to generate. Use `1024x1024` for fast square drafts.
+- If the user asks for 4K-style output, use `3840x2160` for landscape or `2160x3840` for portrait.
+- `gpt-image-2` size may be `auto` or `WIDTHxHEIGHT` if all constraints hold: max edge `<= 3840px`, both edges multiples of `16px`, long-to-short ratio `<= 3:1`, total pixels between `655,360` and `8,294,400`.
+
+Popular `gpt-image-2` sizes:
+- `1024x1024` square
+- `1536x1024` landscape
+- `1024x1536` portrait
+- `2048x2048` 2K square
+- `2048x1152` 2K landscape
+- `3840x2160` 4K landscape
+- `2160x3840` 4K portrait
+- `auto`
+
+## Fallback CLI mode only
+
+### Temp and output conventions
+These conventions apply only to the CLI fallback. They do not describe built-in `image_gen` output behavior.
+- Use `tmp/imagegen/` for intermediate files (for example JSONL batches); delete them when done.
+- Write final artifacts under `output/imagegen/`.
+- Use `--out` or `--out-dir` to control output paths; keep filenames stable and descriptive.
+
+### Dependencies
+Prefer `uv` for dependency management in this repo.
+
+Required Python package:
+```bash
+uv pip install openai
+```
+
+Optional for image inspection and downscaling:
+```bash
+uv pip install pillow
+```
+
+Portability note:
+- If you are using the installed skill outside this repo, install dependencies into that environment with its package manager.
+- In uv-managed environments, `uv pip install ...` remains the preferred path.
+
+### Environment
+- `OPENAI_API_KEY` must be set for live API calls.
+- Do not ask the user for `OPENAI_API_KEY` when using the built-in `image_gen` tool.
+- Never ask the user to paste the full key in chat. Ask them to set it locally and confirm when ready.
+
+If the key is missing, give the user these steps:
+1. Create an API key in the OpenAI platform UI: https://platform.openai.com/api-keys
+2. Set `OPENAI_API_KEY` as an environment variable in their system.
+3. Offer to guide them through setting the environment variable for their OS/shell if needed.
+
+If installation is not possible in this environment, tell the user which dependency is missing and how to install it into their active environment.
+
+### Script-mode notes
+- CLI commands + examples: `references/cli.md`
+- API parameter quick reference: `references/image-api.md`
+- Network approvals / sandbox settings for CLI mode: `references/codex-network.md`
+
+## Reference map
+- `references/prompting.md`: shared prompting principles for both modes.
+- `references/sample-prompts.md`: shared copy/paste prompt recipes for both modes.
+- `references/cli.md`: fallback-only CLI usage via `scripts/image_gen.py`.
+- `references/image-api.md`: fallback-only API/CLI parameter reference.
+- `references/codex-network.md`: fallback-only network/sandbox troubleshooting for CLI mode.
+- `scripts/image_gen.py`: fallback-only CLI implementation. Use only when the user explicitly chooses or confirms CLI mode.
+
+
+codex
+我會使用 `imagegen` 技能與內建圖像工具，先產生正面圖，再以正面圖為參考製作其餘四個角度，確認後存入本資料夾。
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command '$p = Get-Item -LiteralPath .; while ($null -ne $p) { $f = Join-Path $p.FullName '"'AGENTS.md'; if (Test-Path -LiteralPath "'$f) { Write-Output $f; Get-Content -LiteralPath $f }; $p = $p.Parent }' in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+ succeeded in 607ms:
+codex
+正面圖已生成，並已修正護膝紅色橫條與手指姿勢。接著以這張圖為固定參考，製作左右側面、背面及前 3/4 視圖。
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18b93-9540-7313-975b-926e08086435\\exec-09483763-4f2f-4259-a82a-dfdebf74d8dc.png' -Destination 'view-front.png'" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+ succeeded in 479ms:
+codex
+五個角度已生成，左右側面的朝向也已確認。現在將圖片與生成提示詞存入資料夾，檢查檔案格式、尺寸及數量後建立 `.done`。
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18b93-9540-7313-975b-926e08086435\\exec-a20daa10-e8a7-4539-a3ac-8579a0257a68.png' -Destination 'view-left.png'
+Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18b93-9540-7313-975b-926e08086435\\exec-48443224-6d82-4521-bf63-035c5466e7a8.png' -Destination 'view-back.png'
+Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18b93-9540-7313-975b-926e08086435\\exec-7f6778a2-092f-48c7-bed2-efcc2550e4ff.png' -Destination 'view-right.png'
+Copy-Item -LiteralPath 'C:\\Users\\user\\.codex\\generated_images\\01a18b93-9540-7313-975b-926e08086435\\exec-5b7d5dc4-6590-4800-b52b-28bd91c4a03d.png' -Destination 'view-34.png'
+Add-Type -AssemblyName System.Drawing
+foreach ("'$name in @('"'front','left','back','right','34')) { "'$f = Get-Item -LiteralPath "view-$name.png"; $im = [System.Drawing.Image]::FromFile($f.FullName); [pscustomobject]@{Name=$f.Name;Width=$im.Width;Height=$im.Height;Ratio3to4=($im.Width*4 -eq $im.Height*3);Bytes=$f.Length}; $im.Dispose() }' in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+ succeeded in 835ms:
+
+Name      : view-front.png
+Width     : 1086
+Height    : 1448
+Ratio3to4 : True
+Bytes     : 1691741
+
+Name      : view-left.png
+Width     : 1086
+Height    : 1448
+Ratio3to4 : True
+Bytes     : 1436380
+
+Name      : view-back.png
+Width     : 1086
+Height    : 1448
+Ratio3to4 : True
+Bytes     : 1686755
+
+Name      : view-right.png
+Width     : 1086
+Height    : 1448
+Ratio3to4 : True
+Bytes     : 1438372
+
+Name      : view-34.png
+Width     : 1086
+Height    : 1448
+Ratio3to4 : True
+Bytes     : 1677513
+
+
+apply patch
+patch: completed
+E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo\generation-prompts.md
+diff --git a/docs/健力健身房/02-素材/tripo/generation-prompts.md b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6212165e62fd0317801705f442a9c961f494879d
+--- /dev/null
++++ b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+@@ -0,0 +1,28 @@
++# Generation prompts
++
++Tool: built-in image_gen. All additional views were edited from view-front.png.
++
++## Front initial
++
++Use case: identity-preserve. Create view-front.png: one full-body FRONT orthographic modeling reference of the man in the provided reference image. Preserve recognizable face, short dark curly hair, dense short beard, tan skin and massive heavyweight powerlifter build, age about 35, 180cm 120kg, thick neck/traps/back/chest/belly and very thick thighs/glutes/forearms. Realistic human photograph or high-quality 3D scan, not cartoon, not exaggerated comic muscles or lean bodybuilder. Change pose to relaxed neutral A-pose: stand straight, feet shoulder-width apart toes forward, arms extended sideways and downward 45 degrees away from torso, straight relaxed arms, empty hands with all fingers naturally relaxed and separated, legs visibly separated. Calm closed-mouth face. Clothing: black strap singlet with black sleeveless tank on top, wide worn dark brown leather lifting belt with metal buckle, black knee sleeves with red stripes at top and bottom, black wrist wraps with red stripes, black calf-high socks, black flat lifting shoes. No logos. Full body entirely visible with small margins, centered. Portrait canvas EXACT 3:4 aspect ratio preferably 1152x1536. Head top at 5% canvas height and soles at 95%, fixed scale for subsequent turnarounds. Uniform solid #d9d9d9 background with absolutely no gradient, ground shadow, props or barbell. Uniform soft frontal studio lighting, clean texture baking reference with no dramatic or strong shadows. No text, watermark, logos. Single view only.
++
++## Front correction
++
++Edit this front modeling reference, preserve exact man identity, body shape, clothing, orthographic front camera and full-body A-pose. Corrections: knee sleeves must have RED HORIZONTAL BANDS at both TOP and BOTTOM edges, not vertical stripes; hands open with five relaxed distinctly separated fingers on each hand; background must be completely uniform flat #d9d9d9 including beneath shoes, no gradients or ground/contact shadows. Portrait 3:4. Leave 5% top/bottom margins, preserve head height and sole position for turnarounds. Shoes point straight forward, legs shoulder-width apart. Photorealistic natural anatomy. No text logos props.
++
++## Left
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic LEFT anatomical side profile, camera sees his LEFT ear and LEFT body side, nose and all toes point to IMAGE RIGHT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Back
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic REAR view, showing back of head, back of shirt, belt rear (NO buckle on rear), back of both legs/shoes. Preserve wide clear gaps between arms and body and between legs, exact same symmetrical A-pose and proportions as front.
++
++## Right
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic RIGHT anatomical side profile, camera sees his RIGHT ear and RIGHT body side, nose and all toes point to IMAGE LEFT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Three-quarter
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Front THREE-QUARTER view at 35 degrees around to his left side, nose pointing a little toward image right, face and front and left side of body visible. Best clear single-image reconstruction reference, preserve identical physical A-pose with arms away from torso and hands open, legs separated. Both arms/hands and feet fully visible, correct natural perspective of the unchanged pose.
++
+
+diff --git a/docs/健力健身房/02-素材/tripo/generation-prompts.md b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6212165e62fd0317801705f442a9c961f494879d
+--- /dev/null
++++ b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+@@ -0,0 +1,28 @@
++# Generation prompts
++
++Tool: built-in image_gen. All additional views were edited from view-front.png.
++
++## Front initial
++
++Use case: identity-preserve. Create view-front.png: one full-body FRONT orthographic modeling reference of the man in the provided reference image. Preserve recognizable face, short dark curly hair, dense short beard, tan skin and massive heavyweight powerlifter build, age about 35, 180cm 120kg, thick neck/traps/back/chest/belly and very thick thighs/glutes/forearms. Realistic human photograph or high-quality 3D scan, not cartoon, not exaggerated comic muscles or lean bodybuilder. Change pose to relaxed neutral A-pose: stand straight, feet shoulder-width apart toes forward, arms extended sideways and downward 45 degrees away from torso, straight relaxed arms, empty hands with all fingers naturally relaxed and separated, legs visibly separated. Calm closed-mouth face. Clothing: black strap singlet with black sleeveless tank on top, wide worn dark brown leather lifting belt with metal buckle, black knee sleeves with red stripes at top and bottom, black wrist wraps with red stripes, black calf-high socks, black flat lifting shoes. No logos. Full body entirely visible with small margins, centered. Portrait canvas EXACT 3:4 aspect ratio preferably 1152x1536. Head top at 5% canvas height and soles at 95%, fixed scale for subsequent turnarounds. Uniform solid #d9d9d9 background with absolutely no gradient, ground shadow, props or barbell. Uniform soft frontal studio lighting, clean texture baking reference with no dramatic or strong shadows. No text, watermark, logos. Single view only.
++
++## Front correction
++
++Edit this front modeling reference, preserve exact man identity, body shape, clothing, orthographic front camera and full-body A-pose. Corrections: knee sleeves must have RED HORIZONTAL BANDS at both TOP and BOTTOM edges, not vertical stripes; hands open with five relaxed distinctly separated fingers on each hand; background must be completely uniform flat #d9d9d9 including beneath shoes, no gradients or ground/contact shadows. Portrait 3:4. Leave 5% top/bottom margins, preserve head height and sole position for turnarounds. Shoes point straight forward, legs shoulder-width apart. Photorealistic natural anatomy. No text logos props.
++
++## Left
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic LEFT anatomical side profile, camera sees his LEFT ear and LEFT body side, nose and all toes point to IMAGE RIGHT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Back
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic REAR view, showing back of head, back of shirt, belt rear (NO buckle on rear), back of both legs/shoes. Preserve wide clear gaps between arms and body and between legs, exact same symmetrical A-pose and proportions as front.
++
++## Right
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic RIGHT anatomical side profile, camera sees his RIGHT ear and RIGHT body side, nose and all toes point to IMAGE LEFT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Three-quarter
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Front THREE-QUARTER view at 35 degrees around to his left side, nose pointing a little toward image right, face and front and left side of body visible. Best clear single-image reconstruction reference, preserve identical physical A-pose with arms away from torso and hands open, legs separated. Both arms/hands and feet fully visible, correct natural perspective of the unchanged pose.
++
+
+exec
+"C:\\Users\\user\\scoop\\shims\\pwsh.exe" -Command "New-Item -ItemType File -Path '.done' -Force | Select-Object Name,Length" in E:\DesktopPet\.claude\worktrees\american-gym-wallpaper-design-273587\docs\健力健身房\02-素材\tripo
+ succeeded in 589ms:
+
+Name  Length
+----  ------
+.done      0
+
+
+diff --git a/docs/健力健身房/02-素材/tripo/generation-prompts.md b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6212165e62fd0317801705f442a9c961f494879d
+--- /dev/null
++++ b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+@@ -0,0 +1,28 @@
++# Generation prompts
++
++Tool: built-in image_gen. All additional views were edited from view-front.png.
++
++## Front initial
++
++Use case: identity-preserve. Create view-front.png: one full-body FRONT orthographic modeling reference of the man in the provided reference image. Preserve recognizable face, short dark curly hair, dense short beard, tan skin and massive heavyweight powerlifter build, age about 35, 180cm 120kg, thick neck/traps/back/chest/belly and very thick thighs/glutes/forearms. Realistic human photograph or high-quality 3D scan, not cartoon, not exaggerated comic muscles or lean bodybuilder. Change pose to relaxed neutral A-pose: stand straight, feet shoulder-width apart toes forward, arms extended sideways and downward 45 degrees away from torso, straight relaxed arms, empty hands with all fingers naturally relaxed and separated, legs visibly separated. Calm closed-mouth face. Clothing: black strap singlet with black sleeveless tank on top, wide worn dark brown leather lifting belt with metal buckle, black knee sleeves with red stripes at top and bottom, black wrist wraps with red stripes, black calf-high socks, black flat lifting shoes. No logos. Full body entirely visible with small margins, centered. Portrait canvas EXACT 3:4 aspect ratio preferably 1152x1536. Head top at 5% canvas height and soles at 95%, fixed scale for subsequent turnarounds. Uniform solid #d9d9d9 background with absolutely no gradient, ground shadow, props or barbell. Uniform soft frontal studio lighting, clean texture baking reference with no dramatic or strong shadows. No text, watermark, logos. Single view only.
++
++## Front correction
++
++Edit this front modeling reference, preserve exact man identity, body shape, clothing, orthographic front camera and full-body A-pose. Corrections: knee sleeves must have RED HORIZONTAL BANDS at both TOP and BOTTOM edges, not vertical stripes; hands open with five relaxed distinctly separated fingers on each hand; background must be completely uniform flat #d9d9d9 including beneath shoes, no gradients or ground/contact shadows. Portrait 3:4. Leave 5% top/bottom margins, preserve head height and sole position for turnarounds. Shoes point straight forward, legs shoulder-width apart. Photorealistic natural anatomy. No text logos props.
++
++## Left
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic LEFT anatomical side profile, camera sees his LEFT ear and LEFT body side, nose and all toes point to IMAGE RIGHT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Back
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic REAR view, showing back of head, back of shirt, belt rear (NO buckle on rear), back of both legs/shoes. Preserve wide clear gaps between arms and body and between legs, exact same symmetrical A-pose and proportions as front.
++
++## Right
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic RIGHT anatomical side profile, camera sees his RIGHT ear and RIGHT body side, nose and all toes point to IMAGE LEFT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Three-quarter
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Front THREE-QUARTER view at 35 degrees around to his left side, nose pointing a little toward image right, face and front and left side of body visible. Best clear single-image reconstruction reference, preserve identical physical A-pose with arms away from torso and hands open, legs separated. Both arms/hands and feet fully visible, correct natural perspective of the unchanged pose.
++
+
+codex
+已使用內建圖像工具完成，五張圖片均存於本資料夾，尺寸為 1086×1448（3:4）：
+
+- `view-front.png`
+- `view-left.png`
+- `view-back.png`
+- `view-right.png`
+- `view-34.png`
+
+生成提示詞存於 `generation-prompts.md`，空檔 `.done` 已建立。
+diff --git a/docs/健力健身房/02-素材/tripo/generation-prompts.md b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6212165e62fd0317801705f442a9c961f494879d
+--- /dev/null
++++ b/docs/健力健身房/02-素材/tripo/generation-prompts.md
+@@ -0,0 +1,28 @@
++# Generation prompts
++
++Tool: built-in image_gen. All additional views were edited from view-front.png.
++
++## Front initial
++
++Use case: identity-preserve. Create view-front.png: one full-body FRONT orthographic modeling reference of the man in the provided reference image. Preserve recognizable face, short dark curly hair, dense short beard, tan skin and massive heavyweight powerlifter build, age about 35, 180cm 120kg, thick neck/traps/back/chest/belly and very thick thighs/glutes/forearms. Realistic human photograph or high-quality 3D scan, not cartoon, not exaggerated comic muscles or lean bodybuilder. Change pose to relaxed neutral A-pose: stand straight, feet shoulder-width apart toes forward, arms extended sideways and downward 45 degrees away from torso, straight relaxed arms, empty hands with all fingers naturally relaxed and separated, legs visibly separated. Calm closed-mouth face. Clothing: black strap singlet with black sleeveless tank on top, wide worn dark brown leather lifting belt with metal buckle, black knee sleeves with red stripes at top and bottom, black wrist wraps with red stripes, black calf-high socks, black flat lifting shoes. No logos. Full body entirely visible with small margins, centered. Portrait canvas EXACT 3:4 aspect ratio preferably 1152x1536. Head top at 5% canvas height and soles at 95%, fixed scale for subsequent turnarounds. Uniform solid #d9d9d9 background with absolutely no gradient, ground shadow, props or barbell. Uniform soft frontal studio lighting, clean texture baking reference with no dramatic or strong shadows. No text, watermark, logos. Single view only.
++
++## Front correction
++
++Edit this front modeling reference, preserve exact man identity, body shape, clothing, orthographic front camera and full-body A-pose. Corrections: knee sleeves must have RED HORIZONTAL BANDS at both TOP and BOTTOM edges, not vertical stripes; hands open with five relaxed distinctly separated fingers on each hand; background must be completely uniform flat #d9d9d9 including beneath shoes, no gradients or ground/contact shadows. Portrait 3:4. Leave 5% top/bottom margins, preserve head height and sole position for turnarounds. Shoes point straight forward, legs shoulder-width apart. Photorealistic natural anatomy. No text logos props.
++
++## Left
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic LEFT anatomical side profile, camera sees his LEFT ear and LEFT body side, nose and all toes point to IMAGE RIGHT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Back
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic REAR view, showing back of head, back of shirt, belt rear (NO buckle on rear), back of both legs/shoes. Preserve wide clear gaps between arms and body and between legs, exact same symmetrical A-pose and proportions as front.
++
++## Right
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Strict orthographic RIGHT anatomical side profile, camera sees his RIGHT ear and RIGHT body side, nose and all toes point to IMAGE LEFT. In true side projection the laterally spread arms are foreshortened, hands at reference height around hips; do NOT swing arms forward or backward to fake a front-view A silhouette. Feet overlap in profile because they are separated laterally, not staggered.
++
++## Three-quarter
++
++Use case: identity-preserve. Edit provided view-front into a single different camera view for a Tripo3D character turnaround. EXACT SAME man, face, short curly dark hair, beard, tan skin, massive thick powerlifter physique with thick belly/thighs, exact black singlet and sleeveless tank, worn dark brown belt with buckle located only at FRONT, black knee sleeves red HORIZONTAL bands at upper/lower edges, black red-striped wrist wraps, calf black socks, black flat shoes. Preserve the SAME physical A-pose: straight upright body, legs shoulder-width apart, arms laterally abducted DOWN 45 degrees in the frontal plane, empty open hands naturally spread fingers. Rotate ONLY camera around vertical axis, do not change physical pose. Realistic scan/photo, soft uniform studio lighting. Uniform solid #d9d9d9 backdrop with NO gradient and NO floor/contact/cast shadow. Entire body centered with uncropped extremities. EXACT same portrait 3:4 canvas and scale as input: topmost hair at y=2.4% and shoe soles at y=95.1% of image, keeping same vertical coordinates for head/shoulders/belt/knees/soles. No text watermark logos props, no barbell. Front THREE-QUARTER view at 35 degrees around to his left side, nose pointing a little toward image right, face and front and left side of body visible. Best clear single-image reconstruction reference, preserve identical physical A-pose with arms away from torso and hands open, legs separated. Both arms/hands and feet fully visible, correct natural perspective of the unchanged pose.
++
+
+tokens used
+46,357
+已使用內建圖像工具完成，五張圖片均存於本資料夾，尺寸為 1086×1448（3:4）：
+
+- `view-front.png`
+- `view-left.png`
+- `view-back.png`
+- `view-right.png`
+- `view-34.png`
+
+生成提示詞存於 `generation-prompts.md`，空檔 `.done` 已建立。

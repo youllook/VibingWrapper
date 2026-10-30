@@ -1,0 +1,13 @@
+{
+  "size": [
+    1672,
+    941
+  ],
+  "layer_mode": "RGBA",
+  "background_mode": "RGB",
+  "max_composite_channel_error": 0,
+  "different_composite_pixels": 0,
+  "layers_cover_each_pixel_exactly_once": true,
+  "blank_changes_only_whiteboard": true,
+  "gym1_sha256": "5a1a815ac83e8db5a5826b85148b362d5b01c80252c266068dad6f6215ccb4c1"
+}
