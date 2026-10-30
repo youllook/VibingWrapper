@@ -1,14 +1,11 @@
-// 大海怪3 lens: what makes it read as a film still rather than a game — the near foreground (the fisherman and the
-// gunwale) thrown out of focus, water drops sitting on the lens, a cold low-saturation grade with the eye left warm,
-// vignette and grain. A full-screen canvas pass over the finished 3D frame. There is no depth here, so the focus is
-// a screen-space map: the camera never leaves the boat, and the foreground always sits in the bottom-left and along
-// the bottom edge (`fg_*` uniforms, set from main.gd).
+// 大海怪3 lens: what makes it read as a film still rather than a game — water drops sitting on the lens (blurring
+// what is behind them), a cold low-saturation grade with warm hues kept, vignette and grain. A full-screen canvas pass
+// over the finished 3D frame. The near gunwale stays sharp (user 2026-10-30: more detail on the near boat; the
+// fisherman it used to blur with is gone).
 shader_type canvas_item;
 
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
-uniform float blur_px = 9.0;                 // the foreground's blur radius at 1080p
-uniform vec4 fg_man = vec4(0.18, 0.86, 0.26, 0.30);   // the fisherman: centre (uv), radii
-uniform float fg_rail = 0.83;                // the gunwale: below this uv.y
+uniform float blur_px = 9.0;                 // a drop's blur radius at 1080p
 uniform float drops = 0.0;                   // 0 … 1: water drops on the lens
 uniform float grain = 0.035;
 uniform float time_s = 0.0;
@@ -57,12 +54,9 @@ void fragment() {
 	vec2 uv = SCREEN_UV;
 	vec2 px = SCREEN_PIXEL_SIZE;
 	float aspect = px.y / px.x;
-	// focus: the fisherman's ellipse and the rail strip are out of focus
-	vec2 e = (uv - fg_man.xy) / fg_man.zw;
-	float coc = max(0.45 * (1.0 - smoothstep(0.55, 1.0, length(e))), smoothstep(fg_rail - 0.06, fg_rail + 0.05, uv.y));
 	vec3 dr = lens_drops(uv, aspect, drops);
 	uv += dr.xy;
-	coc = max(coc, smoothstep(0.0, 0.05, dr.z) * 0.8);                 // a drop blurs what is behind it
+	float coc = smoothstep(0.0, 0.05, dr.z) * 0.8;                     // a drop blurs what is behind it
 	vec3 col = texture(screen_tex, uv).rgb;
 	if (coc > 0.01) {
 		float rad = blur_px * coc * (px.y * 1080.0);

@@ -1,8 +1,8 @@
 extends Node3D
-# 大海怪3 — over a fisherman's shoulder in a small wooden boat, a storm sea; while Claude works a giant squid's eye
+# 大海怪3 — from low in a small wooden boat, a storm sea; while Claude works a giant squid's eye
 # heaves up out of the water beside the boat, tilting the sea, and throws its arms up curling and lashing; its head
 # and eye stay out of the water staring into the lens. When the work is done it sinks back and the sea goes wild
-# while the man clings to the gunwale. Composition from the user's reference (2026-10-27).
+# around the empty boat. Composition from the user's reference (2026-10-27); no fisherman (user 2026-10-30).
 #   clear     待命  — a calm sea
 #   overcast  思考  — the swell builds
 #   storm     執行  — the eye rises (the sea heaves and tilts), arms burst out curling, head and eye stare at you
@@ -14,11 +14,7 @@ extends Node3D
 const HEAD_S := 10.0                             # → about 8.5 m across
 const HEAD_AT := Vector3(3.4, -3.4, -10.5)       # its base when it is up (the eye just over the water line)
 const HEAD_YAW := -1.6                            # its +X eye turned to the boat
-# the painted +X eye on head.glb (found from its texture: /e/tmp/sea-monster-3/blender/find_eye.py): the pupil's
-# centre on the surface, the eye's outward axis, and the ball the live eye is fitted to
-const EYE_SURF := Vector3(0.46, 0.48, 0.22)
-const EYE_AXIS := Vector3(0.95, 0.12, 0.31)
-const EYE_R := 0.118
+# its eye is head.glb's own (user 2026-10-30: no live eye laid over it)
 const HEAD_C := Vector3(0.0, 0.45, 0.0)          # middle of the head
 const HEAD_R := 4.2                              # its radius at the water line
 # the arms out of the water: root (m, its depth when up), heading (rad), length, thickness, how far it rears up,
@@ -29,7 +25,7 @@ const TENTS := [
 	{"at": Vector3(-2.5, -1.5, -11.0), "yaw": 2.2, "len": 14.0, "thick": 8.0, "rise": 0.6, "curl": 1.6, "roll": 0.9, "ph": 3.6},
 ]
 const DOWN := 30.0                                # sunk out of sight
-const CAM_LOCAL := Vector3(0.02, 1.3, 0.6)        # over the fisherman's right shoulder, in the boat's frame
+const CAM_LOCAL := Vector3(0.02, 1.3, 0.6)        # low over the near gunwale, in the boat's frame
 const CAM_LOOK := Vector3(1.2, 0.0, -14.0)
 const DEBOUNCE := 0.3
 const LEE := 0.4
@@ -38,9 +34,6 @@ const BOAT_LEN := 6.5
 const BOAT_DRAFT := 0.55
 const BOAT_YAW := -PI / 2 + 0.25                  # model −Z (the bow posts) → world −X, turned a little away
 const BOAT_AT := Vector3(0.3, 0.0, 0.4)
-const FISHER_H := 1.25                            # kneeling
-const FISHER_YAW := PI / 2 + 0.15                 # model +X (his reach) → world −Z, toward the squid
-const FISHER_AT := Vector3(-0.3, -0.05, -0.3)
 
 # the sea: [wavelength m, amplitude m at sea_k 1, direction off the wind (rad)], steepness shared
 const WAVES := [
@@ -103,13 +96,8 @@ var water_mat: ShaderMaterial
 var water_mi: MeshInstance3D
 var squid: Node3D
 var head: Node3D
-var eye_mi: MeshInstance3D
 var tents := []                  # [{node, skel, bones, rest, cfg}]
-var eye_mat: ShaderMaterial
 var boat: Node3D
-var fisher: Node3D
-var fisher_skel: Skeleton3D
-var fisher_rest := []
 var spray: CPUParticles3D
 var mist: CPUParticles3D
 var drips: CPUParticles3D
@@ -123,8 +111,6 @@ var churn := Tw.new(0.0)
 var sink := Tw.new(DOWN)        # how far below its up pose (m)
 var arms := Tw.new(0.0)         # 0 … 1: arms out of the water
 var lash := Tw.new(0.0)         # how hard they whip
-var grip := Tw.new(0.2)         # the fisherman's tension
-var pupil := Tw.new(0.5)
 var ring_t := 99.0
 var was_up := false
 
@@ -246,27 +232,6 @@ func _build_squid() -> void:
 	head.scale = Vector3.ONE * HEAD_S
 	head.rotation.y = HEAD_YAW
 	_wet(head)
-	# the live eye (大海怪's heroEye, eye.gdshader) over the head's painted one: its mesh is a 0.27 ball looking along +Y
-	eye_mat = ShaderMaterial.new()
-	eye_mat.shader = load("res://eye.gdshader")
-	eye_mat.set_shader_parameter("iris_tex", load("res://models/iris.png"))
-	eye_mat.set_shader_parameter("iris_tint", Vector3(0.95, 0.62, 0.3))
-	eye_mat.set_shader_parameter("wet", 0.5)
-	eye_mat.set_shader_parameter("glint", 3.0)
-	eye_mi = MeshInstance3D.new()
-	var sm := SphereMesh.new()
-	sm.radius = 0.27
-	sm.height = 0.54
-	sm.radial_segments = 48
-	sm.rings = 24
-	eye_mi.mesh = sm
-	eye_mi.material_override = eye_mat
-	head.add_child(eye_mi)
-	var ey := EYE_AXIS.normalized()
-	var ex := Vector3.UP.cross(ey).normalized()
-	var ez := ex.cross(ey)
-	eye_mi.transform = Transform3D(Basis(ex, ey, ez).scaled_local(Vector3.ONE * EYE_R / 0.27), EYE_SURF - ey * EYE_R * 0.95)
-	eye_mi.visible = dbg.find("noeye") < 0
 	for c in TENTS:
 		var n: Node3D = (load("res://models/tentacle.glb") as PackedScene).instantiate()
 		squid.add_child(n)
@@ -307,43 +272,18 @@ func _build_boat() -> void:
 	b.scale = Vector3.ONE * k
 	b.position = Vector3(-box.get_center().x * k, -box.position.y * k - BOAT_DRAFT, -box.get_center().z * k)
 	pivot.position = BOAT_AT
-	# soaked wood: Tripo's weathered planks are pale and alpha-blended; darker, glossier, opaque
+	# soaked wood (boat.gdshader): Tripo's colour, roughness and normals, darker and opaque, with procedural planks and
+	# grain laid over them so the gunwale holds up a metre from the lens (user 2026-10-30)
 	for m in b.find_children("*", "MeshInstance3D", true, false):
 		var mi := m as MeshInstance3D
-		var bm := (mi.mesh.surface_get_material(0) as StandardMaterial3D).duplicate() as StandardMaterial3D
-		bm.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-		bm.albedo_color = Color(0.5, 0.48, 0.46)
-		bm.roughness = 0.45
+		var src := mi.mesh.surface_get_material(0) as StandardMaterial3D
+		var bm := ShaderMaterial.new()
+		bm.shader = load("res://boat.gdshader")
+		bm.set_shader_parameter("albedo_tex", src.albedo_texture)
+		bm.set_shader_parameter("normal_tex", src.normal_texture)
+		bm.set_shader_parameter("rm_tex", src.roughness_texture)
+		bm.set_shader_parameter("metres", k)
 		mi.material_override = bm
-	# the fisherman (Tripo, Mixamo rig): kneeling at the near gunwale, reaching for it; his model faces +X
-	fisher = (load("res://models/fisherman.glb") as PackedScene).instantiate()
-	boat.add_child(fisher)
-	var fb := _aabb(fisher)
-	fisher.scale = Vector3.ONE * (FISHER_H / fb.size.y)
-	fisher.rotation.y = FISHER_YAW
-	fisher.position = FISHER_AT
-	fisher_skel = fisher.find_child("Skeleton3D", true, false)
-	_rest_from_binds(fisher_skel, (fisher.find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D).skin)
-	fisher_rest = []
-	for i in fisher_skel.get_bone_count():
-		fisher_rest.append(fisher_skel.get_bone_pose_rotation(i))
-
-# Tripo's rigged GLB leaves every bone at the origin and keeps the pose only in the skin's bind matrices: rebuild the
-# rests from them (a bone's global rest is its bind's inverse)
-func _rest_from_binds(sk: Skeleton3D, skin: Skin) -> void:
-	var g := {}
-	for i in skin.get_bind_count():
-		g[skin.get_bind_name(i)] = skin.get_bind_pose(i).affine_inverse()
-	var glob := []
-	for i in sk.get_bone_count():
-		var gi: Transform3D = g.get(sk.get_bone_name(i), Transform3D.IDENTITY)
-		var p := sk.get_bone_parent(i)
-		if not g.has(sk.get_bone_name(i)) and p >= 0:
-			gi = glob[p]
-		glob.append(gi)
-		var loc: Transform3D = gi if p < 0 else (glob[p] as Transform3D).affine_inverse() * gi
-		sk.set_bone_rest(i, loc)
-	sk.reset_bone_poses()
 
 func _aabb(n: Node) -> AABB:
 	var box := AABB()
@@ -521,7 +461,6 @@ func _enter(name: String, now := false) -> void:
 			heave.to(0.0, 4.0)
 			arms.to(0.0, 3.0)
 			lash.to(0.0, 3.0)
-			grip.to(0.15, 4.0)
 			if sink.v < DOWN:
 				sink.to(DOWN, 8.0)
 		"overcast":
@@ -530,14 +469,12 @@ func _enter(name: String, now := false) -> void:
 			churn.to(0.0, 4.0)
 			heave.to(0.0, 4.0)
 			arms.to(0.0, 3.0)
-			grip.to(0.45, 5.0)
 			if sink.v < DOWN:
 				sink.to(DOWN, 6.0)
 		"storm":
 			# the script runs in _storm(); here only what starts at once
 			sea_k.to(1.0, 4.0)
 			light_k.to(0.62, 3.0)
-			grip.to(0.8, 2.0)
 			if prev == "waiting":
 				st_t = 20.0      # already up: straight into the hold
 		"waiting":
@@ -547,9 +484,7 @@ func _enter(name: String, now := false) -> void:
 			heave.to(0.6, 5.0)
 			arms.to(0.45, 5.0)
 			lash.to(0.2, 5.0)
-			grip.to(0.6, 4.0)
 			sink.to(0.0, 4.0)
-			pupil.to(0.7, 30.0)
 		"clearing":
 			# it sinks back and the sea goes wild, then settles toward calm
 			arms.to(0.0, 1.6)
@@ -558,11 +493,10 @@ func _enter(name: String, now := false) -> void:
 			heave.set_now(heave.v).to(-2.2, 2.0, 1.0)
 			churn.to(1.0, 0.5)
 			sea_k.to(1.15, 2.0)
-			grip.to(1.0, 0.6)
 			light_k.to(0.7, 4.0)
 	if now:
 		lens.to(LENS.get(name, 0.2), 0.0)
-		for tw in [sea_k, light_k, heave, churn, arms, lash, grip, pupil, lens]:
+		for tw in [sea_k, light_k, heave, churn, arms, lash, lens]:
 			tw.set_now(tw.b)
 		if name == "storm" or name == "waiting":
 			st_t = 20.0
@@ -583,7 +517,6 @@ func _storm(dt: float) -> void:
 		churn.set_now(smoothstep(2.0, 3.2, T) * (1.0 - 0.3 * smoothstep(6.0, 10.0, T)))
 		arms.set_now(smoothstep(4.0, 8.0, T))
 		lash.set_now(smoothstep(4.0, 6.0, T) * (1.0 - 0.4 * smoothstep(9.0, 12.0, T)))
-		pupil.set_now(0.55 - 0.2 * smoothstep(3.0, 5.0, T))
 	else:
 		# the hold: arms curling and lashing on, head and eye out, staring
 		heave.v = 1.0 + 0.25 * sin(t * 0.4)
@@ -613,8 +546,7 @@ func _step(dt: float) -> void:
 		sea_k.v = lerpf(sea_k.v, 0.18, 1.0 - exp(-dt / 12.0))
 		churn.v = lerpf(churn.v, 0.0, 1.0 - exp(-dt / 4.0))
 		heave.v = lerpf(heave.v, 0.0, 1.0 - exp(-dt / 3.0))
-		grip.v = lerpf(grip.v, 0.3, 1.0 - exp(-dt / 10.0))
-	for tw in [sea_k, light_k, heave, churn, sink, arms, lash, grip, pupil, lens]:
+	for tw in [sea_k, light_k, heave, churn, sink, arms, lash, lens]:
 		tw.step(dt)
 
 	# the squid: the head at HEAD_AT, sunk by `sink` (it goes down tipping back), arms rearing out of the water
@@ -629,9 +561,6 @@ func _step(dt: float) -> void:
 	head.position = HEAD_AT - Vector3(0, sink.v, 0) + Vector3(0, 0.15 * sin(t * 0.5), 0)
 	head.rotation = Vector3(0.0, HEAD_YAW, -0.2 * smoothstep(0.0, 10.0, sink.v) + 0.03 * sin(t * 0.37))
 	_pose_tents()
-	eye_mat.set_shader_parameter("pupil", pupil.v)
-	eye_mat.set_shader_parameter("lit", light_k.v * 1.3)
-	eye_mat.set_shader_parameter("sun_to", -sun.global_transform.basis.z * -1.0)
 
 	if dbg.find("flat") >= 0:
 		sea_k.v = 0.0
@@ -684,10 +613,9 @@ func _step(dt: float) -> void:
 	(spray.mesh.surface_get_material(0) as StandardMaterial3D).albedo_color.a = clampf(churn.v * 1.2, 0.0, 1.0)
 	(mist.mesh.surface_get_material(0) as StandardMaterial3D).albedo_color.a = clampf(churn.v * 0.6, 0.0, 1.0)
 
-	# the lens and the man
+	# the lens
 	post_mat.set_shader_parameter("drops", lens.v)
 	post_mat.set_shader_parameter("time_s", t)
-	_pose_fisher()
 
 # the arms: each rears up out of the water from its root, curls toward its suckers and lashes; the curl and the lash
 # travel from the root to the tip. Bones run along the arm (local Y); BEND bends toward the suckers.
@@ -715,30 +643,3 @@ func _pose_tents() -> void:
 			var side := w * 0.09 * sin(t * 1.6 - u * 5.0 + ph * 1.3) * (0.3 + u)
 			side += 0.04 * sin(t * 0.7 - u * 4.0 + ph)
 			sk.set_bone_pose_rotation(T["bones"][j], T["rest"][j] * Quaternion(Vector3(1, 0, 0), side) * Quaternion(BEND, curl))
-
-# the fisherman: a slow breath; with `grip` he hunches lower over the gunwale, his shoulders and arms tighten and
-# tremble, his head ducks. Small rotations on the Mixamo bones about their own X/Z (they point along Y).
-const FISHER_BONES := ["mixamorig_Spine", "mixamorig_Spine1", "mixamorig_Spine2", "mixamorig_Neck", "mixamorig_Head",
-	"mixamorig_RightShoulder", "mixamorig_RightArm", "mixamorig_LeftShoulder", "mixamorig_LeftArm"]
-
-func _pose_fisher() -> void:
-	if fisher_skel == null:
-		return
-	var g := grip.v
-	var breath := sin(t * TAU / (4.5 - 2.0 * g))
-	var shake := (sin(t * 37.0) * 0.6 + sin(t * 53.0 + 1.3) * 0.4) * g * g
-	for n in FISHER_BONES:
-		var b := fisher_skel.find_bone(n)
-		if b < 0:
-			continue
-		var r0: Quaternion = fisher_rest[b]
-		var x := 0.0
-		var z := 0.0
-		if n.begins_with("mixamorig_Spine"):
-			x = 0.012 * breath + 0.07 * g + 0.006 * shake
-		elif n == "mixamorig_Neck" or n == "mixamorig_Head":
-			x = 0.1 * g + 0.01 * shake
-			z = 0.04 * sin(t * 0.3) * (1.0 - g)
-		else:
-			z = (0.08 * g + 0.01 * shake) * (1.0 if n.begins_with("mixamorig_Right") else -1.0)
-		fisher_skel.set_bone_pose_rotation(b, r0 * Quaternion(Vector3(1, 0, 0), x) * Quaternion(Vector3(0, 0, 1), z))
