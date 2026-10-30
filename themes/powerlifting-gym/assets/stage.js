@@ -14,10 +14,10 @@ uniform sampler2D tBg, tMask, tBeam, tInk;
 uniform mat3 uWB;
 uniform vec2 uCover;
 uniform float uDay, uHouse, uNeon, uBulb, uTime;
-uniform vec3 uJudge;            // 每盞燈：0 不亮、1 白、2 紅（可帶小數做亮度：1.4＝白燈 40%）
+uniform vec3 uJudge;            // 每盞燈白光亮度 0–1
 varying vec2 vUv;
 const vec2 S = vec2(${W0}.0, ${H0}.0);
-vec3 lampCol(float s) { return s < 0.01 ? vec3(0.0) : s <= 1.0 ? vec3(1.0, 0.93, 0.80) * s : vec3(1.0, 0.08, 0.04) * (s - 1.0); }
+const vec3 LAMP = vec3(1.0, 0.93, 0.80);
 void main() {
   vec2 uv = 0.5 + (vUv - 0.5) * uCover;
   vec2 px = vec2(uv.x, 1.0 - uv.y) * S;                 // 底圖像素（左上原點）
@@ -39,15 +39,17 @@ void main() {
   col += vec3(0.55, 0.04, 0.02) * exp(-dn * dn * 2.0) * 0.10 * uNeon * (1.6 - uDay * 0.6);
   // 燈泡：晚上更亮、光暈更大
   col += c * m.g * (uBulb - 1.0);
-  // 裁判燈
+  // 裁判燈：底圖畫的是紅黃白三盞全亮 → 熄燈時燈面連同外圈色暈退成暗灰玻璃（留放射紋路）；點亮時白光沿用紋路、亮度連續變化
   for (int i = 0; i < 3; i++) {
     vec2 o = ${JUDGE.map(([x, y], i) => `i == ${i} ? vec2(${x}, ${y}) :`).join(' ')} vec2(0.0);
-    float s = uJudge[i];
+    float s = clamp(uJudge[i], 0.0, 1.0);
     float d = length(px - o);
-    float lens = smoothstep(19.0, 16.0, d);
-    vec3 lc = lampCol(s);
-    col = mix(col, col * 0.25 + lc * 2.2, lens * step(0.01, s)) * mix(1.0, 0.45, lens * step(s, 0.01));   // 不亮：燈面壓暗
-    col += lc * exp(-d * d / 2600.0) * 0.55;                                                             // 光暈
+    float lens = smoothstep(19.0, 16.0, d), glass = smoothstep(25.0, 17.0, d);
+    float l = dot(c, vec3(0.299, 0.587, 0.114));
+    float l0 = dot(texture2D(tBg, vec2(o.x, ${H0}.0 - o.y) / S, 5.0).rgb, vec3(0.299, 0.587, 0.114));   // 整盞燈的平均亮度（模糊取樣）
+    col = mix(col, vec3(l * 0.22) * vec3(1.0, 0.96, 0.92) * mix(1.0, uHouse, 0.5), glass);
+    col = mix(col, LAMP * (0.5 + 0.9 * clamp(l / max(l0, 0.05), 0.0, 1.6)) * 1.3, lens * s);
+    col += LAMP * exp(-d * d / 1400.0) * 0.32 * s;   // 光暈
   }
   // 白板字（墨水乘上底色，字會吃到霓虹的紅光）
   vec3 wb = uWB * vec3(px, 1.0);
@@ -84,7 +86,8 @@ export function makeBackdrop({ bg, mask, beam, ink }) {
   return { scene, cam: new THREE.Camera(), u, setAspect };
 }
 
-// 粉塵：一團在架子後方慢慢飄的點，只在光束裡亮（投影到螢幕後讀光束遮罩）
+// 粉塵：一團在架子後方慢慢飄的點。白天只在窗光光束裡亮（投影到螢幕後讀光束遮罩）；晚上只在架子上方頂燈的光錐裡亮
+const LAMP_POS = [0.3, 3.3, 0.7], LAMP_AIM = [0, 0.7, 0];   // 跟 index.html 的 lamp 一致
 export function makeDust({ beam, count = 900 }) {
   const pos = new Float32Array(count * 3), seed = new Float32Array(count);
   for (let i = 0; i < count; i++) {
@@ -94,11 +97,12 @@ export function makeDust({ beam, count = 900 }) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('seed', new THREE.BufferAttribute(seed, 1));
-  const u = { tBeam: { value: beam }, uTime: { value: 0 }, uAmount: { value: 1 }, uDay: { value: 1 }, uCover: { value: new THREE.Vector2(1, 1) }, uPx: { value: 1 } };
+  const u = { tBeam: { value: beam }, uTime: { value: 0 }, uAmount: { value: 1 }, uDay: { value: 1 }, uLamp: { value: 0 }, uCover: { value: new THREE.Vector2(1, 1) }, uPx: { value: 1 } };
   const mat = new THREE.ShaderMaterial({
     uniforms: u, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */`
-      attribute float seed; uniform float uTime, uPx; uniform vec2 uCover; varying float vA; uniform sampler2D tBeam;
+      attribute float seed; uniform float uTime, uPx, uDay, uLamp; uniform vec2 uCover; varying float vA; uniform sampler2D tBeam;
+      const vec3 L = vec3(${LAMP_POS.join(', ')}), AIM = normalize(vec3(${LAMP_AIM.join(', ')}) - L);
       void main() {
         vec3 p = position;
         float t = uTime * (0.03 + 0.05 * seed) + seed * 40.0;
@@ -107,14 +111,15 @@ export function makeDust({ beam, count = 900 }) {
         gl_Position = projectionMatrix * mv;
         vec2 sc = gl_Position.xy / gl_Position.w * 0.5 + 0.5;
         vec2 uv = 0.5 + (sc - 0.5) * uCover;
-        vA = texture2D(tBeam, uv).r * (0.5 + 0.5 * sin(uTime * (1.0 + seed * 3.0) + seed * 30.0));
+        float cone = smoothstep(0.80, 0.93, dot(normalize(p - L), AIM)) * 0.55 * uLamp;   // 頂燈光錐（夜）
+        vA = mix(cone, texture2D(tBeam, uv).r, uDay) * (0.5 + 0.5 * sin(uTime * (1.0 + seed * 3.0) + seed * 30.0));
         gl_PointSize = uPx * (1.2 + seed * 2.2) * 2.4 / -mv.z;
       }`,
     fragmentShader: /* glsl */`
-      uniform float uAmount, uDay; varying float vA;
+      uniform float uAmount; varying float vA;
       void main() {
         float d = length(gl_PointCoord - 0.5); if (d > 0.5) discard;
-        gl_FragColor = vec4(vec3(1.0, 0.78, 0.5) * (1.0 - d * 2.0) * vA * uAmount * uDay * 0.9, 1.0);
+        gl_FragColor = vec4(vec3(1.0, 0.78, 0.5) * (1.0 - d * 2.0) * vA * uAmount * 0.9, 1.0);
       }`,
   });
   const pts = new THREE.Points(g, mat);
