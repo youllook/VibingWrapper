@@ -2,13 +2,10 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://btfabq4eu7ttq"
+uid="uid://cvwdfxy3vrmbu"
 path="res://.godot/imported/boat_boat_h31_300k_basecolor.jpg-f8813f313b593f52296cb78e4bb6d60d.ctex"
 metadata={
 "vram_texture": false
-}
-generator_parameters={
-"md5": "a852114dff6361792d595685001780b0"
 }
 
 [deps]
@@ -26,7 +23,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""
