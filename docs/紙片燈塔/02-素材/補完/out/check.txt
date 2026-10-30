@@ -1,0 +1,22 @@
+Canvas 1872x1053; original offset (100,56); bleed L/R=100, T/B=56.
+
+far.png: size=1872x1053; mode=RGBA; visible pixels PASS; different pixels=0
+boats.png: size=1872x1053; mode=RGBA; visible pixels PASS; different pixels=0
+mid.png: size=1872x1053; mode=RGBA; visible pixels PASS; different pixels=0
+gulls.png: size=1872x1053; mode=RGBA; visible pixels PASS; different pixels=0
+reefs.png: size=1872x1053; mode=RGBA; visible pixels PASS; different pixels=0
+near.png: size=1872x1053; mode=RGBA; visible pixels PASS; different pixels=0
+fg.png: size=1872x1053; mode=RGBA; visible pixels PASS; different pixels=0
+far: opaque coverage=100.000000% (1971216/1971216); region whole canvas
+near: opaque coverage=100.000000% (1040832/1040832); region x=0..1871, y=497..1052 (source upper edge 461 minus 20 + 56)
+
+preview.png: magenta holes=0
+preview-shift.png: offsets far/boats/mid/gulls/reefs/near/fg = 0,+2,-4,+6,-8,+10,-12; magenta holes=0
+preview-shift-reverse.png: inverse offsets; magenta holes=0
+
+Method: built-in image generation clean background plate; synthesized-only boundary color matching; reflected texture bleed; downward cliff/reef reconstruction; exact original RGBA replacement last.
+Far lower ocean continues the distant-wave band. Near fills all occlusions with ocean. Mid grows 60px down; reefs grow up to 15px per visible run.
+No additional white outline added. Boats unchanged; gull top-row strings extended 56px upward.
+VISUAL LIMITATION / 視覺限制：
+依 prompt 指定順序 far→boats→mid→gulls→reefs→near→fg 合成。near 從 y=497 起全寬不透明，因此會遮住其下方的 mid 岩壁與 reefs。這是「near 完全不透明」和「near 疊在 mid/reefs 上方」兩項要求同時生效的結果；透明洞數為 0 不代表原構圖保留。
+原可見像素完全保留也會保留輸入分割邊緣所帶的細碎輪廓；部分補洞邊界仍可辨識。出血使用反射紋理，邊緣可見重複。視覺上的完全無接縫要求尚未達成，以上數值 PASS 僅表示尺寸、像素保留及覆蓋率通過。

@@ -1,0 +1,9 @@
+{
+  "name": "紙片燈塔",
+  "order": 60,
+  "entry": "index.html",
+  "enabled": true,
+  "bundled": false,
+  "description": "紙片立體模型的海邊燈塔，12 fps 停格：戴草帽的企鵝在岩台上釣魚，Claude 工作時釣起比自己大的魚；每個對話是水平線上一艘紙帆船，海鷗吊在線上晃。",
+  "tags": ["海", "風格實驗"]
+}

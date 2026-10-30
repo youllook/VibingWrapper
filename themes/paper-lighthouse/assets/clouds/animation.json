@@ -1,0 +1,70 @@
+{
+  "canvas": [
+    1872,
+    1053
+  ],
+  "occlusion_mask": "protected_region.png",
+  "occlusion": "white = original mountain and sea; keep in front of clouds",
+  "layers": [
+    {
+      "file": "full/cloud0.png",
+      "origin": [
+        -836,
+        84
+      ],
+      "size": [
+        1676,
+        433
+      ],
+      "area": 408685
+    },
+    {
+      "file": "full/cloud1.png",
+      "origin": [
+        1219,
+        213
+      ],
+      "size": [
+        1302,
+        239
+      ],
+      "area": 194727
+    },
+    {
+      "file": "full/cloud2.png",
+      "origin": [
+        920,
+        136
+      ],
+      "size": [
+        418,
+        182
+      ],
+      "area": 41174
+    },
+    {
+      "file": "full/cloud3.png",
+      "origin": [
+        782,
+        276
+      ],
+      "size": [
+        155,
+        64
+      ],
+      "area": 5192
+    },
+    {
+      "file": "full/cloud4.png",
+      "origin": [
+        -229,
+        -91
+      ],
+      "size": [
+        462,
+        119
+      ],
+      "area": 35648
+    }
+  ]
+}
