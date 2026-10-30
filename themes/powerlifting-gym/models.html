@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>健力健身房 選手動作檢視</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #3a322c; overflow: hidden; font: 13px system-ui, sans-serif; }
+  #info { position: fixed; left: 8px; top: 6px; color: #fff; text-shadow: 0 1px 2px #000; white-space: pre; }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<div id="info"></div>
+<script type="module">
+// 選手動作檢視：models.html[?clip=Squat&t=0.5]；沒給 clip 就 8 段 × 2 個時間點排成格子
+import * as THREE from 'three';
+import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+
+const q = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1); renderer.setSize(innerWidth, innerHeight); renderer.setScissorTest(true);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight('#fff4e6', '#4a3a30', 1.4));
+const sun = new THREE.DirectionalLight('#fff1cf', 2.2); sun.position.set(-2, 4, 3); scene.add(sun);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshLambertMaterial({ color: '#5a4e44' }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+
+const t0 = performance.now();
+const gltf = await new GLTFLoader().loadAsync('./models/powerlifter.glb');
+const loadMs = performance.now() - t0;
+const lifter = gltf.scene; scene.add(lifter);
+lifter.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+const barBone = lifter.getObjectByName('Bar');
+// 槓：沿 X，掛在 Bar 骨
+const bar = new THREE.Group();
+const barMat = new THREE.MeshLambertMaterial({ color: '#a8a8ad' }), ironMat = new THREE.MeshLambertMaterial({ color: '#1c1c1f' });
+const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 2.2, 12), barMat); shaft.rotation.z = Math.PI / 2; bar.add(shaft);
+for (const sx of [-1, 1]) for (let k = 0; k < 4; k++) {
+  const p = new THREE.Mesh(new THREE.CylinderGeometry(0.225, 0.225, 0.055, 32), ironMat);
+  p.rotation.z = Math.PI / 2; p.position.x = sx * (0.70 + k * 0.06); bar.add(p);
+}
+scene.add(bar);
+const mixer = new THREE.AnimationMixer(lifter);
+const clips = gltf.animations;
+const noBar = new Set(['Sit', 'Chalk', 'Walk']);
+const cam = new THREE.PerspectiveCamera(30, 1, 0.05, 50);
+cam.position.set(2.0, 1.3, 3.4); cam.lookAt(0, 0.9, 0);
+
+const only = q.get('clip');
+const list = only ? clips.filter(c => c.name === only) : clips;
+const phases = only ? [+(q.get('t') ?? 0.5)] : [0.3, 0.62];
+const cols = list.length, rows = phases.length;
+const W = innerWidth / cols, H = innerHeight / rows;
+const v = new THREE.Vector3(), qq = new THREE.Quaternion();
+for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+  const clip = list[c];
+  mixer.stopAllAction();
+  const a = mixer.clipAction(clip); a.reset().play();
+  mixer.setTime(clip.duration * phases[r]);
+  lifter.updateMatrixWorld(true);
+  barBone.getWorldPosition(v); barBone.getWorldQuaternion(qq);
+  bar.position.copy(v); bar.quaternion.copy(qq).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2));
+  bar.visible = !noBar.has(clip.name);
+  cam.aspect = W / H; cam.updateProjectionMatrix();
+  const x = c * W, y = (rows - 1 - r) * H;
+  renderer.setViewport(x, y, W, H); renderer.setScissor(x, y, W, H);
+  renderer.render(scene, cam);
+}
+let tris = 0; lifter.traverse(o => { if (o.isMesh) tris += o.geometry.index.count / 3; });
+document.getElementById('info').textContent =
+  `load ${loadMs.toFixed(0)} ms  ${tris} tris  bones ${lifter.getObjectByProperty('isSkinnedMesh', true)?.skeleton.bones.length}\n` +
+  clips.map(c => `${c.name} ${c.duration.toFixed(2)}s`).join('  ');
+window.__ready = true;
+</script>
+</body>
+</html>

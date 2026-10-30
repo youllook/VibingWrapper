@@ -1,0 +1,11 @@
+{
+  "name": "健力健身房",
+  "order": 40,
+  "entry": "index.html",
+  "enabled": true,
+  "description": "美式地下健身房，Claude 幹活時選手拼命深蹲，越做槓越重",
+  "tags": [
+    "風格實驗",
+    "夜景"
+  ]
+}
