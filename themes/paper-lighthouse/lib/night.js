@@ -1,4 +1,4 @@
-// 夜晚：月亮、星星（吊線紙卡）、燈室與窗戶亮燈、企鵝頭燈。
+// 夜晚：月亮、星星（吊線紙卡）、燈室與窗戶亮燈。
 // 這些都放在「發光層」glowScene：後製（壓暗偏藍）之後才疊上去，所以不會被夜色壓暗。
 //
 //   const night = await createNight({ loadImg, peng })
@@ -9,8 +9,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { IMG_W, IMG_H, frameSize, stepTime, boil } from './paper.js';
 
-const MID_D = 30, SKY_D = 58, PENG_D = 8.8;
-const BOBBER = [1275, 811], BOBBER_D = 16;
+const MID_D = 30, SKY_D = 58;
 // 月亮、星星吊在天空空白處（避開燈塔、海鷗、右上 HUD）：[檔名, 畫布 x, y, 縮放]
 const SKY = [
   ['moon', 560, 170, 0.55], ['star0', 250, 95, 0.8], ['star1', 400, 250, 0.6], ['star2', 770, 80, 0.7],
@@ -149,23 +148,8 @@ export async function createNight({ loadImg, peng, post, mainScene, paperLayers,
     fade.push([lit[f], 1, f === 'windows_lit' ? 'night' : 'lamp']);
   }
 
-  // 企鵝頭燈：跟著現在那張卡的帽帶位置；光錐從頭燈打向浮標
-  let lamp = null, beam = null, hats = null;
-  if (peng) {
-    try { hats = await (await fetch('assets/penguin/hats.json')).json(); } catch {}
-    const li = await load('headlamp.png'), bi = await load('headlamp_beam.png');
-    if (li && hats) { lamp = card(li, 0, 0, PENG_D - 0.05); scene.add(lamp); fade.push([lamp, 1, 'night']); }
-    if (bi && hats) {
-      const px = frameSize(PENG_D).w / IMG_W;
-      const geo = new THREE.PlaneGeometry(bi.width * px, bi.height * px); geo.translate(bi.width * px / 2, 0, 0);   // 尖端在原點
-      beam = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: texOf(bi), transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending }));
-      beam.scale.set(2.4, 1.5, 1);   // 光錐拉長到浮標附近
-      scene.add(beam); fade.push([beam, 1, 'night']);
-    }
-  }
-  // 疊的順序：天空 → 亮燈 → 光錐 → 頭燈
-  for (const [m] of fade) m.renderOrder = m === lamp ? 3 : m === beam ? 2 : Object.values(lit).includes(m) ? 1 : 0;
-  const target = new THREE.Vector3();
+  // 企鵝不戴頭燈（用戶 2026-10-30：夜裡一顆頭燈加光錐太突兀）
+  for (const [m] of fade) m.renderOrder = Object.values(lit).includes(m) ? 1 : 0;
 
   const setLight = (i, at, color, strength) => post?.setLight(i, { x: at[0], y: at[1], rx: at[2], ry: at[3], color, strength: strength * lights });
 
@@ -177,7 +161,7 @@ export async function createNight({ loadImg, peng, post, mainScene, paperLayers,
       if (pins) { pins.material.uniforms.uOn.value = night; pins.material.uniforms.uTime.value = t; pins.material.uniforms.uScale.value = (post?.uniforms.uRes.value.y || IMG_H) / IMG_H; }
       // 燈室：停格的微微閃（燭火感），不轉
       const flick = 0.9 + 0.1 * boil(5, t, 6);
-      // 打光池：燈室（夜晚或暴風雨）、窗戶、月亮、地平線層縫透光（夜晚）；頭燈在下面跟著卡
+      // 打光池：燈室（夜晚或暴風雨）、窗戶、月亮、地平線層縫透光（夜晚）
       setLight(0, LAMP_AT, [1, 0.82, 0.5], 0.9 * lampOn * flick);
       setLight(1, WINDOWS_AT, [1, 0.8, 0.5], 0.5 * night);
       setLight(2, MOON_AT, [0.7, 0.85, 1], 0.45 * night);
@@ -186,23 +170,6 @@ export async function createNight({ loadImg, peng, post, mainScene, paperLayers,
       if (!scene.visible) return;
       for (const s of sky) s.pivot.rotation.z = s.amp * Math.sin(ts * 0.9 + s.seed);
       for (const [m, base, by] of fade) m.material.opacity = base * (by === 'lamp' ? lampOn * flick : night);
-
-      if (peng && hats) {
-        const pose = Object.keys(peng.cards).find(p => peng.cards[p].m.visible);
-        const at = hats[`penguin_${pose}`];
-        const show = !!at;
-        // 頭燈的光池：以帽帶為中心，照亮企鵝這張卡（主角最亮）
-        setLight(4, show ? [at[0] - 100 + 10, at[1] - 56 + 50, 150, 130] : [0, 0, 1, 1], [1, 0.9, 0.7], show ? 0.55 * night : 0);
-        if (lamp) { lamp.visible = show; if (show) lamp.position.copy(toWorld(at[0], at[1], PENG_D - 0.05)); }
-        if (beam) {
-          beam.visible = show && !['sign', 'sleep', 'fish'].includes(pose);   // 只在拿竿面向海時照浮標
-          if (beam.visible) {
-            beam.position.copy(toWorld(at[0], at[1], PENG_D - 0.06));
-            target.copy(toWorld(BOBBER[0], BOBBER[1], BOBBER_D)).multiplyScalar(PENG_D / BOBBER_D);
-            beam.rotation.z = Math.atan2(target.y - beam.position.y, target.x - beam.position.x);
-          }
-        }
-      }
     },
   };
 }
