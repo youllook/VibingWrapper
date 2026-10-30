@@ -152,9 +152,12 @@ void fragment() {
 	vec2 suv = SCREEN_UV + n.xz * 0.04 * (1.0 - smoothstep(10.0, 80.0, d));
 	float here = -VERTEX.z;
 	float thick = max(scene_z(suv, INV_PROJECTION_MATRIX) - here, 0.0);
-	if (thick < 0.01) suv = SCREEN_UV;        // something in front of the water: don't pull it in
-	vec3 under = texture(screen_tex, suv).rgb;
 	float thick0 = max(scene_z(SCREEN_UV, INV_PROJECTION_MATRIX) - here, 0.0);
+	// something in front of the water at the bent uv (the edge of the boat): don't pull it in — and take the depth from
+	// the unbent uv too, or the water reads as zero deep and shows the bright sky behind it as a blue fringe round the
+	// boat's fittings (user 2026-10-30)
+	if (thick < 0.01) { suv = SCREEN_UV; thick = thick0; }
+	vec3 under = texture(screen_tex, suv).rgb;
 	vec3 body = deep_col * light_k;
 	float thin = pow(1.0 - nv, 2.0) * smoothstep(-0.5, 1.6, hgt);
 	body += crest_col * light_k * thin * 1.4;                    // light through the crests
