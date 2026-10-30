@@ -139,7 +139,6 @@ const seaU = {
   uCam: { value: new THREE.Vector2() }, uZoom: { value: 1 }, uAspect: { value: 16 / 9 }, uT: { value: 0 },
   uD: { value: 0.35 }, uNet: { value: 1 }, uGlint: { value: 1 },
   uSqZ: { value: 1 }, uSqA: { value: 0 }, uSqP: { value: new THREE.Vector2() }, uSqU: { value: new THREE.Vector2(1, 0) }, uSqL: { value: 1 }, uFishZ: { value: 0.05 }, uMurk: { value: 0 }, uClar: { value: 0 },
-  uEye: { value: [new THREE.Vector3(), new THREE.Vector3()] },   // the two eyeballs: world x, y, radius (0 = none)
   uWave: { value: WAVES.a }, uWave2: { value: WAVES.b },
   uRes: { value: new THREE.Vector2(1, 1) }, uOcc: { value: occRT.texture }, uFish: { value: fishRT.texture }, uWake: { value: wakeRT.texture },
 };
@@ -152,7 +151,6 @@ varying vec2 vUv;
 uniform vec4 uWave[16], uWave2[16];   // dir.xy, k, phase0 / omega, slope, gust mix, shortness
 uniform vec2 uCam, uRes; uniform float uZoom, uAspect, uT, uD, uNet, uGlint, uSqZ, uSqA, uFishZ, uMurk, uClar, uSqL;
 uniform vec2 uSqP, uSqU;   // the squid's tail (world), its axis tail → arm tips, its length
-uniform vec3 uEye[2];      // its eyeballs: world x, y, radius
 uniform sampler2D uOcc, uFish, uWake;
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 vec2 h22(vec2 p){ vec3 a = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973)); a += dot(a, a.yzx + 33.33); return fract((a.xx + a.yz) * a.zy); }
@@ -266,23 +264,8 @@ void main(){
   // shallow, the red comes through because red has the least water left to cross
   vec3 Tz = exp(-SIG * zf * uD * (1. - 0.6 * uClar));            // near the top the water over it clears
   vec3 sqCol = (sqBase * Tz * (1. + 0.6 * uClar) + SCAT * (1. - Tz)) * mix(0.45, 1., (1. - zf) * (1. - zf));   // darker than the water until near the top
-  // its eyes: a wet black ball each, with a sharp catchlight of the sun on the side toward the light, shivering a
-  // little with the water; seen through the water like the rest, so it only shows once it is near the top
-  for (int i = 0; i < 2; i++) {
-    float er = uEye[i].z;
-    if (er <= 0.) continue;
-    vec2 de = w - uEye[i].xy;
-    float ball = 1. - smoothstep(er * 0.8, er, length(de));
-    if (ball <= 0.) continue;
-    vec2 hp = er * (vec2(0.22, 0.40) + 0.05 * vec2(sin(uT * 1.7), cos(uT * 1.3)));   // toward the sun, shivering as one spot
-    // weak on purpose (user 2026-10-26: just enough to show it is a ball): a soft catchlight, a faint second glint,
-    // and the ball a touch lighter on the side toward the light, darker away from it
-    float hl = 1. - smoothstep(er * 0.04, er * 0.16, length(de - hp));
-    float hl2 = (1. - smoothstep(er * 0.02, er * 0.06, length(de - er * vec2(0.36, 0.18)))) * 0.25;
-    float side = clamp(dot(de / er, vec2(0.48, 0.88)), -1., 1.);
-    vec3 lit = vec3(.95, .97, 1.) * Tz * (0.4 + 0.6 * uClar);
-    sqCol = mix(sqCol, sqCol * (0.5 + 0.18 * side), ball * 0.7) + ball * (hl * 0.35 + hl2 * 0.35) * lit;
-  }
+  // its eyes are the model's own eyeballs, drawn with the body (no black ball laid over them: user 2026-10-30,
+  // the model's eye reads more natural, as in 大海怪2)
   col = mix(col, sqCol, a);
   }
 
@@ -452,7 +435,6 @@ new GLTFLoader().load('assets/colossal_squid.glb', g => {
   const ax = box.min.x + CONFIG.squidAnchor * len, cz = (box.min.z + box.max.z) / 2, cy = (box.min.y + box.max.y) / 2;
   m.position.set(-ax, -cy, -cz);
   squidOuter.rotation.z = CONFIG.squidAngle;
-  squid.eyes = ['eye_L', 'eye_R'].map(nm => m.getObjectByName(nm)).filter(Boolean);   // eyeballs: origin at the centre, 0.23 m across
   squid.ready = true;
 }, undefined, e => console.warn('squid not loaded:', e));
 const qTmp = new THREE.Quaternion();
@@ -717,14 +699,6 @@ function render() {
   cam.left = -hw; cam.right = hw; cam.top = hh; cam.bottom = -hh; cam.updateProjectionMatrix();
   cam.position.set(camPos.x, camPos.y, 20);
   squidOuter.position.set(boat.x, boat.y, 0);
-  if (squid.ready) {                                       // where its eyes are this frame, for the catchlights
-    squidOuter.updateMatrixWorld(true);
-    seaU.uEye.value.forEach((e, i) => {
-      const node = squid.eyes[i];
-      if (!node) { e.set(0, 0, 0); return; }
-      node.getWorldPosition(V4); e.set(V4.x, V4.y, 0.115 * squid.sc);
-    });
-  }
   squidOuter.visible = squid.ready && squid.alpha.v > 0.001;
   boatMesh.visible = boatShadow.visible = boat.present;
   boatMesh.position.set(boat.x, boat.y, 1); boatMesh.rotation.z = boat.th;
