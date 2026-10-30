@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>麥塊世界</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05080f;
+               user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+  canvas { display: block; width: 100vw; height: 100vh; pointer-events: none; }
+  #hud { position: fixed; left: 10px; bottom: 8px; font: 12px/1.5 Consolas, monospace; color: rgba(255,255,255,.9);
+         background: rgba(0,0,0,.45); padding: 4px 8px; border-radius: 4px; white-space: pre; display: none; }
+  body.debug #hud { display: block; }
+  /* alignment overlay (?ref=<image url>&a=0.5): the target image over the render, for matching the camera */
+  #ref { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<img id="ref" alt="">
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+<script type="module">
+/* =====================================================================================
+ * 麥塊世界 (creeper-window), 2026-10-29 — target docs/codex-brainstorm/minecraft/mc1.png
+ *
+ * Midnight, rain, a lantern on the table; outside the window a creeper stands on the porch. Claude's state is its
+ * performance (docs/麥塊世界/04-燈光特效.md):
+ *   none      no session: nobody at the window (it walks off to the left)
+ *   clear     idle: stands still, a slow green breath
+ *   overcast  thinking: tilts its head one way, then the other
+ *   storm     running: leans in towards the glass; the rain thickens, far lightning now and then
+ *   clearing  wrapping up: straightens up, the lantern flares once and settles
+ *   waiting   needs you: turns to look at you, swells and flashes white — and never goes off
+ * Frame: scene (half res, HDR) → mist → composite (DoF, glass, bloom, grade). Water has its own mirror pass and the
+ * glass a mask pass. Infrastructure per themes/README.md: state polling, wpPause, 30 fps, window.theme.
+ * ===================================================================================== */
+import * as THREE from 'three';
+import { buildScene, mirror, LAYOUT, WATER_Y, groundH } from './scene.js';
+import { creeperCrowd, crowdRim, crowdFar } from './crowd.js';
+import { blockMaterial, texture, lantern } from './assets.js';
+import { sky, rain, water, glassMaterial, fullscreen, MIST_FRAG, COMP_FRAG } from './fx.js';
+
+/* ------------------------------ config ------------------------------ */
+const FPS = 30;
+const QS = new URLSearchParams(location.search);
+const MAX_PIXELS = 1920 * 1080 * 0.5;
+const RES_OVERRIDE = +(QS.get('res') || 0);
+const resScale = (w, h) => RES_OVERRIDE || Math.min(1, Math.sqrt(MAX_PIXELS / (w * h)));
+const CAM = LAYOUT.cam;                       // fitted to mc1 (docs/麥塊世界/02-場景擺放.md)
+const CONFIG = {
+  polling: true,
+  exposure: 1.35,
+  contrast: 0.45, saturation: 1.15, black: 0.02,   // the final grade: S-curve amount, saturation, black point
+  aperture: 15,                       // depth of field strength (px of blur per 1/m off focus)
+  farLift: 1,                         // the far crowd's faces lit by the cabin at night (readable shapes)
+  lantern: 5,                         // candela
+  moon: 1.6,
+  // the time of day (0–24). null = the computer's clock; ?day=1 pins 10.5, ?night=1 pins 22 (themes/README.md);
+  // the recorder sets it too
+  clockHours: QS.has('day') ? 10.5 : QS.has('night') ? 22 : null,
+};
+// per state: rain amount (0..1), mist density, how wet the glass is, lightning on/off
+const STATES = {
+  none:     { rain: 0,    mist: 0.008, wet: 0,    bolts: 0 },   // nobody at the window: dry
+  clear:    { rain: 0.45, mist: 0.012, wet: 0.65, bolts: 0 },
+  overcast: { rain: 0.55, mist: 0.015, wet: 0.7,  bolts: 0 },
+  storm:    { rain: 1.0,  mist: 0.022, wet: 0.9,  bolts: 1 },
+  clearing: { rain: 0.4,  mist: 0.012, wet: 0.65, bolts: 0 },
+  waiting:  { rain: 0.5,  mist: 0.015, wet: 0.7,  bolts: 0 },
+};
+const PARAMS = { rain: [0, 1], mist: [0, 0.06], wet: [0, 1] };
+const KEYS = { '0': 'none', '1': 'clear', '2': 'overcast', '3': 'storm', '4': 'clearing', '5': 'waiting' };
+
+/* ------------------------------ tweens ------------------------------ */
+const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+let simT = 0;
+class Tw {
+  constructor(v) { this.a = this.b = this.v = v; this.t0 = 0; this.d = 0; }
+  to(b, d, delay = 0) { this.a = this.v; this.b = b; this.t0 = simT + delay; this.d = Math.max(0.01, d); return this; }
+  set(v) { this.a = this.b = this.v = v; this.d = 0; return this; }
+  step() { if (this.d) this.v = this.a + (this.b - this.a) * ss(0, 1, (simT - this.t0) / this.d); return this.v; }
+}
+
+/* ------------------------------ scene ------------------------------ */
+const SIMPLE = { cloud: 0x0c1019, water: 0x05080f, glass: 0x000000 };
+const mats = {};
+function matFor(kind) {
+  if (mats[kind]) return mats[kind];
+  if (kind === 'cloud') {
+    // slate rounded blocks, shaded per block in scene.js, plus: a silver edge on the ones near the moon (the light comes
+    // from behind them), light bounced up off the lake and the land on the undersides, a thin line along every bevel
+    const m = new THREE.MeshLambertMaterial({ color: 0x1c2333 });   // darker than the sky behind
+    m.onBeforeCompile = sh => {
+      sh.uniforms.uMoonDir = { value: moonDirRef }; sh.uniforms.uNight = cloudNight;
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCW; varying vec3 vCN;')
+        .replace('#include <project_vertex>', `#include <project_vertex>
+          vec4 cw = vec4(transformed, 1.);
+          vec3 cn = objectNormal;
+          #ifdef USE_INSTANCING
+            cw = instanceMatrix * cw; cn = mat3(instanceMatrix) * cn;
+          #endif
+          vCW = (modelMatrix * cw).xyz; vCN = normalize(mat3(modelMatrix) * cn);`);
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCW; varying vec3 vCN; uniform vec3 uMoonDir; uniform float uNight;')
+        .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+          vec3 night0 = gl_FragColor.rgb;                                                       // the night touches below fade out by day
+          float mm = max(dot(normalize(vCW - cameraPosition), uMoonDir), 0.);
+          float bev = smoothstep(.1, .35, 1. - max(max(abs(vCN.x), abs(vCN.y)), abs(vCN.z)));   // 1 on the rounded edges
+          // near the moon the bodies stay dark; the edges catch it (a silver line), a little more the closer to the moon
+          float upEdge = bev * smoothstep(-.1, .6, vCN.y);                                     // upper edges only
+          gl_FragColor.rgb += vec3(.55, .65, .85) * (upEdge * (pow(mm, 20.) * .16 + pow(mm, 6.) * .015) + pow(mm, 200.) * .02);   // wider silver edges round the moon
+          // bounce off the lake and the land: the undersides (and the lower bevels) glow a cool blue, more under the
+          // clouds near the moon, where the lake below throws its moonlight back up
+          float under = smoothstep(-.15, .9, -vCN.y);
+          gl_FragColor.rgb += vec3(.0065, .0095, .017) * under * (1. + pow(mm, 10.) * 1.5);   // seen from below: the undersides are most of what shows
+          gl_FragColor.rgb += vec3(.002, .003, .005) * upEdge;                       // the bevels catch a little sky
+          gl_FragColor.rgb = mix(night0, gl_FragColor.rgb, uNight);`);
+    };
+    return (mats[kind] = m);
+  }
+  if (kind in SIMPLE) return (mats[kind] = new THREE.MeshLambertMaterial({ color: SIMPLE[kind] }));
+  return (mats[kind] = blockMaterial(kind));
+}
+const moonDirRef = new THREE.Vector3(0, 1, 0);   // towards whichever of the moon / sun lights the scene (clouds read it)
+const cloudNight = { value: 1 };                  // 1 at night: the clouds' moon-edge and bounce touches
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(1);
+renderer.autoClear = false;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0b1222, 0.010);
+const world = buildScene(matFor);
+scene.add(world.root);
+const W2 = p => new THREE.Vector3(...mirror(p));             // layout point → world
+
+// emissive things are HDR so the bloom finds them
+for (const m of [mats.lit_window].filter(Boolean)) { m.emissiveIntensity = 2.2; }
+world.lantern.userData.glow.emissiveIntensity = 3.0;
+for (const t of world.torches) t.traverse(o => { if (o.isMesh) o.material.emissiveIntensity = 3.5; });
+
+// sky, moon, sun, clouds
+// moonDir: towards the light that is up (moon at night, sun by day), recomputed with the time of day (see sky time below)
+const moonDir = W2(LAYOUT.moon).sub(W2(CAM.pos)).normalize();
+moonDirRef.copy(moonDir);
+const dome = sky(moonDir); scene.add(dome);
+// the moon's cells must read through exposure + tone curve: kept under 1, the rim and the sky's halo do the glowing.
+// Both bodies sit 380 out (behind every cloud layer, so the clouds drift across them), scaled to keep their size
+const BODY_DIST = 380;
+const body = (tex, col) => {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(9, 9), new THREE.MeshBasicMaterial({ map: texture(tex), color: col, fog: false }));
+  m.scale.setScalar(0.8 * BODY_DIST / 100); scene.add(m); return m;   // ×1.6 (Fable #4)
+};
+const moon = body('moon', new THREE.Color(0.8, 0.84, 0.92));
+const sun = body('sun', new THREE.Color(1.5, 1.4, 1.2));                 // over 1: the sun blooms
+
+// lights: moonlight (shadowed: it falls into the cabin only through the panes), a dim navy sky fill, the lantern,
+// a warm spill from the room onto the creeper's face, two lamps on the far shore
+const hemi = new THREE.HemisphereLight(0x2a3d60, 0x0b0907, 0.7); scene.add(hemi);
+const room = new THREE.PointLight(0xff9a50, 6, 0, 2);                    // the lantern's light bounced around the room
+// by day, the grey daylight coming in through the big window and bouncing round the room
+const dayFill = new THREE.PointLight(0xc8d6ea, 0, 0, 1.4); dayFill.position.copy(W2([0.5, 3.2, 1.6])); scene.add(dayFill);
+room.position.copy(W2([-3.2, 2.6, 0.8])); scene.add(room);
+const moonL = new THREE.DirectionalLight(0x9db4e8, CONFIG.moon);
+moonL.position.copy(W2([-0.5, 1, 6])).addScaledVector(moonDir, 60); moonL.target.position.copy(W2([-0.5, 1, 6]));
+moonL.castShadow = true; moonL.shadow.mapSize.set(2048, 2048);
+Object.assign(moonL.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 20, far: 110 });
+moonL.shadow.bias = -0.0006; moonL.shadow.normalBias = 0.02;
+scene.add(moonL, moonL.target);
+// shadows: only what is near the window casts (the cabin, the porch, the creeper) — the terrain casting cost ~17 ms on
+// an iGPU; and the map is redrawn at ~10 Hz, enough for a creeper that barely moves
+world.exterior.traverse(o => { if (o.isInstancedMesh && !/stone_bricks|cobblestone/.test(o.name)) o.castShadow = false; });
+renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;
+let shadowT = 0;
+const lampL = new THREE.PointLight(0xffa04a, CONFIG.lantern, 0, 2);
+lampL.position.copy(W2([LAYOUT.lantern[0], LAYOUT.lantern[1] + 0.3, LAYOUT.lantern[2]])); scene.add(lampL);
+// the lantern's light falling out through the glass onto the main creeper: warm, from its lantern side — the brightest
+// creeper in the frame; the rest get less (Fable #1)
+const spill = new THREE.SpotLight(0xffc896, 11, 0, 0.42, 1, 2);
+spill.position.copy(W2([0.6, 2.3, 1.4])); spill.target.position.copy(W2([-0.85, 3.0, 4.6])); scene.add(spill, spill.target);
+const deckSpill = new THREE.SpotLight(0xffb070, 11, 0, 0.6, 1, 2);    // the room's light, weaker, on the crowd outside the right pane
+deckSpill.position.copy(W2([2.5, 2.6, 1.2])); deckSpill.target.position.copy(W2([4.6, 2.2, 5.2])); scene.add(deckSpill, deckSpill.target);
+const shore = [[3.5, 1.6, 40.2], [35.5, 1.6, 25.2]].map(p => { const l = new THREE.PointLight(0xffa850, 6, 0, 2); l.position.copy(W2(p)); scene.add(l); return l; });
+
+// rain, outside only (from just beyond the glass to the far shore)
+const rainBox = new THREE.Box3(new THREE.Vector3(-30, -1, 3.6), new THREE.Vector3(8, 16, 40));    // world x = -layout x
+const rainMesh = rain(rainBox, 4500); scene.add(rainMesh);   // half as many as before: the glass carries the rain (Fable #3)
+
+// water + glass
+const waterFx = water(world.water, [256, 256]);
+waterFx.mat.uniforms.uMoonDir.value = moonDir;                            // shared: follows the moon / sun
+const glassMat = glassMaterial();
+world.glass.traverse(o => { if (o.isMesh) o.material = glassMat; });
+const glassScene = new THREE.Scene(); glassScene.add(world.glass);
+const black = new THREE.MeshBasicMaterial({ color: 0x000000 });
+
+// the creeper: one green it can glow with, shared by all its faces
+const cr = world.creeper, CU = cr.userData;
+// it lives under the mirrored root, so its position / turns are in layout space (+x = screen right)
+const CREEP_HOME = new THREE.Vector3(...LAYOUT.creeper), CREEP_AWAY = new THREE.Vector3(-9.5, 1, 4.6);
+cr.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) m.emissive = new THREE.Color(0); });
+const crMats = []; cr.traverse(o => { if (o.isMesh) crMats.push(...[].concat(o.material)); });
+
+/* ------------------------------ render targets + passes ------------------------------ */
+const sceneRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: true });
+sceneRT.depthTexture = new THREE.DepthTexture(4, 4, THREE.UnsignedIntType);
+const maskRT = new THREE.WebGLRenderTarget(4, 4, { depthBuffer: true });
+const mistRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: false, generateMipmaps: true,
+  minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+const mist = fullscreen(MIST_FRAG, {
+  tColor: { value: sceneRT.texture }, tDepth: { value: sceneRT.depthTexture }, uInvProj: { value: new THREE.Matrix4() },
+  uCamWorld: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() }, uMoonDir: { value: moonDir },
+  uT: { value: 0 }, uDens: { value: 0.02 }, uWinZ: { value: LAYOUT.wallZ + LAYOUT.wallDepth + 0.05 }, uWaterY: { value: WATER_Y },
+  uFlash: { value: 0 }, uScat0: { value: new THREE.Color(.018, .028, .050) }, uScat1: { value: new THREE.Color(.07, .09, .14) } });
+const comp = fullscreen(COMP_FRAG, {
+  tColor: { value: mistRT.texture }, tDepth: { value: sceneRT.depthTexture }, tMask: { value: maskRT.texture },
+  uRes: { value: new THREE.Vector2() }, uNear: { value: 0.05 }, uFar: { value: 600 }, uFocus: { value: 6 },
+  uAperture: { value: CONFIG.aperture }, uT: { value: 0 }, uExposure: { value: CONFIG.exposure },
+  uLamp: { value: new THREE.Vector2() }, uLampGlow: { value: 1 }, uCreeper: { value: new THREE.Vector2() },
+  uCreeperGlow: { value: 0 }, uCreeperCol: { value: new THREE.Color(0.3, 1, 0.35) },
+  uMoon: { value: new THREE.Vector2() }, uMoonGlow: { value: 1 }, uGlowCol: { value: new THREE.Color(.22, .32, .55) },
+  uContrast: { value: CONFIG.contrast }, uSat: { value: CONFIG.saturation }, uBlack: { value: CONFIG.black } });
+
+const cam = new THREE.PerspectiveCamera(CAM.fov, 16 / 9, 0.05, 600);
+function aim() { cam.position.set(...mirror(CAM.pos)); cam.fov = CAM.fov; cam.lookAt(...mirror(CAM.look)); cam.updateProjectionMatrix(); }
+aim();
+
+/* ------------------------------ the crowd ------------------------------ */
+// near the window (with the main creeper, six): one on the porch behind it, one peeking in at the left edge, three on
+// the deck outside the right pane; they run in along the deck from the sides. Further out: fifteen on the land across
+// the water, picked where the window shows them, spread apart; they run out of the forest.
+const NEAR = [
+  // (from: where they start on the porch / deck — its ends, x −6 and 10.5, so nobody runs over the water)
+  { pos: [-3.7, 1, 6.6], scale: 1.6, from: -6, delay: 0.5 }, { pos: [-2.9, 1, 4.7], scale: 1.75, from: -6, delay: 1.1 },
+  { pos: [3.9, 1, 5.0], scale: 1.45, from: 10.5, delay: 0.2 }, { pos: [4.7, 1, 5.7], scale: 1.35, from: 10.5, delay: 0.8 },
+  { pos: [5.4, 1, 4.7], scale: 1.45, from: 10.5, delay: 1.4 },   // on the two-deep deck   // a knot on the right of the right pane (screen x ≈ 79–96 %)
+];
+const onDeck = (x, z) => x > -7 && x < 11 && z < (x <= 2 ? 7 : 6);
+const groundAt = (x, z) => onDeck(x, z) ? 1 : Math.max(groundH(Math.floor(x), Math.floor(z)), WATER_Y);
+const crowdSpots = (() => {
+  const spots = NEAR.map(s => ({ pos: s.pos, scale: s.scale, start: [s.from, 1, s.pos[2]], delay: s.delay, near: true }));
+  cam.updateMatrixWorld();
+  const rnd = (() => { let a = 20261029; return () => ((a = (a * 1664525 + 1013904223) >>> 0) / 4294967296); })();
+  const cand = [], P = new THREE.Vector3();
+  for (let i = 0; i < 900; i++) {
+    const x = -24 + rnd() * 70, z = 10 + rnd() * 45, h = groundH(Math.floor(x), Math.floor(z));   // this shore and the far one
+    if (h < 1) continue;                                                   // water
+    // smallish, and the whole creeper below the far shore's line (~47 % down): the far bank, its lamps and the lake
+    // behind them stay in view (Fable #2)
+    const sc = 1.0 + rnd() * 0.35;
+    P.set(...mirror([x, h + 1.625 * sc, z])).project(cam);
+    const sx = (P.x + 1) / 2, headY = (1 - P.y) / 2;
+    P.set(...mirror([x, h, z])).project(cam);
+    const feetY = (1 - P.y) / 2;
+    if (headY < 0.47 || feetY > 0.72 || sx < 0.53 || sx > 0.76) continue;  // the open part of the right pane (the near ones take the rest)
+    cand.push([x, h, z, sx, headY, Math.log(Math.hypot(x - CAM.pos[0], z - CAM.pos[2])), sc]);
+  }
+  // nothing in the way (trees, huts, the far bank): a ray from the camera to the head and one to the middle
+  const occluders = []; world.root.updateMatrixWorld(true);
+  world.root.traverse(o => { if (o.isInstancedMesh && !/clouds|ridge/.test(o.name)) occluders.push(o); });
+  const rc = new THREE.Raycaster(), O = cam.position.clone(), Dv = new THREE.Vector3();
+  const clear = (x, y, z) => { P.set(...mirror([x, y, z])); Dv.subVectors(P, O); const d = Dv.length(); rc.set(O, Dv.normalize()); rc.far = d - 0.6;
+    rc.near = 4; return rc.intersectObjects(occluders, false).length === 0; };
+  for (let k = cand.length - 1; k >= 0; k--) { const [x, h, z] = cand[k]; if (!clear(x, h + 2.2, z) || !clear(x, h + 1.0, z)) cand.splice(k, 1); }
+  const far = [];
+  while (far.length < 10 && cand.length) {                                 // (10: fewer, so the view across the water stays open)                                 // farthest-point picks on screen: spread out
+    let best = 0, bd = -1;
+    // spread across the pane and in depth (log distance): a few close on this shore, more out on the far one
+    cand.forEach((c, k) => { const d = far.length ? Math.min(...far.map(f => Math.hypot(f[3] - c[3], (f[5] - c[5]) * 0.18))) : rnd(); if (d > bd) { bd = d; best = k; } });
+    far.push(cand.splice(best, 1)[0]);
+  }
+  far.sort((a, b) => Math.hypot(a[0] - CAM.pos[0], a[2] - CAM.pos[2]) - Math.hypot(b[0] - CAM.pos[0], b[2] - CAM.pos[2]));   // nearer ones come out first
+  far.forEach(([x, h, z, , , , sc], k) => {
+    const ax = x - CAM.pos[0], az = z - CAM.pos[2], al = Math.hypot(ax, az);
+    // the way in follows the land: from the left, the right or from behind (out of the trees), whichever runs on dry
+    // ground the whole way and keeps off the porch; the side the creeper ends up on (on screen) is tried first
+    const land = (px, pz) => groundH(Math.floor(px), Math.floor(pz)) >= 1 && !(pz < 8 && px > -7 && px < 11);
+    const dryPath = (sx, sz) => { for (let i = 0; i <= 16; i++) if (!land(sx + (x - sx) * i / 16, sz + (z - sz) * i / 16)) return false; return true; };
+    const left = [x - 11 - rnd() * 4, z + (rnd() - 0.5) * 6], right = [x + 11 + rnd() * 4, z + (rnd() - 0.5) * 6];
+    const back = [x + ax / al * 10, z + az / al * 10];
+    const order = x < 6 ? [left, back, right] : [right, back, left];
+    const from = order.find(([sx, sz]) => dryPath(sx, sz)) || [x + ax / al * 3, z + az / al * 3];   // nowhere dry: step out from just behind
+    spots.push({ pos: [x, h, z], scale: sc, near: false, delay: 0.8 + k * 0.22 + rnd() * 0.3,
+      start: [from[0], groundAt(from[0], from[1]), from[1]], via: from === left ? 'left' : from === right ? 'right' : 'back' });
+  });
+  return spots;
+})();
+const crowd = creeperCrowd(world.exterior, crowdSpots);
+
+// lamps on the far shore (Fable #2: the warm lights across the water that say people live there, each with a long
+// reflection on the lake): lantern posts on the water's edge, where the right pane shows them, spread out
+const shoreLamps = (() => {
+  const rnd = (() => { let a = 7101; return () => ((a = (a * 1664525 + 1013904223) >>> 0) / 4294967296); })();
+  const cand = [], P = new THREE.Vector3();
+  for (let i = 0; i < 1500; i++) {
+    const x = -10 + rnd() * 60, z = 22 + rnd() * 40, xi = Math.floor(x), zi = Math.floor(z), h = groundH(xi, zi);
+    if (h < 1 || ![[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => groundH(xi + a, zi + b) < 1)) continue;   // on land, next to water
+    P.set(...mirror([xi + 0.5, h + 2.2, zi + 0.5])).project(cam);
+    const sx = (P.x + 1) / 2, sy = (1 - P.y) / 2;
+    if (sx < 0.55 || sx > 0.97 || sy < 0.36 || sy > 0.62) continue;
+    cand.push([xi + 0.5, h, zi + 0.5, sx]);
+  }
+  const pick = [];
+  while (pick.length < 6 && cand.length) {
+    let best = 0, bd = -1;
+    cand.forEach((c, k) => { const d = pick.length ? Math.min(...pick.map(p => Math.abs(p[3] - c[3]))) : rnd(); if (d > bd) { bd = d; best = k; } });
+    pick.push(cand.splice(best, 1)[0]);
+  }
+  return pick.map(([x, h, z]) => {
+    const g = new THREE.Group(); g.position.set(x, h, z);
+    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.0, 0.25), matFor('oak_log')); pole.position.y = 1; g.add(pole);
+    const l = lantern(); l.scale.setScalar(3.2); l.position.y = 2.0; g.add(l);
+    world.exterior.add(g); return l;
+  });
+})();
+// at night the crowd would be black shapes against the dark: a faint green of their own (the creepy part)
+const crowdGlow = new THREE.Color();
+const camLayout = new THREE.Vector3(...CAM.pos);
+let crowdT = 0;
+let W = 2, H = 2;
+function resize() {
+  const s = resScale(innerWidth, innerHeight);
+  W = Math.max(2, Math.round(innerWidth * s)); H = Math.max(2, Math.round(innerHeight * s));
+  renderer.setSize(W, H, false);
+  cam.aspect = W / H; cam.updateProjectionMatrix();
+  sceneRT.setSize(W, H); maskRT.setSize(W, H); mistRT.setSize(W, H);
+  waterFx.setSize(W >> 1, H >> 1);
+  comp.u.uRes.value.set(W, H);
+}
+addEventListener('resize', resize); resize();
+
+/* ------------------------------ time of day ------------------------------ */
+// sunH: how high the sun is, -1 midnight … +1 noon. D: daylight 0…1; Tw: twilight (peaks as the sun crosses the
+// horizon). The moon and the sun both keep to mc1's bearing (the moon's spot in the right pane): the moon climbs to
+// it in the evening and sinks in the morning, the sun the same by day — the composition and the HUD corner stay put.
+// Each look below is [night, day, dusk]; dusk is added on top, weighted by Tw.
+const LOOK = {
+  hor:    [[.034, .050, .092], [.50, .57, .66], [.55, .28, .16]],     // sky at the horizon
+  zen:    [[.004, .007, .018], [.20, .29, .44], [.03, .02, .06]],     // sky overhead
+  halo:   [[1, 1, 1], [3.2, 2.8, 2.0], [4, 2, 1]],                    // multiplier on the sky's halo round the body
+  dusk:   [[0, 0, 0], [0, 0, 0], [.55, .22, .08]],                    // the horizon on the sun's side (dawn: see DAWN)
+  fog:    [[.043, .071, .133], [.55, .60, .68], [.30, .18, .16]],     // FogExp2 colour
+  scat0:  [[.018, .028, .050], [.20, .23, .28], [.10, .05, .04]],     // mist: ambient in-scatter
+  scat1:  [[.07, .09, .14], [.42, .42, .40], [.45, .22, .10]],        // mist: towards the body
+  hemiS:  [[.165, .239, .376], [.62, .70, .80], [.30, .16, .10]],     // hemisphere sky colour
+  hemiG:  [[.043, .035, .027], [.24, .21, .16], [.06, .03, .02]],
+  light:  [[.616, .706, .91], [1, .95, .86], [.9, .45, .2]],          // directional light colour
+  cloud:  [[.11, .137, .2], [.72, .75, .80], [.35, .22, .22]],        // cloud albedo
+  glow:   [[.22, .32, .55], [.55, .48, .34], [.9, .45, .2]],          // the screen glow round the body
+};
+// the dawn takes the dusk colours cooler and pinker (multiplier on the dusk column, by key)
+const DAWN = { hor: [.8, 1, 1.5], dusk: [.85, 1.1, 2.2], scat1: [.8, 1, 1.4], light: [.9, 1.15, 1.6], glow: [.85, 1, 1.5], fog: [.9, 1, 1.25] };
+const tod = { h: 22, sunH: -1, D: 0, Tw: 0, night: 1, lightI: CONFIG.moon, exposure: CONFIG.exposure, lamp: 1, windows: 1 };
+const _a = new THREE.Color(), _b = new THREE.Color();
+// sky / mist / glow values are linear (they go straight into shaders); the material and light colours are sRGB
+const SRGB = new Set(['fog', 'hemiS', 'hemiG', 'light', 'cloud']);
+const look = (k, out) => { const [n, d, k0] = LOOK[k], m = tod.h < 12 && DAWN[k] || [1, 1, 1], k3 = k0.map((v, i) => v * m[i]); out.setRGB(n[0] + (d[0] - n[0]) * tod.D + k3[0] * tod.Tw,
+  n[1] + (d[1] - n[1]) * tod.D + k3[1] * tod.Tw, n[2] + (d[2] - n[2]) * tod.D + k3[2] * tod.Tw,
+  SRGB.has(k) ? THREE.SRGBColorSpace : THREE.LinearSRGBColorSpace); return out; };
+// the bearing of mc1's moon, as an azimuth around world y; a body at elevation e (radians) on it
+const BEARING = (() => { const d = W2(LAYOUT.moon).sub(W2(CAM.pos)); return Math.atan2(d.x, d.z); })();
+const MOON_ELEV = Math.asin(W2(LAYOUT.moon).sub(W2(CAM.pos)).normalize().y);
+const onBearing = (e, out) => out.set(Math.sin(BEARING) * Math.cos(e), Math.sin(e), Math.cos(BEARING) * Math.cos(e));
+const sunDir = new THREE.Vector3(), moonDirB = new THREE.Vector3();
+function clockNow() {
+  if (CONFIG.clockHours != null) return CONFIG.clockHours;
+  const d = new Date(); return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+}
+function updateTime() {
+  const h = clockNow(), sunH = Math.sin((h - 6) / 24 * Math.PI * 2);
+  Object.assign(tod, { h, sunH, D: ss(-0.1, 0.3, sunH), Tw: Math.exp(-(((sunH - 0.02) / 0.16) ** 2)) });
+  tod.night = 1 - tod.D;
+  // the bodies: rise to their spot over the first ~3 h, sink over the last ~3 h (below the horizon: hidden)
+  const DEG = Math.PI / 180;
+  onBearing(-6 * DEG + (MOON_ELEV + 6 * DEG) * ss(0, 0.6, -sunH), moonDirB);
+  onBearing(-6 * DEG + (MOON_ELEV + 10 * DEG) * ss(0, 0.6, sunH), sunDir);
+  const C = W2(CAM.pos);
+  for (const [m, d] of [[moon, moonDirB], [sun, sunDir]]) { m.position.copy(C).addScaledVector(d, BODY_DIST); m.lookAt(C); m.visible = d.y > -0.05; }
+  // the light that is up lights the scene; near the horizon it fades (twilight is lit by the sky)
+  moonDir.copy(sunH >= 0 ? sunDir : moonDirB); moonDirRef.copy(moonDir);
+  const up = ss(-0.02, 0.18, Math.max(moonDir.y, 0));
+  tod.lightI = (sunH >= 0 ? 2.6 : CONFIG.moon) * Math.max(up, 0.15);
+  tod.exposure = CONFIG.exposure + (0.85 - CONFIG.exposure) * tod.D;
+  tod.lamp = 1 - 0.7 * tod.D; tod.windows = 1 - 0.85 * tod.D;
+  // colours
+  look('hor', dome.material.uniforms.uHor.value); look('zen', dome.material.uniforms.uZen.value);
+  look('halo', dome.material.uniforms.uHalo.value); look('dusk', dome.material.uniforms.uDusk.value);
+  dome.material.uniforms.uMoon.value.copy(moonDir);
+  look('fog', scene.fog.color);
+  look('scat0', mist.u.uScat0.value); look('scat1', mist.u.uScat1.value);
+  look('hemiS', hemi.color); look('hemiG', hemi.groundColor); hemi.intensity = 0.7 + 0.8 * tod.D;
+  look('light', moonL.color);
+  moonL.position.copy(moonL.target.position).addScaledVector(moonDir, 60);
+  look('cloud', mats.cloud.color); cloudNight.value = tod.night;
+  look('glow', comp.u.uGlowCol.value);
+  if (mats.lit_window) mats.lit_window.emissiveIntensity = 2.2 * tod.windows;
+  for (const t of world.torches) t.traverse(o => { if (o.isMesh) o.material.emissiveIntensity = 3.5 * (0.3 + 0.7 * tod.windows); });
+  for (const l of shore) l.intensity = 6 * tod.windows;
+  for (const l of shoreLamps) l.userData.glow.emissiveIntensity = 7 * (0.25 + 0.75 * tod.windows);
+  crowdRim.value = 0.3 + 0.7 * tod.night;
+  crowdFar.value = CONFIG.farLift * tod.night;
+}
+
+/* ------------------------------ state machine ------------------------------ */
+let stateName = 'none', pending = null, debounceT = 0;
+const knob = {}; for (const p in PARAMS) knob[p] = new Tw(STATES.none[p]);
+const act = {                                    // the creeper's performance, all eased
+  here: new Tw(0),                               // 0 away … 1 at the window (walks)
+  tilt: new Tw(0), lean: new Tw(0), look: new Tw(0), fuse: new Tw(0), breath: new Tw(1), flare: new Tw(0),
+  ctilt: new Tw(0),                              // the crowd's head-tilting (thinking), each at its own pace
+  // the main creeper's idle moves (see IDLE): steps along the porch (x) and back from the glass (z), a turn, a head
+  // look, a sway, and how much the head obeys "look at you" (waiting)
+  paceX: new Tw(0), paceZ: new Tw(0), paceYaw: new Tw(0), lookY: new Tw(0), lookX: new Tw(0), sway: new Tw(0), lookK: new Tw(1),
+};
+let idleT = 3;
+const idleQ = [];                                // [time, fn]: the later legs of an idle move
+const rnd = (a, b) => a + Math.random() * (b - a);
+// a few steps back from the glass (still facing it), `pause` s there doing `there`, then up to the glass, then `back`
+function backOff(dist, pause, there, back) {
+  const dur = dist / 0.5 + 0.4, at = simT + 0.3 + dur, ret = at + pause;
+  act.paceZ.to(dist, dur, 0.3);
+  idleQ.push([at, there], [ret, () => act.paceZ.to(0, dur)], [ret + dur, back]);
+}
+// the main creeper while it is at the window, by state: each picks a move and returns the pause before the next one
+// (the pause starts once the move is done). The crowd has its own, in crowd.js.
+const IDLE = {
+  clear() {                                      // paces a step or two along the porch, or looks about
+    if (Math.random() < 0.35) {
+      let x; do x = rnd(-0.55, 0.55); while (Math.abs(x - act.paceX.b) < 0.25);
+      const dir = Math.sign(x - act.paceX.b), d = Math.abs(x - act.paceX.b) / 0.6 + 0.3;
+      act.lookY.to(0, 0.5); act.lookX.to(0, 0.5);
+      act.paceYaw.to(-dir * 1.3, 0.5); act.paceX.to(x, d, 0.4);   // side-on, walk, back to the glass
+      idleQ.push([simT + 0.4 + d, () => act.paceYaw.to(0, 0.6)]);
+      return rnd(2, 5);
+    }
+    let y = 0; if (Math.random() > 0.25) do y = rnd(-0.8, 0.8); while (Math.abs(y - act.lookY.b) < 0.3);
+    act.lookY.to(y, rnd(0.5, 1.1)); act.lookX.to(y ? rnd(-0.06, 0.12) : 0, 0.7);
+    return rnd(1.5, 5.5);
+  },
+  storm() {                                      // backs off two or three steps and comes back, looks left / right, sways
+    const k = Math.random();
+    if (k < 0.35) { backOff(rnd(0.6, 1.0), rnd(0.6, 1.6), () => act.lookY.to(rnd(-0.6, 0.6), 0.5), () => act.lookY.to(0, 0.6)); return rnd(1.5, 4); }
+    if (k < 0.8) { act.lookY.to(Math.random() < 0.3 ? 0 : (Math.random() < 0.5 ? -1 : 1) * rnd(0.35, 0.75), rnd(0.4, 0.8)); return rnd(1.2, 3.5); }
+    act.sway.to(1, 0.6); idleQ.push([simT + rnd(2, 4), () => act.sway.to(0, 0.8)]);
+    return rnd(1, 3);
+  },
+  waiting() {                                    // leans in looking at you; now and then looks away, backs off, comes back
+    if (Math.random() < 0.4) {
+      act.lookK.to(0.15, 0.5); act.lookY.to(rnd(-0.4, 0.4), 0.5);
+      backOff(rnd(0.5, 0.8), rnd(0.4, 1.2), () => {}, () => { act.lookK.to(1, 0.7); act.lookY.to(0, 0.7); });
+    }
+    return rnd(2, 5);
+  },
+};
+let walkFrom = 0, walking = 0, nextBolt = 8, bolt = 0, tiltT = 0;
+function enter(name) {
+  const prev = stateName; if (name === prev) return;
+  stateName = name;
+  // the rain belongs to the creeper: it starts once it has walked up to the window, and stops after it has gone;
+  // the glass dries slowly
+  const arriving = prev === 'none', leaving = name === 'none';
+  for (const p in PARAMS) knob[p].to(STATES[name][p], p === 'wet' ? (leaving ? 14 : 8) : 4, arriving ? 5.5 : leaving ? 3 : 0);
+  act.here.to(name === 'none' ? 0 : 1, name === 'none' ? 7 : 6);
+  act.lean.to(name === 'storm' ? 1 : name === 'waiting' ? 0.5 : 0, name === 'storm' ? 3 : 2);
+  act.look.to(name === 'waiting' ? 1 : 0, 1.6);
+  act.fuse.to(name === 'waiting' ? 1 : 0, name === 'waiting' ? 2 : 1);
+  act.breath.to(name === 'clear' || name === 'none' ? 1 : 0.5, 2);
+  if (name !== 'overcast') act.tilt.to(0, 1.2); else tiltT = 0;
+  act.ctilt.to(name === 'overcast' ? 1 : 0, 1.5);
+  // idle moves: settle back, then start over on the new state's clock
+  idleQ.length = 0; idleT = rnd(1.5, 4);
+  act.paceX.to(0, 1.2); act.paceZ.to(0, 1.2); for (const k of ['paceYaw', 'lookY', 'lookX', 'sway']) act[k].to(0, 0.8);
+  act.lookK.to(1, 0.8);
+  if (name === 'clearing') { act.flare.set(0).to(1, 0.6); setTimeout(() => act.flare.to(0, 3), 900); }
+  if (name === 'storm') nextBolt = 4 + Math.random() * 6;
+}
+function applyState(name) { if (STATES[name]) enter(name); }
+function requestState(name) {
+  if (!STATES[name]) return;
+  pending = name; clearTimeout(debounceT);
+  debounceT = setTimeout(() => { if (pending !== stateName) applyState(pending); pending = null; }, 300);
+}
+
+/* ------------------------------ inputs ------------------------------ */
+for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'mousedown']) addEventListener(ev, e => e.preventDefault());
+addEventListener('keydown', e => { if (KEYS[e.key]) requestState(KEYS[e.key]); if (e.key === 'd') document.body.classList.toggle('debug'); });
+let lastPolled = null, sessionsOverride = null;
+async function poll() {
+  if (!CONFIG.polling) return;
+  try {
+    const r = await fetch('state.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const sessions = sessionsOverride || (Array.isArray(j.sessions) ? j.sessions : []);
+    const s = sessions.some(x => x) ? j.state : 'none';
+    if (STATES[s] && s !== lastPolled) { lastPolled = s; requestState(s); }
+  } catch { /* unreadable → keep the current state */ }
+}
+if (STATES[QS.get('state')]) {
+  CONFIG.polling = false; enter(QS.get('state'));
+  for (const k in act) act[k].set(act[k].b); for (const p in knob) knob[p].set(knob[p].b);   // ?state= starts settled
+  if (QS.get('state') !== 'none') crowdT = crowd.duration;
+}
+setInterval(poll, 1000); poll();
+
+/* ------------------------------ simulation ------------------------------ */
+const V = new THREE.Vector3(), V2 = new THREE.Vector3();
+function update(dt) {
+  simT += dt;
+  updateTime();
+  for (const p in knob) knob[p].step();
+  for (const k in act) act[k].step();
+  // the crowd: called out while there is a session (one after another), sent back when there is none
+  crowdT = Math.min(crowd.duration, Math.max(0, crowdT + dt * (stateName === 'none' ? -1.6 : 1)));
+  crowdGlow.setRGB(0.001, 0.004, 0.0012).multiplyScalar(tod.night);   // barely: they read by the light on them, not their own
+  for (const m of crowd.materials) m.emissive.copy(crowdGlow);
+  crowd.update({ t: crowdT, cam: camLayout, simT, groundAt,
+    pose: { tilt: act.ctilt.v, lean: act.lean.v, look: act.look.v, fuse: act.fuse.v, mode: IDLE[stateName] ? stateName : null } });
+
+  // walk in / out along the porch; legs swing while it moves
+  const h = act.here.v;
+  cr.position.lerpVectors(CREEP_AWAY, CREEP_HOME, h);
+  cr.position.x += act.paceX.v; cr.position.z += act.paceZ.v;     // (+z: away from the glass)
+  cr.visible = h > 0.001;
+  const moving = Math.abs(act.here.b - h) > 0.002 && act.here.d && simT - act.here.t0 < act.here.d;
+  // idle moves while it stands at the window (IDLE, by state)
+  if (h > 0.99 && IDLE[stateName]) {
+    while (idleQ.length && simT >= idleQ[0][0]) idleQ.shift()[1]();
+    if (!idleQ.length && (idleT -= dt) <= 0) idleT = IDLE[stateName]();
+  }
+  const pacing = [act.paceX, act.paceZ].some(w => Math.abs(w.b - w.v) > 0.01 && simT > w.t0);
+  walking += ((moving || pacing ? 1 : 0) - walking) * Math.min(1, dt * 4);
+  const sw = Math.sin(simT * 7) * 0.5 * walking;
+  CU.legs[0].rotation.x = sw; CU.legs[3].rotation.x = sw; CU.legs[1].rotation.x = -sw; CU.legs[2].rotation.x = -sw;
+  cr.rotation.y = Math.PI + (moving ? (act.here.b > h ? 1 : -1) * 0.9 * walking : 0) + act.paceYaw.v;    // side-on while walking
+  cr.rotation.z = act.sway.v * Math.sin(simT * 2.4) * 0.09;
+  // thinking: the head goes over to one side, holds, comes back, the other side
+  if (stateName === 'overcast') {
+    tiltT -= dt;
+    if (tiltT <= 0) { act.tilt.to(act.tilt.b > 0.05 ? -0.22 : act.tilt.b < -0.05 ? 0 : 0.22, 1.4); tiltT = 3 + Math.random() * 2; }
+  }
+  const breathe = Math.sin(simT * 0.8) * 0.5 + 0.5;
+  CU.head.rotation.z = act.tilt.v + Math.sin(simT * 0.37) * 0.02;
+  CU.body.rotation.x = act.lean.v * 0.1 + breathe * 0.012 * act.breath.v;      // + leans towards the glass (local +z)
+  // waiting: the head turns to the camera
+  V2.copy(cam.position); world.root.worldToLocal(V2); V2.sub(cr.position);
+  const yawToCam = Math.atan2(V2.x, V2.z) - cr.rotation.y;
+  const lookAt = act.look.v * act.lookK.v;
+  CU.head.rotation.y = lookAt * Math.atan2(Math.sin(yawToCam), Math.cos(yawToCam)) * 0.85 + act.lookY.v;
+  CU.head.rotation.x = -lookAt * 0.08 + act.lookX.v;
+  // the fuse: swell and flash white on a ~1.6 s beat while waiting — it never goes off
+  const beat = Math.pow(Math.max(0, Math.sin(simT * Math.PI / 0.8)), 6);
+  const flash = act.fuse.v * beat;
+  const swell = 1 + flash * 0.05;
+  CU.body.scale.set(swell, 1 + flash * 0.03, swell);
+  const g = 0.015 * act.breath.v * breathe;                                       // idle: a faint green breath
+  for (const m of crMats) m.emissive.setRGB(flash * 0.10 + g * 0.3, flash * 0.12 + g, flash * 0.10 + g * 0.3);   // a pale wash, the skin still shows
+
+  // the lantern: flicker, plus a flare when wrapping up
+  const fl = 0.9 + 0.06 * Math.sin(simT * 11.3) + 0.05 * Math.sin(simT * 23.1 + 1.3) + 0.04 * (Math.random() - 0.5);
+  lampL.intensity = CONFIG.lantern * tod.lamp * fl * (1 + act.flare.v * 0.9);
+  world.lantern.userData.glow.emissiveIntensity = 3.0 * (0.5 + 0.5 * tod.lamp) * fl * (1 + act.flare.v * 0.6);
+  room.intensity = 6 * tod.lamp * fl * (1 + act.flare.v * 0.5);
+  dayFill.intensity = 7 * tod.D;
+  // the knot on the deck faces the camera with the sky behind it: enough room light for their faces to read, more
+  // at dusk (the bright sky turns them to silhouettes), still under the main creeper's
+  deckSpill.intensity = (11 * tod.lamp + 6 * tod.Tw) * fl;
+  spill.intensity = 11 * tod.lamp * fl * (1 + act.flare.v * 0.5) + flash * 6;
+
+  shadowT -= dt; if (shadowT <= 0) { renderer.shadowMap.needsUpdate = true; shadowT = 0.1; }
+  // weather
+  rainMesh.material.uniforms.uT.value = simT; rainMesh.material.uniforms.uAmt.value = knob.rain.v; rainMesh.visible = knob.rain.v > 0.01;
+  waterFx.mat.uniforms.uT.value = simT; waterFx.mat.uniforms.uRain.value = knob.rain.v * 0.9;
+  glassMat.uniforms.uT.value = simT; glassMat.uniforms.uWet.value = knob.wet.v;
+  // far lightning while running: a double flicker, lights the sky, the mist and the moonlight
+  if (STATES[stateName].bolts) { nextBolt -= dt; if (nextBolt <= 0) { bolt = 1; nextBolt = 12 + Math.random() * 20; } }
+  bolt = Math.max(0, bolt - dt * 1.6);
+  const fb = bolt > 0 ? bolt * (0.6 + 0.4 * Math.sin(bolt * 40)) : 0;
+  dome.material.uniforms.uFlash.value = fb * 0.5; mist.u.uFlash.value = fb * 0.6;
+  moonL.intensity = tod.lightI * (1 + fb * 3);
+  // clouds drift
+  for (const c of world.clouds) c.mesh.position.x = (simT * c.speed) % c.period;
+}
+
+/* ------------------------------ render ------------------------------ */
+const P2 = new THREE.Vector3();
+let reflFrame = 1;
+const toScreen = (v, out) => { P2.copy(v).project(cam); out.set((P2.x + 1) / 2, (P2.y + 1) / 2); };
+function render() {
+  cam.updateMatrixWorld();
+  const fogC = scene.fog.color; scene.fog.density = knob.mist.v * 0.4;
+  waterFx.mat.uniforms.uFogCol.value.copy(fogC); waterFx.mat.uniforms.uFogD.value = scene.fog.density;
+  renderer.setClearColor(0x000000, 1);
+  // 1. the lake's mirror image (no cabin, no rain in it)
+  if (++reflFrame % 2 === 0) waterFx.update(renderer, scene, cam, [world.interior, rainMesh]);   // 15 Hz is plenty under the ripples
+  // 2. the scene
+  renderer.setRenderTarget(sceneRT); renderer.clear(); renderer.render(scene, cam);
+  // 3. the glass mask: the room in black (it hides the panes behind the frames), then the panes' drops
+  const hidden = [world.exterior, dome, rainMesh, moon, sun], was = hidden.map(o => o.visible);
+  hidden.forEach(o => (o.visible = false)); scene.overrideMaterial = black;
+  renderer.setRenderTarget(maskRT); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(scene, cam);
+  scene.overrideMaterial = null; hidden.forEach((o, i) => (o.visible = was[i]));
+  renderer.render(glassScene, cam);
+  // 4. mist
+  mist.u.uInvProj.value.copy(cam.projectionMatrixInverse); mist.u.uCamWorld.value.copy(cam.matrixWorld);
+  mist.u.uCamPos.value.copy(cam.position); mist.u.uT.value = simT; mist.u.uDens.value = knob.mist.v;
+  renderer.setRenderTarget(mistRT); renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(mist.scene, cam);
+  // 5. composite to the screen
+  world.lantern.getWorldPosition(V); toScreen(V, comp.u.uLamp.value);
+  toScreen(tod.sunH >= 0 ? sun.position : moon.position, comp.u.uMoon.value);
+  comp.u.uExposure.value = tod.exposure;
+  CU.head.getWorldPosition(V); toScreen(V, comp.u.uCreeper.value);
+  comp.u.uFocus.value = V.distanceTo(cam.position);
+  comp.u.uLampGlow.value = lampL.intensity / CONFIG.lantern;
+  comp.u.uMoonGlow.value = 0.6 + 0.4 * tod.night;
+  comp.u.uCreeperGlow.value = act.fuse.v * Math.pow(Math.max(0, Math.sin(simT * Math.PI / 0.8)), 6) * 0.22 + 0.05 * act.here.v;
+  comp.u.uT.value = simT;
+  renderer.setRenderTarget(null); renderer.clear(); renderer.render(comp.scene, cam);
+}
+
+/* ------------------------------ loop ------------------------------ */
+const FRAME_MS = 1000 / FPS;
+let raf = 0, nextFrame = 0, lastT = 0, fps = 0, fpsCount = 0, fpsT = 0;
+const now = () => performance.now() / 1000;
+function frame(ms) {
+  raf = requestAnimationFrame(frame);
+  if (ms < nextFrame) return;
+  nextFrame += FRAME_MS; if (nextFrame < ms) nextFrame = ms + FRAME_MS;
+  const t = now(), dt = Math.min(0.1, t - lastT); lastT = t;
+  update(dt); render();
+  fpsCount++; if (t - fpsT >= 1) { fps = fpsCount / (t - fpsT); fpsCount = 0; fpsT = t; }
+  if (document.body.classList.contains('debug'))
+    document.getElementById('hud').textContent =
+      `state ${stateName}${pending ? ' (→' + pending + ')' : ''}  here ${act.here.v.toFixed(2)}  fuse ${act.fuse.v.toFixed(2)}\n` +
+      `rain ${knob.rain.v.toFixed(2)}  mist ${knob.mist.v.toFixed(3)}  wet ${knob.wet.v.toFixed(2)}\nfps ${fps.toFixed(1)}  res ${W}×${H}`;
+}
+function start() { if (!raf) { lastT = now(); raf = requestAnimationFrame(frame); } }
+function stop() { cancelAnimationFrame(raf); raf = 0; }
+let hostPaused = false;
+document.addEventListener('visibilitychange', () => (document.hidden || hostPaused ? stop() : start()));
+window.wpPause = on => { hostPaused = !!on; if (hostPaused) stop(); else if (!document.hidden) start(); };
+if (!document.hidden) start();
+
+if (QS.get('ref')) {
+  const ref = document.getElementById('ref');
+  ref.src = QS.get('ref'); ref.style.display = 'block'; ref.style.opacity = QS.get('a') ?? 0.5;
+  if (QS.get('blend')) ref.style.mixBlendMode = QS.get('blend');
+}
+// testing hooks (themes/demo.html and docs/錄製 look for window.theme)
+window.theme = {
+  requestState, applyState, STATES, PARAMS, CONFIG, THREE, scene, cam, CAM, aim, world, moon, sun, tod, renderer, knob, act, crowd, crowdSpots,
+  get crowdT() { return crowdT; }, set crowdT(v) { crowdT = v; },
+  setSessions(a) { sessionsOverride = a ? Array.from({ length: 5 }, (_, i) => a[i] || null) : null; poll(); },
+  strike() { bolt = 1; },                                       // far lightning now (recordings)
+  advance(sec, dt = 1 / FPS) { for (let t = 0; t < sec; t += dt) update(dt); render(); },
+  frame(dt = 1 / FPS) { update(dt); render(); },
+  bench(n = 90) {
+    const gl = renderer.getContext(), px = new Uint8Array(4), t = [];
+    const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    for (let i = 0; i < 30; i++) { update(1 / FPS); render(); sync(); }
+    for (let i = 0; i < n; i++) { const a = performance.now(); update(1 / FPS); render(); sync(); t.push(performance.now() - a); }
+    t.sort((x, y) => x - y);
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    return { avg: t.reduce((x, y) => x + y) / n, p95: t[Math.floor(n * 0.95)], size: [W, H], gpu: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '?' };
+  },
+  get state() { return stateName; }, get simT() { return simT; },
+};
+</script>
+</body>
+</html>
