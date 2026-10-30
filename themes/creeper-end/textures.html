@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>麥塊世界 mc3 貼圖集</title>
+<style>
+  body { margin: 0; background: #3a2c4a; color: #fff; font: 14px system-ui, sans-serif; padding: 16px; }
+  .row { margin-bottom: 18px; }
+  canvas { image-rendering: pixelated; display: block; margin-top: 4px; }
+</style>
+</head>
+<body>
+<script type="module">
+// 貼圖集預覽：每張貼圖放大 12 倍；上排是貼圖本身（乘法用的明暗），下排是乘上固有色後的樣子
+import { makeTextures } from './lib/textures.js';
+import { P } from './lib/palette.js';
+const TINT = { endstone: P.endstone, obsidian: P.obsidian, chorusStem: P.chorusStem, chorusFlower: '#ff8af0' };
+for (const [name, t] of Object.entries(makeTextures())) {
+  const src = t.image, k = 12, row = document.createElement('div');
+  row.className = 'row'; row.textContent = `${name}（${src.width / 16} 種變體）`;
+  for (const tint of [null, TINT[name]]) {
+    const c = document.createElement('canvas'); c.width = src.width * k; c.height = src.height * k;
+    const g = c.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(src, 0, 0, c.width, c.height);
+    if (tint) { g.globalCompositeOperation = 'multiply'; g.fillStyle = tint; g.fillRect(0, 0, c.width, c.height); }
+    row.appendChild(c);
+  }
+  document.body.appendChild(row);
+}
+window.__ready = true;
+</script>
+</body>
+</html>
