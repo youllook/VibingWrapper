@@ -4,6 +4,16 @@
 第一版（`powerlifting-gym`）的選手動作與近景不夠細緻，這版把氛圍交給**光影**和**鏡面模糊**：近景細節靠高解析平面圖，選手退到鏡中糊掉。
 製作過程（00 分析 → 06 交付）在 `docs/健力健身房2/`。
 
+| 目標圖（Codex 生成） | 完成・白天 |
+|---|---|
+| ![目標圖](../../docs/screenshots/powerlifting-gym-2-target.jpg) | ![完成・白天](../../docs/screenshots/powerlifting-gym-2-day.jpg) |
+
+| 完成・夜晚 |
+|---|
+| ![完成・夜晚](../../docs/screenshots/powerlifting-gym-2-night.jpg) |
+
+光束、粉塵、地板光斑、鏡中選手都是即時畫的；截圖是執行中的同一個姿勢（深蹲最低點）。
+
 ## 狀態
 
 | state.json | 鏡中選手 | 光與灰 |
