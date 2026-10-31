@@ -48,6 +48,12 @@
 | `assets/armfix.js` | 扛槓姿勢執行期修正：肩略抬、握距內收、手肘朝下（每格畫完還原，動作檔沒有手臂關鍵格） |
 | `assets/board.js` | 直式白板字 |
 | `assets/fx.js`、`iron.js`、`props.js`、`lib/`、`models/` | 第一版沿用：吊扇、槓、架、凳、材質、選手 GLB |
+| `models/mb-root.json` | 坐下（`SitDown`）、站起（`StandUp`）的地面位移與轉向，每秒 30 格 `[x, z, 轉向]`；動作本身在 GLB 裡原地播，由程式帶著走 |
+
+## 動作
+
+選手的走路、坐下、坐著、站起是用 NVIDIA [MotionBricks](https://github.com/NVlabs/motionbricks) 生成的（2026-10-31）：只給起點與目標姿勢，中間的起步、轉身、放慢坐下由模型補出來，再轉到選手的 Mixamo 骨架烘進 `powerlifter.glb`。扛槓、深蹲、抹粉仍是第一版的動作。
+MotionBricks 程式碼 Apache-2.0，模型為 NVIDIA Open Model Agreement。生成與轉骨架的做法見 `docs/健力健身房2/07-動作生成.md`。
 | `textures/` | `plate-day／shade／night.jpg`（Codex 修好的底圖）、`mask-a.png`（R 窗 G 鏡面 B 地上光斑）、`mask-b.png`（R 燈泡 G 整個地板） |
 
 除錯網址參數：`?clip=Squat&t=1.8` 選手停在單一姿勢；`?blur=0` 不模糊；`?mres=4` 鏡中小畫面放大 4 倍；`?noarm=1` 關掉姿勢修正；`?tune={json}` 覆寫 `LAYOUT`。
