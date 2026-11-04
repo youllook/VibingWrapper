@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   onAiState: fn => ipcRenderer.on('pet:ai-state', (_e, s) => fn(s)),
   // hide / show all desktop icons (also Ctrl+Alt+D and the tray menu)
   toggleIcons: () => ipcRenderer.invoke('pet:toggle-icons'),
+  iconsVisible: () => ipcRenderer.invoke('pet:icons-visible'),
   // true when Ctrl+Alt+D is ours (shown as a reminder next to 桌面圖示)
   iconsHotkey: () => ipcRenderer.invoke('pet:icons-hotkey'),
   // 老闆鍵 (boss key): toggle, current { key, registered, hidden }, record a new key

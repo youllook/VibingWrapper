@@ -213,6 +213,7 @@ ipcMain.handle('pet:rec-state', () => recorder.status());
 ipcMain.handle('pet:ai-state', () => claudeBridge.current());   // AI category asks once on load
 ipcMain.handle('pet:icons-hotkey', () => desktopIcons.status.hotkey);
 ipcMain.handle('pet:toggle-icons', () => desktopIcons.toggle());
+ipcMain.handle('pet:icons-visible', () => desktopIcons.get());
 // 老闆鍵 (boss key): the key lives in settings.json `bossKey`
 ipcMain.on('pet:boss', () => bossKey.toggle());
 ipcMain.handle('pet:boss-key', () => bossKey.status());
@@ -270,8 +271,11 @@ function buildTrayMenu() {
   if (!tray || tray.isDestroyed()) return;              // no tray while 老闆鍵 is on
   const openAtLogin = app.getLoginItemSettings(loginItemArgs()).openAtLogin;
   tray.setContextMenu(Menu.buildFromTemplate([
-    // 2026-11-05: the tray keeps only one tool, 桌面圖示 on/off; 截圖／錄影／老闆鍵 stay on their hotkeys and the gear menu
-    { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), type: 'checkbox', checked: desktopIcons.isVisible(), click: () => desktopIcons.toggle() },
+    { label: '範圍截圖' + (capture.status().registered ? '\t' : '（') + bossKey.pretty(capture.status().key) + (capture.status().registered ? '' : ' 被占用）'), click: () => capture.start('region') },
+    { label: (recorder.status().state === 'idle' ? '螢幕錄影' : '停止錄影') + (recorder.status().hotkey ? '\tCtrl+Alt+R' : '（Ctrl+Alt+R 被占用）'), click: () => recorder.toggle() },
+    { label: '錄目前視窗（Game Bar）\tWin+Alt+R', click: () => recorder.gameBar() },
+    { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), click: () => desktopIcons.toggle() },
+    { label: (bossKey.status().hidden ? '取消隱藏' : '還原桌面') + (bossKey.status().registered ? '\t' : '（') + bossKey.pretty(bossKey.status().key) + (bossKey.status().registered ? '' : ' 被占用）'), click: () => bossKey.toggle() },
     { type: 'separator' },
     {
       label: '動態桌布', type: 'checkbox', checked: settings.weatherWallpaper,

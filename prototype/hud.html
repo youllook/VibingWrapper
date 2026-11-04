@@ -162,7 +162,7 @@ if (IS_APP) { window.petAPI.getAiState().then(setAi); window.petAPI.onAiState(se
 let WP_STYLES = [{ id: 'weather', name: '天氣' }];
 const wpName = id => (WP_STYLES.find(t => t.id === id) || { name: id }).name;
 const loadStyles = () => IS_APP && window.petAPI.getWallpaperStyles().then(l => { if (l && l.length) { WP_STYLES = l; if (settingsEl.classList.contains('open')) renderMenu(); } });
-let wpStyle = 'weather', iconsKey = 'Ctrl+Alt+D', timeMode = 'auto', debugMode = false, debugLast = '';
+let wpStyle = 'weather', iconsKey = 'Ctrl+Alt+D', iconsOn = true, timeMode = 'auto', debugMode = false, debugLast = '';
 // per agent: status from main ('none' = that agent is not installed → its row is hidden) + the last click's message
 const hooks = { claude: 'on', codex: 'none' }, hooksMsg = { claude: '', codex: '' };
 const HOOKS_LABEL = { on: '已安裝', partial: '點此補齊', off: '點此安裝', error: '設定檔有誤' };
@@ -180,7 +180,7 @@ function recLabel() {
   return '停止 ' + String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 }
 /* ---- Gear menu (2026-10-24 redesign, user: 選單太長、不夠簡潔): five rows on top, the rest one level down ----
-   main: 桌布 › / 模式 / 還原桌面 / 工具 › / 設定 ›. Pages are lists of rows; a row is { label, value, run } or
+   main: 桌布 › / 模式 / 還原桌面 / 桌面圖示 / 設定 ›. (2026-11-05: 工具 › gone; 截圖／錄影 stay on their hotkeys) Pages are lists of rows; a row is { label, value, run } or
    { sep } / { head } / { search } / { chips } / { grid }. Rows with an id can be pointed at by the tour. */
 let view = 'main', wpQuery = '', RECENT = [], newThemes = 0;
 let upd = { phase: 'idle', current: '' };
@@ -200,7 +200,9 @@ const PAGES = {
     // 還原桌面 (boss key; 2026-10-23 renamed from 老闆鍵, users didn't get it): hides every VibingWrapper window;
     // same key brings them back. Right side = the hotkey; it is changed under 設定.
     { label: '還原桌面', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
-    { id: 'tools', label: '工具', value: () => (rec.state === 'recording' ? '● ' : '') + '›', run: () => go('tools') },
+    // 桌面圖示 on/off: right side = the state and the hotkey; the menu stays open so the state can be seen to flip
+    { id: 'icons', label: '桌面圖示', value: () => (iconsOn ? '開' : '關') + ' · ' + iconsKey,
+      run: () => window.petAPI.toggleIcons().then(v => { iconsOn = v !== false; renderMenu(); }) },
     { sep: true },
     { id: 'settings', label: '設定', value: () => (upd.phase === 'available' ? '有新版 ' : '') + '›', dot: upd.phase === 'available', run: () => go('settings') },
     { label: 'Debug', show: () => debugMode, value: () => '›', run: () => go('debug') },
@@ -212,14 +214,6 @@ const PAGES = {
         ['wait', '等你', 'Notification'], ['stop', '收尾', 'Stop'], ['end', '結束對話', 'SessionEnd']]
       .map(([k, zh, ev]) => ({ label: zh, key: 'dbg-' + k, value: () => debugLast === k ? '✓ ' + ev : ev,
         run: () => window.petAPI.debugHook(k).then(ok => { debugLast = ok ? k : ''; renderMenu(); }) })),
-  ],
-  tools: () => [back('工具'), { sep: true },
-    // 範圍截圖 / 桌面圖示: right side = the hotkey, as a reminder
-    { label: '範圍截圖', value: () => capLabel(), run: () => { setMenu(false); setTimeout(() => window.petAPI.capture(), 150); } },
-    { label: '螢幕錄影', value: () => recLabel(), run: () => window.petAPI.toggleRecord() },
-    // Game Bar records the app window you were in; press again (or Win+Alt+R) to stop
-    { label: '錄目前視窗', value: () => 'Win+Alt+R', run: () => { setMenu(false); window.petAPI.gameBar(); } },
-    { label: '桌面圖示', value: () => iconsKey, run: () => { setMenu(false); window.petAPI.toggleIcons(); } },
   ],
   settings: () => [back('設定'), { sep: true },
     // Claude / Codex 連動: whether our hooks are in ~/.claude/settings.json / ~/.codex/hooks.json; click adds the missing ones
@@ -305,6 +299,7 @@ function renderMenu() {
 function setMenu(open) {
   if (open) {
     keyMsg.boss = keyMsg.capture = ''; hooksMsg.claude = hooksMsg.codex = ''; loadStyles(); refreshHooks();
+    if (IS_APP && window.petAPI.iconsVisible) window.petAPI.iconsVisible().then(v => { iconsOn = v !== false; renderMenu(); });   // Ctrl+Alt+D may have flipped it
     if (IS_APP) {
       window.petAPI.getWallpaperStyle().then(s => { if (s && s !== wpStyle) { wpStyle = s; renderMenu(); } });   // the tray may have changed it
       window.petAPI.recentThemes().then(r => { RECENT = r || []; if (view === 'wallpaper') renderMenu(); });
@@ -368,7 +363,7 @@ window.addEventListener('blur', () => { if (capturing) endKeyCapture(''); });
 const TOUR = [
   { since: '0.1.5', at: 'gear', text: '我在這裡：左邊是 Claude 的狀態，點齒輪看設定' },
   { since: '0.2.0', at: 'wallpaper', text: '換桌布在這裡：最近用過的排最上面，其他主題到「主題庫」逛' },
-  { since: '0.2.0', at: 'tools', text: '截圖、錄影、收桌面圖示，都收進「工具」' },
+  { since: '0.2.0', at: 'icons', text: '桌面圖示一鍵收起／放回，Ctrl+Alt+D 也行' },
   { since: '0.2.0', at: 'settings', text: 'Claude 連動、改快捷鍵、更新和說明，在「設定」' },
 ];
 const vnum = s => String(s).split('.').map(Number);
