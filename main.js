@@ -3,9 +3,7 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, globalShortcut, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const capture = require('./tools/capture');           // Ctrl+Alt+S region capture (PicPick replacement)
 const claudeBridge = require('./tools/claude-bridge'); // Claude Code hooks → themes/state.json (+ serves themes/)
-const recorder = require('./tools/recorder');        // gear menu / tray → screen recording → Videos
 const wallpaper = require('./tools/wallpaper');       // weather wallpaper behind the desktop icons (replaces Lively)
 const desktopIcons = require('./tools/desktop-icons'); // Ctrl+Alt+D hides / shows all desktop icons (收桌面); also tray + gear menu
 const bossKey = require('./tools/boss-key');           // 老闆鍵: user-defined hotkey hides every VibingWrapper window (boss key)
@@ -207,9 +205,6 @@ ipcMain.handle('pet:set-time-mode', (_e, mode) => {
 ipcMain.handle('pet:debug-mode', () => !!settings.debugMode);
 ipcMain.handle('pet:set-debug-mode', (_e, on) => { settings.debugMode = !!on; saveSettings(); return settings.debugMode; });
 ipcMain.handle('pet:debug-hook', (_e, kind) => !!settings.debugMode && claudeBridge.inject(String(kind)));
-ipcMain.on('pet:record', () => recorder.toggle());
-ipcMain.handle('pet:gamebar', () => recorder.gameBar());
-ipcMain.handle('pet:rec-state', () => recorder.status());
 ipcMain.handle('pet:ai-state', () => claudeBridge.current());   // AI category asks once on load
 ipcMain.handle('pet:icons-hotkey', () => desktopIcons.status.hotkey);
 ipcMain.handle('pet:toggle-icons', () => desktopIcons.toggle());
@@ -218,15 +213,6 @@ ipcMain.handle('pet:icons-visible', () => desktopIcons.get());
 ipcMain.on('pet:boss', () => bossKey.toggle());
 ipcMain.handle('pet:boss-key', () => bossKey.status());
 ipcMain.on('pet:boss-capture', (_e, on) => bossKey.suspend(!!on));
-// 範圍截圖 key (gear menu, under 螢幕錄影): settings.json `captureKey`
-ipcMain.handle('pet:capture-key', () => capture.status());
-ipcMain.on('pet:capture-capture', (_e, on) => capture.suspend(!!on));
-ipcMain.handle('pet:set-capture-key', (_e, acc) => {
-  const r = capture.setKey(acc);
-  if (r.ok) { settings.captureKey = r.key; saveSettings(); }
-  return r;
-});
-ipcMain.on('pet:capture', () => capture.start('region'));
 ipcMain.handle('pet:set-boss-key', (_e, acc) => {
   const r = bossKey.setKey(acc);
   if (r.ok) { settings.bossKey = r.key; saveSettings(); }
@@ -263,7 +249,7 @@ function loginItemArgs() {
 function makeTray() {
   const logo = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.ico'));
   tray = new Tray(logo.isEmpty() ? makeTrayIcon() : logo);
-  tray.setToolTip(recorder.status().state === 'recording' ? 'VibingWrapper · 錄影中' : 'VibingWrapper');
+  tray.setToolTip('VibingWrapper');
   buildTrayMenu();
 }
 
@@ -271,9 +257,6 @@ function buildTrayMenu() {
   if (!tray || tray.isDestroyed()) return;              // no tray while 老闆鍵 is on
   const openAtLogin = app.getLoginItemSettings(loginItemArgs()).openAtLogin;
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '範圍截圖' + (capture.status().registered ? '\t' : '（') + bossKey.pretty(capture.status().key) + (capture.status().registered ? '' : ' 被占用）'), click: () => capture.start('region') },
-    { label: (recorder.status().state === 'idle' ? '螢幕錄影' : '停止錄影') + (recorder.status().hotkey ? '\tCtrl+Alt+R' : '（Ctrl+Alt+R 被占用）'), click: () => recorder.toggle() },
-    { label: '錄目前視窗（Game Bar）\tWin+Alt+R', click: () => recorder.gameBar() },
     { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), click: () => desktopIcons.toggle() },
     { label: (bossKey.status().hidden ? '取消隱藏' : '還原桌面') + (bossKey.status().registered ? '\t' : '（') + bossKey.pretty(bossKey.status().key) + (bossKey.status().registered ? '' : ' 被占用）'), click: () => bossKey.toggle() },
     { type: 'separator' },
@@ -323,12 +306,6 @@ app.whenReady().then(() => {
   settings = loadSettings();
   createWindow();
   makeTray();
-  capture.init(buildTrayMenu, settings.captureKey);
-  recorder.init(st => {                                 // keep tray + gear menu in step with the recorder
-    buildTrayMenu();
-    if (tray && !tray.isDestroyed()) tray.setToolTip(st.state === 'recording' ? 'VibingWrapper · 錄影中' : 'VibingWrapper');
-    if (alive()) win.webContents.send('pet:rec-state', st);
-  });   // menu is rebuilt when a hotkey gets registered
   claudeBridge.start({ logDir: app.getPath('userData'), stateDir: app.getPath('userData'), themeDirs: [themeStore.init(app.getPath('userData'), settings.themeStore)],
     version: app.getVersion(), onState: s => alive() && win.webContents.send('pet:ai-state', s) });   // → %APPDATA%\vibing-wrapper\weather-log.jsonl
   wallpaper.setEnabled(settings.weatherWallpaper, wallpaperUrl());

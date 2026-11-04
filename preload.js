@@ -39,15 +39,9 @@ contextBridge.exposeInMainWorld('petAPI', {
   // 一鍵安裝 hook, agent = 'claude' (default) / 'codex': 'on' / 'partial' / 'off' / 'error' / 'none', and install → { ok, msg }
   hooksStatus: agent => ipcRenderer.invoke('pet:hooks-status', agent),
   installHooks: agent => ipcRenderer.invoke('pet:install-hooks', agent),
-  // screen recording (gear menu): toggle + state { state: idle|starting|recording|stopping, startedAt, file, hotkey }
-  toggleRecord: () => ipcRenderer.send('pet:record'),
-  // Xbox Game Bar recording of the window the user was in (resolves with its title)
-  gameBar: () => ipcRenderer.invoke('pet:gamebar'),
-  getRecState: () => ipcRenderer.invoke('pet:rec-state'),
-  onRecState: fn => ipcRenderer.on('pet:rec-state', (_e, s) => fn(s)),
   getAiState: () => ipcRenderer.invoke('pet:ai-state'),
   onAiState: fn => ipcRenderer.on('pet:ai-state', (_e, s) => fn(s)),
-  // hide / show all desktop icons (also Ctrl+Alt+D and the tray menu)
+  // hide / show all desktop icons (also Ctrl+Alt+D, the tray menu and the gear menu); iconsVisible = current state
   toggleIcons: () => ipcRenderer.invoke('pet:toggle-icons'),
   iconsVisible: () => ipcRenderer.invoke('pet:icons-visible'),
   // true when Ctrl+Alt+D is ours (shown as a reminder next to 桌面圖示)
@@ -57,11 +51,6 @@ contextBridge.exposeInMainWorld('petAPI', {
   bossKey: () => ipcRenderer.invoke('pet:boss-key'),
   bossCapture: on => ipcRenderer.send('pet:boss-capture', !!on),
   setBossKey: acc => ipcRenderer.invoke('pet:set-boss-key', acc),
-  // 範圍截圖: start one, its key { key, registered }, record a new key (same flow as the boss key)
-  capture: () => ipcRenderer.send('pet:capture'),
-  captureKey: () => ipcRenderer.invoke('pet:capture-key'),
-  captureCapture: on => ipcRenderer.send('pet:capture-capture', !!on),
-  setCaptureKey: acc => ipcRenderer.invoke('pet:set-capture-key', acc),
   onBossState: fn => ipcRenderer.on('pet:boss-state', (_e, s) => fn(s)),
   onCommand: fn => ipcRenderer.on('pet:command', (_e, key) => fn(key)),
 });

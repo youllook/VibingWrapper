@@ -76,11 +76,10 @@ it shows up in the gear menu's wallpaper list, no changes to the app needed. The
 |---|---|---|
 | Hide desktop icons (收桌面) | Ctrl+Alt+D | Hides / shows every icon on the desktop: folders, shortcuts and files alike (one feature). Press again to bring them back |
 | Boss key (還原桌面) | Ctrl+Alt+B (**changeable in the gear menu**) | Wallpaper and tray icon vanish, the HUD shrinks to a faint gear, and icons hidden by Ctrl+Alt+D come back, so it looks like an ordinary work desktop. **Press the same shortcut again to restore** — no need to click the gear (gear → 取消隱藏 also works) |
-| Region screenshot (範圍截圖) | Ctrl+Alt+S | Drag a box: PNG to the clipboard plus a copy in `Pictures\Saved Pictures` (`截圖_date_time.png`). Esc or right-click cancels |
 
 These are **global shortcuts**: while VibingWrapper runs it takes them from every app, so they all start with Ctrl+Alt and leave everyday keys like Ctrl+R (reload) and Ctrl+Q alone.
 If another program already holds one, the tray menu marks it 被占用 (taken) and the feature is still a click away in the tray or gear menu.
-The boss key and the region screenshot key can be changed: gear → 設定 (settings) → 快捷鍵, click one, then press the new combination.
+The boss key can be changed: gear → 設定 (settings) → 快捷鍵, click one, then press the new combination.
 
 **Updates**: a red dot on the gear means a newer build is out. Gear → 設定 → 更新方式 picks 自動 (automatic, the default: downloads, swaps the files and restarts while Claude is idle) or 手動 (manual: only the dot; click 更新 to install). Settings, logs and downloaded themes live in `%APPDATA%\vibing-wrapper` and survive updates. Running from source, update with `git pull`.
 
@@ -164,7 +163,7 @@ Received events are logged by name and the first 8 characters of the session ID 
 | `themes/<id>/` | One folder per wallpaper: `theme.json`, `index.html` (a single WebGL shader), `README.md`; currently `weather`, `sea`, `ocean`, `paddy`, `crossing` |
 | `godot/crossing/` | Godot 4 source for the level crossing (the scene is built in code; `shell.html` is the web shell) |
 | `themes/demo.html` | Tuning page: pick a theme, switch states, scrub the clock through day and night |
-| `tools/desktop-icons.*`, `boss-key.js`, `capture.*` | Desktop-icon toggle, boss key, region screenshot |
+| `tools/desktop-icons.*`, `boss-key.js` | Desktop-icon toggle, boss key |
 
 ## Credits
 
