@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { T } = require('./i18n');
 const { execFile, execFileSync } = require('child_process');
 const { app } = require('electron');
 
@@ -49,7 +50,7 @@ async function check() {
     release = { version: best.x.tag_name.replace(/^v/, ''), name: a.name, url: a.browser_download_url, size: a.size,
       sha256: /^sha256:/.test(a.digest || '') ? a.digest.slice(7) : null, notes: String(best.x.body || '') };
     set({ phase: 'available', version: release.version, size: release.size, canInstall: !!programDir(), checkedAt: Date.now() });
-  } catch (e) { set({ phase: 'error', msg: '檢查失敗：' + String(e.message || e).slice(0, 40) }); }
+  } catch (e) { set({ phase: 'error', msg: T('檢查失敗：{0}', String(e.message || e).slice(0, 40)) }); }
   return state;
 }
 
@@ -94,7 +95,7 @@ async function install() {
   try {
     set({ phase: 'downloading', got: 0, total: release.size });
     const r = await fetch(release.url, { cache: 'no-store' });
-    if (!r.ok || !r.body) throw new Error('下載失敗 ' + r.status);
+    if (!r.ok || !r.body) throw new Error(T('下載失敗 {0}', r.status));
     const hash = crypto.createHash('sha256'), out = fs.createWriteStream(zip);
     let got = 0, lastT = 0;
     for await (const chunk of r.body) {
@@ -103,14 +104,14 @@ async function install() {
       if (Date.now() - lastT > 200) { lastT = Date.now(); set({ got }); }
     }
     await new Promise((ok, no) => out.end(e => e ? no(e) : ok()));
-    if (release.size && got !== release.size) throw new Error('檔案大小不符，請重試');
-    if (release.sha256 && hash.digest('hex') !== release.sha256) throw new Error('檔案校驗不符，請重試');
+    if (release.size && got !== release.size) throw new Error(T('檔案大小不符，請重試'));
+    if (release.sha256 && hash.digest('hex') !== release.sha256) throw new Error(T('檔案校驗不符，請重試'));
     set({ phase: 'installing', got });
     fs.mkdirSync(tmp);
     await run(TAR, ['-x', '-f', zip, '-C', tmp]);
     // the zip holds one folder VibingWrapper-x.y.z[-lite]/ with the exe in it
     const inner = fs.readdirSync(tmp).map(n => path.join(tmp, n)).find(p => fs.existsSync(path.join(p, 'VibingWrapper.exe')));
-    if (!inner) throw new Error('壓縮檔裡找不到 VibingWrapper.exe');
+    if (!inner) throw new Error(T('壓縮檔裡找不到 VibingWrapper.exe'));
     const script = path.join(os.tmpdir(), `vibingwrapper-update-${process.pid}.ps1`);
     fs.writeFileSync(script, SWAP);
     const q = s => `"${s}"`;                                   // Windows paths cannot contain double quotes

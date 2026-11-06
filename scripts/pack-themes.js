@@ -25,7 +25,7 @@ for (const id of ids) {
   // 主題庫 shows the preview before the pack is downloaded: it goes up beside the zips as preview-<id>.jpg
   const pv = typeof t.preview === 'string' ? t.preview : 'preview.jpg', pvFile = fs.existsSync(path.join(THEMES, id, pv)) ? `preview-${id}${path.extname(pv)}` : null;
   if (pvFile) fs.copyFileSync(path.join(THEMES, id, pv), path.join(OUT, pvFile));
-  list.push({ id, name: t.name || id, description: t.description || '', order: (Number.isFinite(+t.order) ? +t.order : 99), file, size: buf.length, sha256, version: sha256.slice(0, 12),
+  list.push({ id, name: t.name || id, description: t.description || '', name_en: t.name_en || undefined, description_en: t.description_en || undefined, order: (Number.isFinite(+t.order) ? +t.order : 99), file, size: buf.length, sha256, version: sha256.slice(0, 12),
     tags: Array.isArray(t.tags) ? t.tags : [], preview: pvFile });
   console.log(`${file}  ${buf.length < 1048576 ? Math.ceil(buf.length / 1024) + ' KB' : (buf.length / 1048576).toFixed(1) + ' MB'}`);
 }

@@ -1,7 +1,9 @@
 {
   "name": "天氣",
+  "name_en": "Weather",
   "order": 1,
   "entry": "index.html",
   "description": "只有天空：雲、雨、閃電、陽光光束，跟著台北的日出日落。",
+  "description_en": "Just the sky: clouds, rain, lightning and sunbeams, following sunrise and sunset in Taipei.",
   "tags": ["天空"]
 }

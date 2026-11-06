@@ -1,10 +1,12 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><title>說明 · VibingWrapper</title>
 <!-- 說明 (2026-10-24, user feedback: 老闆鍵不懂意思，可能要做個小手冊敘述每個功能): every feature in a sentence,
-     in the order of the gear menu. Static; the version comes in as ?v=. Opened from 設定 → 說明 and the tray. -->
+     in the order of the gear menu. Static; the version comes in as ?v=, the language as ?lang= (2026-11-06: one
+     <main> per language, the other is hidden). Opened from 設定 → 說明 and the tray. -->
 <style>
   html, body { margin: 0; background: #eef3f8; color: #17324d; font: 14px/1.6 "Microsoft JhengHei UI", "Segoe UI", sans-serif; }
   main { padding: 18px 22px 26px; max-width: 560px; }
+  main[hidden] { display: none; }
   h1 { margin: 0 0 2px; font-size: 18px; letter-spacing: .05em; }
   .ver { color: #5a7590; font-size: 12px; }
   h2 { margin: 20px 0 6px; font-size: 14px; color: #2f6fae; letter-spacing: .05em; }
@@ -14,9 +16,10 @@
   kbd { font: 12px Consolas, monospace; padding: 0 5px; border: 1px solid rgba(23,50,77,.25); border-bottom-width: 2px; border-radius: 4px; background: #fff; white-space: nowrap; }
   .tip { margin-top: 18px; padding: 10px 12px; border-radius: 8px; background: #fff; border: 1px solid rgba(23,50,77,.12); color: #33506b; font-size: 13px; }
 </style></head>
-<body><main>
+<body>
+<main data-lang="zh">
   <h1>VibingWrapper 說明</h1>
-  <div class="ver" id="ver"></div>
+  <div class="ver"></div>
 
   <h2>右上角</h2>
   <dl>
@@ -31,7 +34,7 @@
     <dt>模式</dt><dd>預設跟著真實時間日夜變化；也可以固定成日間或夜間。</dd>
     <dt>還原桌面</dt><dd>一鍵把桌布和圖示全收起來，看起來就是普通桌面；再按一次同一組快捷鍵就回來。</dd>
     <dt>桌面圖示</dt><dd>一鍵收起／放回桌面上所有圖示，右邊會顯示現在是開還是關。</dd>
-    <dt>設定</dt><dd>Claude／Codex 連動、改快捷鍵、更新、這份說明、重新啟動、解除安裝。</dd>
+    <dt>設定</dt><dd>Claude／Codex 連動、改快捷鍵、語言、更新、這份說明、重新啟動、解除安裝。</dd>
   </dl>
 
   <h2>快捷鍵</h2>
@@ -44,14 +47,55 @@
   <dl>
     <dt>Claude 連動</dt><dd>只對 Claude Code 有效：終端機的 CLI，或 Claude Desktop 的 Code 分頁。Claude Desktop 的一般對話沒有 hook，天氣不會變。裝好後要重開 Claude Code。</dd>
     <dt>Codex 連動</dt><dd>有裝 Codex 才會出現，用法同上。</dd>
+    <dt>語言</dt><dd>自動（跟著 Windows 顯示語言）、中文或 English，點一下切換。</dd>
     <dt>更新</dt><dd>有新版時齒輪會出現紅點。「自動」會在 Claude 閒著時自己更新並重開；「手動」只提醒，到 設定 → 更新 點一下。</dd>
   </dl>
 
   <div class="tip">桌布被最大化或全螢幕的視窗蓋住時會自動暫停，不吃效能。設定、紀錄和下載的主題都在 <code>%APPDATA%\vibing-wrapper</code>，更新不會動到。</div>
 </main>
+
+<main data-lang="en" hidden>
+  <h1>VibingWrapper Help</h1>
+  <div class="ver"></div>
+
+  <h2>Top-right corner</h2>
+  <dl>
+    <dt>AI icon</dt><dd>What Claude Code / Codex is doing right now: Idle, Thinking, Working, Wrapping up, Waiting for you. The wallpaper's weather follows it.</dd>
+    <dt>Gear</dt><dd>Every setting lives here. Arrow keys move, Enter picks, ← or Esc goes back.</dd>
+  </dl>
+
+  <h2>Gear menu</h2>
+  <dl>
+    <dt>Wallpaper</dt><dd>Change the wallpaper. Recent picks are on top; with many themes, just start typing to search.</dd>
+    <dt>Theme library</dt><dd>At the bottom of Wallpaper. Previews of every theme: download new ones, apply, remove downloaded ones.</dd>
+    <dt>Mode</dt><dd>Auto follows the real time of day; or hold it at Day or Night.</dd>
+    <dt>Plain desktop</dt><dd>Hides the wallpaper and icons in one go, so it looks like an ordinary desktop; press the same shortcut again to bring it back.</dd>
+    <dt>Desktop icons</dt><dd>Hide or show every icon on the desktop; the right side shows whether they are on or off.</dd>
+    <dt>Settings</dt><dd>Connect Claude / Codex, shortcuts, language, updates, this help, restart, uninstall.</dd>
+  </dl>
+
+  <h2>Shortcuts</h2>
+  <dl>
+    <dt><kbd>Ctrl+Alt+B</kbd></dt><dd>Plain desktop (change it under Settings → Shortcuts)</dd>
+    <dt><kbd>Ctrl+Alt+D</kbd></dt><dd>Hide / show all desktop icons</dd>
+  </dl>
+
+  <h2>Connections and updates</h2>
+  <dl>
+    <dt>Connect Claude</dt><dd>Works with Claude Code only: the CLI in a terminal, or the Code tab in Claude Desktop. Plain Claude Desktop chats have no hooks, so the weather won't change. Restart Claude Code after installing.</dd>
+    <dt>Connect Codex</dt><dd>Shows up only when Codex is installed; same idea.</dd>
+    <dt>Language</dt><dd>Auto (follows the Windows display language), 中文 or English; click to switch.</dd>
+    <dt>Update</dt><dd>A red dot on the gear means a new version. Auto updates and restarts by itself while Claude is idle; Manual only reminds you: click Settings → Update.</dd>
+  </dl>
+
+  <div class="tip">The wallpaper pauses while a maximized or full-screen window covers it, so it costs nothing then. Settings, logs and downloaded themes live in <code>%APPDATA%\vibing-wrapper</code>; updates leave them alone.</div>
+</main>
 <script>
-  const v = new URLSearchParams(location.search).get('v');
-  document.getElementById('ver').textContent = v ? '版本 ' + v : '';
+  const q = new URLSearchParams(location.search), v = q.get('v'), en = q.get('lang') === 'en';
+  document.documentElement.lang = en ? 'en' : 'zh-Hant';
+  if (en) document.title = 'Help · VibingWrapper';
+  document.querySelectorAll('main').forEach(m => { m.hidden = (m.dataset.lang === 'en') !== en; });
+  document.querySelectorAll('.ver').forEach(e => { e.textContent = v ? (en ? 'Version ' : '版本 ') + v : ''; });
   window.addEventListener('keydown', e => { if (e.key === 'Escape') window.close(); });
 </script>
 </body></html>

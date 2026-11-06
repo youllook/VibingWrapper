@@ -1,8 +1,10 @@
 {
   "name": "稻田",
+  "name_en": "Rice Paddy",
   "order": 5,
   "entry": "index.html",
   "enabled": true,
   "description": "屏東老家的稻田：一整片垂著稻穗的稻子在風裡翻成稻浪，遠處是淡藍的山、樹叢、電線桿和小木屋；大太陽、雲影掃過田。Claude 越忙風越大、木屋炊煙越濃，天空一直是晴的。",
+  "description_en": "The rice fields of my hometown in Pingtung: a whole field of drooping ears rolling in the wind, pale blue hills, trees, power poles and a small hut; bright sun, cloud shadows sweeping across. The busier Claude gets, the stronger the wind and the thicker the smoke from the hut; the sky always stays clear.",
   "tags": ["鄉村"]
 }

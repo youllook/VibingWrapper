@@ -1,8 +1,10 @@
 {
   "name": "海月",
+  "name_en": "Moon Jellyfish",
   "order": 8,
   "entry": "index.html",
   "enabled": true,
   "description": "寫實的沖繩海底：珊瑚礁鋪滿海床，水面光柱與焦散；每個 Claude 對話放出一小群海月水母隨海流漂，夜裡有海螢光。",
+  "description_en": "A realistic Okinawa seabed: coral reef, light shafts and caustics; every Claude session releases a small swarm of moon jellyfish drifting with the current, with sea sparkle at night.",
   "tags": ["海", "夜景"]
 }

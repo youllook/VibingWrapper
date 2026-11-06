@@ -1,8 +1,10 @@
 {
   "name": "平交道",
+  "name_en": "Level Crossing",
   "order": 7,
   "entry": "index.html",
   "enabled": true,
   "description": "屏東鄉間的台鐵平交道（Godot 4 網頁匯出）：Claude 思考時警報響、柵欄放下、列車在遠處等；工作時列車一節一節開過去，工作多久就開多久；做完最後一節通過、柵欄升起；等你時列車停在平交道上。跟著時鐘從白天走到黃昏、夜晚。原始碼在 godot/crossing/。",
+  "description_en": "A Taiwan Railway level crossing in the Pingtung countryside (Godot 4 web export): when Claude thinks the bells ring and the barriers drop; while it works the train rolls past car by car, for as long as it works; when it finishes the last car passes and the barriers lift; while it waits for you the train stops at the crossing. Follows the clock from day to dusk to night.",
   "tags": ["鄉村", "鐵道"]
 }

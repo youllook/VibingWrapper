@@ -56,16 +56,22 @@
 </style></head>
 <body>
 <header>
-  <div class="top"><h1>主題庫</h1><input id="q" placeholder="搜尋名稱、說明…" autofocus><button class="link" id="refresh">重新整理</button></div>
+  <div class="top"><h1 data-t>主題庫</h1><input id="q" data-t-ph="搜尋名稱、說明…" autofocus><button class="link" id="refresh" data-t>重新整理</button></div>
   <div class="bar2">
     <span class="seg" id="filter"></span>
     <span id="tags" style="display:contents"></span>
   </div>
-  <div class="meta" id="src">讀取中…</div>
+  <div class="meta" id="src" data-t>讀取中…</div>
 </header>
-<main id="list"><div class="empty">讀取中…</div></main>
+<main id="list"><div class="empty" data-t>讀取中…</div></main>
+<script src="i18n.js"></script>
 <script>
 const api = window.storeAPI;
+// language from ?lang= (main): static text marked data-t / data-t-ph, the rest through T()
+const T = I18N.T;
+document.title = T('主題庫 · VibingWrapper');
+document.querySelectorAll('[data-t]').forEach(e => { e.textContent = T(e.textContent); });
+document.querySelectorAll('[data-t-ph]').forEach(e => { e.placeholder = T(e.dataset.tPh); });
 const mb = n => !n ? '' : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB';
 const FILTERS = [['all', '全部'], ['installed', '已安裝'], ['available', '可下載'], ['update', '有更新']];
 const isHere = t => t.installed || t.status === 'builtin' || t.status === 'installed' || t.status === 'update';
@@ -82,41 +88,42 @@ async function load(fresh) {
   const src = document.getElementById('src');
   const dl = items.filter(t => !isHere(t) || t.status === 'update');
   src.className = 'meta' + (r.error ? ' bad' : '');
-  src.textContent = r.error ? `讀不到線上主題清單（${r.error}），先列出已安裝的`
-    : `來源：${r.source} · ${items.length} 個主題，${items.filter(isHere).length} 個已安裝` + (dl.length ? `，可下載 ${dl.length} 個共 ${mb(dl.reduce((s, t) => s + t.size, 0))}` : '');
+  src.textContent = r.error ? T('讀不到線上主題清單（{0}），先列出已安裝的', r.error)
+    : T('來源：{0} · {1} 個主題，{2} 個已安裝', r.source, items.length, items.filter(isHere).length) + (dl.length ? T('，可下載 {0} 個共 {1}', dl.length, mb(dl.reduce((s, t) => s + t.size, 0))) : '');
   render();
 }
 function renderBars() {
   const f = document.getElementById('filter');
   f.replaceChildren(...FILTERS.map(([k, label]) => {
     const n = items.filter(MATCH[k]).length;
-    const b = btn(k === 'all' ? label : `${label} ${n}`, k === filter ? 'on' : '', () => { filter = k; render(); });
+    const b = btn(k === 'all' ? T(label) : `${T(label)} ${n}`, k === filter ? 'on' : '', () => { filter = k; render(); });
     b.hidden = k === 'update' && !n; return b;
   }));
   const tags = [...new Set(items.flatMap(t => t.tags || []))];
-  document.getElementById('tags').replaceChildren(...tags.map(t => btn(t, 'tag' + (t === tag ? ' on' : ''), () => { tag = tag === t ? null : t; render(); })));
+  document.getElementById('tags').replaceChildren(...tags.map(t => btn(T(t), 'tag' + (t === tag ? ' on' : ''), () => { tag = tag === t ? null : t; render(); })));
 }
 function render() {
   renderBars();
   const q = query.trim().toLowerCase();
   const shown = items.filter(t => MATCH[filter](t) && (!tag || (t.tags || []).includes(tag))
-    && (!q || (t.name + ' ' + t.description + ' ' + (t.tags || []).join(' ') + ' ' + t.id).toLowerCase().includes(q)));
-  if (!shown.length) { listEl.replaceChildren(el('div', 'empty', items.length ? '沒有符合的主題' : '目前沒有主題')); return; }
+    && (!q || (t.name + ' ' + t.description + ' ' + (t.tags || []).map(x => x + ' ' + T(x)).join(' ') + ' ' + t.id).toLowerCase().includes(q)));
+  if (!shown.length) { listEl.replaceChildren(el('div', 'empty', T(items.length ? '沒有符合的主題' : '目前沒有主題'))); return; }
   listEl.replaceChildren(...shown.map(card));
 }
 function card(t) {
   const here = isHere(t), u = ui[t.id] || {};
   const c = el('div', 'card' + (t.id === focusId ? ' focus' : '') + (t.id === current ? ' current' : '')); c.dataset.id = t.id;
   const th = el('div', 'thumb');
-  if (t.preview) { const img = el('img'); img.src = t.preview; img.alt = ''; img.loading = 'lazy'; img.onerror = () => { th.replaceChildren('還沒有預覽圖'); }; th.append(img); }
-  else th.textContent = '還沒有預覽圖';
+  if (t.preview) { const img = el('img'); img.src = t.preview; img.alt = ''; img.loading = 'lazy'; img.onerror = () => { th.replaceChildren(T('還沒有預覽圖')); }; th.append(img); }
+  else th.textContent = T('還沒有預覽圖');
   c.append(th);
   const badge = t.id === current ? ['使用中', 'on'] : t.status === 'update' ? ['有更新', 'up'] : here ? [t.status === 'builtin' ? '內建' : '已安裝', ''] : null;
-  if (badge) c.append(el('span', 'badge ' + badge[1], badge[0]));
+  // the badge says 'Update available'; '有更新' alone is the filter's 'Updates'
+  if (badge) c.append(el('span', 'badge ' + badge[1], badge[1] === 'up' && I18N.lang() === 'en' ? 'Update available' : T(badge[0])));
   // ⋯ → 移除: only for downloaded ones (a built-in theme cannot go)
   if (t.status === 'installed' || t.status === 'update') {
     c.append(btn('⋯', 'more', () => { popId = popId === t.id ? null : t.id; render(); }));
-    if (popId === t.id) { const p = el('div', 'pop'); p.append(btn(`移除「${t.name}」`, '', () => removeTheme(t))); c.append(p); }
+    if (popId === t.id) { const p = el('div', 'pop'); p.append(btn(T('移除「{0}」', t.name), '', () => removeTheme(t))); c.append(p); }
   }
   const b = el('div', 'body');
   const r1 = el('div', 'row1'); r1.append(el('span', 'name', t.name), el('span', 'size', here && t.status !== 'update' ? '' : mb(t.size)));
@@ -125,14 +132,14 @@ function card(t) {
   if (t.job) {                                   // downloading / unpacking
     const bar = el('div', 'pbar' + (t.job.phase === 'extract' ? ' busy' : '')), fill = el('i'); bar.append(fill);
     const pct = t.job.total ? t.job.got / t.job.total : 0; fill.style.width = (pct * 100).toFixed(1) + '%';
-    act.append(bar, el('span', '', t.job.phase === 'extract' ? '安裝中…' : Math.floor(pct * 100) + '%'));
+    act.append(bar, el('span', '', t.job.phase === 'extract' ? T('安裝中…') : Math.floor(pct * 100) + '%'));
   } else if (u.confirm) {                        // second step: say what will happen
-    act.append(el('span', '', `${t.status === 'update' ? '更新' : '下載'} ${mb(t.size)}？`),
-      btn('確定', '', () => { u.confirm = false; start(t); }), btn('取消', 'ghost', () => { u.confirm = false; render(); }));
+    act.append(el('span', '', T(t.status === 'update' ? '更新 {0}？' : '下載 {0}？', mb(t.size))),
+      btn(T('確定'), '', () => { u.confirm = false; start(t); }), btn(T('取消'), 'ghost', () => { u.confirm = false; render(); }));
   } else if (u.msg) act.append(el('span', 'msg' + (u.bad ? ' bad' : ''), u.msg));
-  else act.append(el('span', '', t.id === current ? '' : here ? (t.status === 'update' ? '點一下更新' : '點一下套用') : '點一下下載'));
+  else act.append(el('span', '', t.id === current ? '' : T(here ? (t.status === 'update' ? '點一下更新' : '點一下套用') : '點一下下載')));
   b.append(act);
-  if ((t.tags || []).length) { const ch = el('div', 'chips'); ch.append(...t.tags.map(x => el('span', 'chip', x))); b.append(ch); }
+  if ((t.tags || []).length) { const ch = el('div', 'chips'); ch.append(...t.tags.map(x => el('span', 'chip', T(x)))); b.append(ch); }
   c.append(b);
   c.addEventListener('click', () => {
     popId = null;
@@ -145,13 +152,13 @@ function card(t) {
 async function start(t) {
   t.job = { phase: 'download', got: 0, total: t.size }; render();
   const r = await api.install(t.id);
-  if (r.ok) { await load(false); await use(items.find(x => x.id === t.id) || t, '已安裝並套用'); return; }
+  if (r.ok) { await load(false); await use(items.find(x => x.id === t.id) || t, T('已安裝並套用')); return; }
   ui[t.id] = { msg: r.msg, bad: true }; await load(false);
 }
-async function use(t, msg) { current = await api.use(t.id); ui[t.id] = { msg: msg || '已換成這個桌布' }; render(); setTimeout(() => { if (ui[t.id] && !ui[t.id].bad) { delete ui[t.id]; render(); } }, 2500); }
+async function use(t, msg) { current = await api.use(t.id); ui[t.id] = { msg: msg || T('已換成這個桌布') }; render(); setTimeout(() => { if (ui[t.id] && !ui[t.id].bad) { delete ui[t.id]; render(); } }, 2500); }
 async function removeTheme(t) {
   popId = null;
-  if (!confirm(`移除「${t.name}」？之後可以再從主題庫下載。`)) { render(); return; }
+  if (!confirm(T('移除「{0}」？之後可以再從主題庫下載。', t.name))) { render(); return; }
   const r = await api.remove(t.id); ui[t.id] = { msg: r.msg, bad: !r.ok }; await load(false);
 }
 api.onProgress(p => {

@@ -52,5 +52,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   bossCapture: on => ipcRenderer.send('pet:boss-capture', !!on),
   setBossKey: acc => ipcRenderer.invoke('pet:set-boss-key', acc),
   onBossState: fn => ipcRenderer.on('pet:boss-state', (_e, s) => fn(s)),
-  onCommand: fn => ipcRenderer.on('pet:command', (_e, key) => fn(key)),
+  // 語言: the setting 'auto' / 'zh' / 'en'; setLang saves it and main reloads this page in that language
+  getLang: () => ipcRenderer.invoke('pet:lang'),
+  setLang: l => ipcRenderer.invoke('pet:set-lang', l),
+  onCommand: fn =>ipcRenderer.on('pet:command', (_e, key) => fn(key)),
 });

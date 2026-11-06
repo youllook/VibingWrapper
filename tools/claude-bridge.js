@@ -10,6 +10,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const i18n = require('./i18n');
 
 const PORT = Number(process.env.VIBINGWRAPPER_PORT) || 47321;   // env override only for a side-by-side dev copy
 const THEMES_DIR = path.join(__dirname, '..', 'themes');
@@ -193,7 +194,9 @@ function themes() {
       // 主題庫 (2026-10-24): tags for its filter, and a preview image (theme.json "preview", default preview.jpg) if there is one
       const pv = typeof t.preview === 'string' && /^[\w.-]+\.(jpe?g|png|webp)$/i.test(t.preview) ? t.preview : 'preview.jpg';
       const preview = fs.existsSync(path.join(root, d.name, pv)) ? BASE + d.name + '/' + pv : null;
-      list.push({ id: d.name, name: String(t.name || d.name), order: (Number.isFinite(+t.order) ? +t.order : 99), description: t.description || '', url: BASE + d.name + '/' + entry,
+      // 語言 (2026-11-06): theme.json name_en / description_en in English, the Chinese ones otherwise
+      const en = i18n.lang() === 'en';
+      list.push({ id: d.name, name: String((en && t.name_en) || t.name || d.name), order: (Number.isFinite(+t.order) ? +t.order : 99), description: (en && t.description_en) || t.description || '', url: BASE + d.name + '/' + entry,
         builtin: root === THEMES_DIR, bundled: t.bundled !== false, tags: Array.isArray(t.tags) ? t.tags.map(String).slice(0, 6) : [], preview });
     }
   }

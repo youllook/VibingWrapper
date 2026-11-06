@@ -1,9 +1,11 @@
 {
   "name": "十六位像素熱帶丘陵・Claude",
+  "name_en": "16-bit Tropical Hills · Claude",
   "order": 52,
   "entry": "index.html",
   "enabled": true,
   "bundled": false,
   "description": "Sonic Mania 風的 480×270 真像素：棋盤土丘、棕櫚、瀑布潟湖；水和瀑布是調色盤循環，天氣是換色盤；每個對話是一朵向日葵。",
+  "description_en": "True 480×270 pixel art: checkered hills, palms, a waterfall lagoon; water and falls are palette cycling, weather is a palette swap; each session is a sunflower.",
   "tags": ["像素", "風格實驗"]
 }
