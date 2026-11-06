@@ -110,12 +110,12 @@
 </head>
 <body>
 <div id="bar" class="ui-hit">
-  <div id="ai" title="Claude 狀態">
+  <div id="ai">
     <svg viewBox="0 0 24 24"><g id="aiIcon" class="icon"><g class="halo"></g><g class="ink"></g></g></svg>
     <span id="aiCap">AI</span>
   </div>
   <div id="settings">
-    <button id="gear" title="設定" aria-label="設定">
+    <button id="gear">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <path d="M10.3 4.3c.4-1.8 3-1.8 3.4 0a1.7 1.7 0 0 0 2.6 1.1c1.5-.9 3.3.8 2.4 2.4a1.7 1.7 0 0 0 1 2.5c1.8.4 1.8 3 0 3.4a1.7 1.7 0 0 0-1 2.6c.9 1.5-.9 3.3-2.4 2.4a1.7 1.7 0 0 0-2.6 1c-.4 1.8-3 1.8-3.4 0a1.7 1.7 0 0 0-2.5-1c-1.6.9-3.3-.9-2.4-2.4a1.7 1.7 0 0 0-1.1-2.6c-1.8-.4-1.8-3 0-3.4a1.7 1.7 0 0 0 1.1-2.5c-.9-1.6.8-3.3 2.4-2.4a1.7 1.7 0 0 0 2.5-1.1z"/>
         <circle cx="12" cy="12" r="3"/>
@@ -125,8 +125,13 @@
   </div>
 </div>
 
+<script src="../tools/i18n.js"></script>
 <script>
 const IS_APP = !!window.petAPI;
+// interface language: main loads this page with ?lang=zh|en and reloads it when 語言 changes
+const T = I18N.T;
+document.getElementById('ai').title = T('AI 狀態');
+document.getElementById('gear').title = T('設定'); document.getElementById('gear').setAttribute('aria-label', T('設定'));
 
 /* ---- AI state (Claude hooks → weather state). 'clear' = idle ---- */
 const AI_ICONS = {
@@ -149,7 +154,7 @@ function setAi(s) {
   aiIcon.getBoundingClientRect();                         // restart the draw-in
   aiIcon.classList.add('enter');
   clearTimeout(aiIcon._t); aiIcon._t = setTimeout(() => aiIcon.classList.remove('enter'), 950);
-  aiCap.textContent = 'AI · ' + AI_NAMES[s];
+  aiCap.textContent = 'AI · ' + T(AI_NAMES[s]);
 }
 setAi('clear');
 if (IS_APP) { window.petAPI.getAiState().then(setAi); window.petAPI.onAiState(setAi); }
@@ -165,7 +170,7 @@ const hooks = { claude: 'on', codex: 'none' }, hooksMsg = { claude: '', codex: '
 const HOOKS_LABEL = { on: '已安裝', partial: '點此補齊', off: '點此安裝', error: '設定檔有誤' };
 const refreshHooks = () => IS_APP && Promise.all(Object.keys(hooks).map(a => window.petAPI.hooksStatus(a).then(s => { hooks[a] = s; })))
   .then(() => { if (settingsEl.classList.contains('open')) renderMenu(); });
-const hooksRow = (label, a) => ({ label, show: () => hooks[a] !== 'none', value: () => hooksMsg[a] || HOOKS_LABEL[hooks[a]] || '',
+const hooksRow = (label, a) => ({ label: T(label), show: () => hooks[a] !== 'none', value: () => hooksMsg[a] || T(HOOKS_LABEL[hooks[a]] || ''),
   run: () => window.petAPI.installHooks(a).then(r => { hooksMsg[a] = r.msg; refreshHooks(); }) });
 const TIME_MODES = [['auto', '預設'], ['day', '日間'], ['night', '夜間']];
 /* ---- Gear menu (2026-10-24 redesign, user: 選單太長、不夠簡潔): five rows on top, the rest one level down ----
@@ -174,54 +179,61 @@ const TIME_MODES = [['auto', '預設'], ['day', '日間'], ['night', '夜間']];
 let view = 'main', wpQuery = '', RECENT = [], newThemes = 0;
 let upd = { phase: 'idle', current: '' };
 const go = v => { view = v; wpQuery = ''; focusKey = null; };
-const back = label => ({ label: '‹ ' + label, cls: 'back', key: 'back', run: () => go('main') });
+const back = label => ({ label: '‹ ' + T(label), cls: 'back', key: 'back', run: () => go('main') });
 function updLabel() {
   const pct = upd.total ? Math.floor(upd.got / upd.total * 100) : 0;
-  return { checking: '檢查中…', latest: '已是最新 ' + upd.current, downloading: '下載中 ' + pct + '%', installing: '安裝中，馬上重開…',
-    available: upd.canInstall ? '更新到 ' + upd.version : '有新版 ' + upd.version, error: upd.msg || '檢查失敗' }[upd.phase] || (upd.current + ' · 檢查');
+  return { checking: T('檢查中…'), latest: T('已是最新 {0}', upd.current), downloading: T('下載中 {0}%', pct), installing: T('安裝中，馬上重開…'),
+    available: upd.canInstall ? T('更新到 {0}', upd.version) : T('有新版 {0}', upd.version), error: upd.msg || T('檢查失敗') }[upd.phase] || T('{0} · 檢查', upd.current);
 }
+// 語言: 自動 follows Windows; click cycles 自動 → 中文 → English. The label stays bilingual so it can be found either way.
+const LANGS = [['auto', '自動'], ['zh', '中文'], ['en', 'English']];
+let langSetting = 'auto';
 const PAGES = {
   main: () => [
-    { id: 'wallpaper', label: '桌布', value: () => wpName(wpStyle) + ' ›', run: () => go('wallpaper') },
+    { id: 'wallpaper', label: T('桌布'), value: () => wpName(wpStyle) + ' ›', run: () => go('wallpaper') },
     // 模式: 預設 follows the clock; 日間 / 夜間 hold the wallpaper at late morning / 22:00. Click cycles.
-    { label: '模式', value: () => (TIME_MODES.find(m => m[0] === timeMode) || TIME_MODES[0])[1],
+    { label: T('模式'), value: () => T((TIME_MODES.find(m => m[0] === timeMode) || TIME_MODES[0])[1]),
       run: () => { const i = TIME_MODES.findIndex(m => m[0] === timeMode); window.petAPI.setTimeMode(TIME_MODES[(i + 1) % TIME_MODES.length][0]).then(m => { timeMode = m; renderMenu(); }); } },
     // 還原桌面 (boss key; 2026-10-23 renamed from 老闆鍵, users didn't get it): hides every VibingWrapper window;
     // same key brings them back. Right side = the hotkey; it is changed under 設定.
-    { label: '還原桌面', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
+    { label: T('還原桌面'), value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } },
     // 桌面圖示 on/off: right side = the state and the hotkey; the menu stays open so the state can be seen to flip
-    { id: 'icons', label: '桌面圖示', value: () => (iconsOn ? '開' : '關') + ' · ' + iconsKey,
+    { id: 'icons', label: T('桌面圖示'), value: () => T(iconsOn ? '開' : '關') + ' · ' + iconsKey,
       run: () => window.petAPI.toggleIcons().then(v => { iconsOn = v !== false; renderMenu(); }) },
     { sep: true },
-    { id: 'settings', label: '設定', value: () => (upd.phase === 'available' ? '有新版 ' : '') + '›', dot: upd.phase === 'available', run: () => go('settings') },
+    { id: 'settings', label: T('設定'), value: () => (upd.phase === 'available' ? T('有新版') + ' ' : '') + '›', dot: upd.phase === 'available', run: () => go('settings') },
     { label: 'Debug', show: () => debugMode, value: () => '›', run: () => go('debug') },
   ],
   // Debug 模式 (2026-10-26): fire a hook by hand to see the wallpaper react. It counts as one more session, so a
   // real session that is more urgent (e.g. waiting) still wins the sky; 收尾 turns to 待命 by itself after 20 s.
-  debug: () => [back('Debug'), { head: '手動觸發 hook' },
+  debug: () => [back('Debug'), { head: T('手動觸發 hook') },
     ...[['start', '待命', 'SessionStart'], ['prompt', '思考中', 'UserPromptSubmit'], ['tool', '執行中', 'PreToolUse'],
         ['wait', '等你', 'Notification'], ['stop', '收尾', 'Stop'], ['end', '結束對話', 'SessionEnd']]
-      .map(([k, zh, ev]) => ({ label: zh, key: 'dbg-' + k, value: () => debugLast === k ? '✓ ' + ev : ev,
+      .map(([k, zh, ev]) => ({ label: T(zh), key: 'dbg-' + k, value: () => debugLast === k ? '✓ ' + ev : ev,
         run: () => window.petAPI.debugHook(k).then(ok => { debugLast = ok ? k : ''; renderMenu(); }) })),
   ],
   settings: () => [back('設定'), { sep: true },
     // Claude / Codex 連動: whether our hooks are in ~/.claude/settings.json / ~/.codex/hooks.json; click adds the missing ones
     hooksRow('Claude 連動', 'claude'),
     hooksRow('Codex 連動', 'codex'),
-    { head: '快捷鍵（點一下可改）' },
-    { label: '還原桌面', key: 'k-boss', value: () => keyMsg.boss || bossLabel(), run: () => startKeyCapture('boss') },
+    { head: T('快捷鍵（點一下可改）') },
+    { label: T('還原桌面'), key: 'k-boss', value: () => keyMsg.boss || bossLabel(), run: () => startKeyCapture('boss') },
     { sep: true },
+    // 語言 (2026-11-06): main saves it and reloads every window in the new language
+    { label: I18N.lang() === 'en' ? 'Language' : '語言 · Language', key: 'lang',
+      value: () => T((LANGS.find(l => l[0] === langSetting) || LANGS[0])[1]),
+      run: () => { const i = LANGS.findIndex(l => l[0] === langSetting); window.petAPI.setLang(LANGS[(i + 1) % LANGS.length][0]).then(s => { langSetting = s; }); } },
     // 更新: checks GitHub Releases; when a newer build is there, one click downloads it and restarts into it
-    { label: '更新', key: 'upd', value: () => updLabel(), dot: upd.phase === 'available',
+    { label: T('更新'), key: 'upd', value: () => updLabel(), dot: upd.phase === 'available',
       run: () => upd.phase === 'available' && upd.canInstall ? window.petAPI.updateInstall() : window.petAPI.updateCheck() },
     // 自動: installs by itself while Claude is idle; 手動: only the red dot, install from the row above
-    { label: '　更新方式', key: 'upd-mode', value: () => upd.mode === 'manual' ? '手動' : '自動',
+    { label: '　' + T('更新方式'), key: 'upd-mode', value: () => T(upd.mode === 'manual' ? '手動' : '自動'),
       run: () => window.petAPI.setUpdateMode(upd.mode === 'manual' ? 'auto' : 'manual').then(m => { upd = { ...upd, mode: m }; renderMenu(); }) },
-    { label: '說明', value: () => '›', run: () => { setMenu(false); window.petAPI.openHelp(); } },
-    { label: 'Debug 模式', key: 'debug-mode', value: () => debugMode ? '開' : '關',
+    { label: T('說明'), value: () => '›', run: () => { setMenu(false); window.petAPI.openHelp(); } },
+    { label: T('Debug 模式'), key: 'debug-mode', value: () => T(debugMode ? '開' : '關'),
       run: () => window.petAPI.setDebugMode(!debugMode).then(on => { debugMode = on; renderMenu(); }) },
-    { label: '重新啟動', run: () => window.petAPI.restart() },
-    { label: '解除安裝', run: () => { setMenu(false); window.petAPI.uninstall(); } },   // main shows the confirmation
+    { label: T('重新啟動'), run: () => window.petAPI.restart() },
+    { label: T('解除安裝'), run: () => { setMenu(false); window.petAPI.uninstall(); } },   // main shows the confirmation
   ],
   wallpaper: wallpaperPage,
 };
@@ -235,16 +247,16 @@ function wallpaperPage() {
   const recent = RECENT.map(id => WP_STYLES.find(t => t.id === id)).filter(Boolean).slice(0, 3);
   return [back('桌布'),
     ...(WP_STYLES.length > 12 ? [{ search: true }] : []),
-    ...(!q && WP_STYLES.length > 6 && recent.length ? [{ head: '最近用過' }, { chips: recent.map(pick) }, { head: '全部' }] : [{ sep: true }]),
-    hits.length ? { grid: hits.map(pick) } : { head: '沒有符合的桌布' },
+    ...(!q && WP_STYLES.length > 6 && recent.length ? [{ head: T('最近用過') }, { chips: recent.map(pick) }, { head: T('全部') }] : [{ sep: true }]),
+    hits.length ? { grid: hits.map(pick) } : { head: T('沒有符合的桌布') },
     { sep: true },
-    { id: 'library', label: '主題庫…', value: () => newThemes ? '新 ' + newThemes : '›', run: () => { setMenu(false); window.petAPI.openStore(); } },
+    { id: 'library', label: T('主題庫…'), value: () => newThemes ? T('新 {0}', newThemes) : '›', run: () => { setMenu(false); window.petAPI.openStore(); } },
   ];
 }
 
 const settingsEl = document.getElementById('settings'), menuEl = document.getElementById('menu'), gearEl = document.getElementById('gear');
 // while hidden the menu offers just the way back
-const STEALTH_MENU = [{ label: '取消隱藏', value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } }];
+const STEALTH_MENU = [{ label: T('取消隱藏'), value: () => bossLabel(), run: () => { setMenu(false); window.petAPI.bossToggle(); } }];
 let focusKey = null;                                      // the control to focus again after a re-render (keyboard use)
 function button(cls, s, inner) {
   const b = document.createElement('button');
@@ -258,7 +270,7 @@ function button(cls, s, inner) {
 const tick = on => { const t = document.createElement('span'); t.className = 'tick'; t.textContent = on ? '✓' : ''; return t; };
 const nameSpan = text => { const n = document.createElement('span'); n.className = 'nm'; n.textContent = text; return n; };
 function renderMenu() {
-  const page = boss.hidden ? STEALTH_MENU : (IS_APP ? PAGES[view] || PAGES.main : () => [{ label: '重新整理', run: () => location.reload() }])();
+  const page = boss.hidden ? STEALTH_MENU : (IS_APP ? PAGES[view] || PAGES.main : () => [{ label: T('重新整理'), run: () => location.reload() }])();
   const rows = (typeof page === 'function' ? page() : page).filter(s => !s.show || s.show());
   const coach = coachBox();
   menuEl.classList.toggle('wide', (view === 'wallpaper' || !!coach) && !boss.hidden);
@@ -266,7 +278,7 @@ function renderMenu() {
     if (s.sep) { const d = document.createElement('div'); d.className = 'sep'; return d; }
     if (s.head) { const d = document.createElement('div'); d.className = 'head'; d.textContent = s.head; return d; }
     if (s.search) {
-      const i = document.createElement('input'); i.className = 'search'; i.placeholder = '搜尋桌布…'; i.value = wpQuery; i.dataset.k = 'search';
+      const i = document.createElement('input'); i.className = 'search'; i.placeholder = T('搜尋桌布…'); i.value = wpQuery; i.dataset.k = 'search';
       i.addEventListener('input', () => { wpQuery = i.value; focusKey = 'search'; renderMenu(); });
       i.addEventListener('keydown', ev => { if (ev.key === 'Enter') { const t = menuEl.querySelector('.grid .tile'); if (t) t.click(); } });
       return i;
@@ -324,8 +336,8 @@ let boss = { key: 'Control+Alt+B', registered: true }, capturing = null;
 const keyMsg = { boss: '' };
 const KEY_API = { boss: { pause: on => window.petAPI.bossCapture(on), set: acc => window.petAPI.setBossKey(acc), got: r => { boss = r; } } };
 const prettyKey = acc => acc.replace('Control', 'Ctrl').replace('Super', 'Win');
-const bossLabel = () => prettyKey(boss.key) + (boss.registered ? '' : ' 被占用');
-function startKeyCapture(which) { if (capturing) endKeyCapture(''); capturing = which; keyMsg[which] = '請按新組合…'; if (IS_APP) KEY_API[which].pause(true); }
+const bossLabel = () => prettyKey(boss.key) + (boss.registered ? '' : ' ' + T('被占用'));
+function startKeyCapture(which) { if (capturing) endKeyCapture(''); capturing = which; keyMsg[which] = T('請按新組合…'); if (IS_APP) KEY_API[which].pause(true); }
 function endKeyCapture(msg) { const w = capturing; if (!w) return; capturing = null; keyMsg[w] = msg; if (IS_APP) KEY_API[w].pause(false); renderMenu(); }
 const PUNCT = { Space: 'Space', Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', Backslash: '\\' };
 const keyName = code => /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit\d$/.test(code) ? code.slice(5) : /^F\d{1,2}$/.test(code) ? code : PUNCT[code] || null;
@@ -336,9 +348,9 @@ window.addEventListener('keydown', ev => {
   const k = keyName(ev.code);
   if (!k) return;                                       // a modifier on its own: keep waiting
   const mods = [ev.ctrlKey && 'Control', ev.altKey && 'Alt', ev.shiftKey && 'Shift', ev.metaKey && 'Super'].filter(Boolean);
-  if (!mods.length && !/^F\d/.test(k)) { keyMsg[capturing] = '要加 Ctrl／Alt／Shift'; renderMenu(); return; }
+  if (!mods.length && !/^F\d/.test(k)) { keyMsg[capturing] = T('要加 Ctrl／Alt／Shift'); renderMenu(); return; }
   const w = capturing;
-  KEY_API[w].set([...mods, k].join('+')).then(r => { KEY_API[w].got(r); endKeyCapture(r.ok ? '已更新' : '被占用，沒換'); });
+  KEY_API[w].set([...mods, k].join('+')).then(r => { KEY_API[w].got(r); endKeyCapture(T(r.ok ? '已更新' : '被占用，沒換')); });
 }, true);
 window.addEventListener('blur', () => { if (capturing) endKeyCapture(''); });
 
@@ -365,7 +377,7 @@ function startTour(version) {
   tour = TOUR.filter(s => vgt(s.since, seen) && !vgt(s.since, version));
   if (!tour.length) return;
   // an update with only menu steps still needs the user to open the menu: the bubble says what changed
-  const text = tour[0].at === 'gear' ? tour[0].text : `更新到 ${version}：選單改版了，點齒輪看看`;
+  const text = tour[0].at === 'gear' ? T(tour[0].text) : T('更新到 {0}：選單改版了，點齒輪看看', version);
   if (tour[0].at === 'gear') tour.shift();
   showBubble(text);
 }
@@ -389,11 +401,11 @@ function tourMenuOpened() { endBubble(); }
 function coachBox() {
   if (!tourAt()) return null;
   const d = document.createElement('div'); d.className = 'coach-box';
-  const t = document.createElement('div'); t.textContent = tour[0].text;
+  const t = document.createElement('div'); t.textContent = T(tour[0].text);
   const row = document.createElement('div'); row.className = 'coach-row';
-  const n = document.createElement('span'); n.textContent = tour.length > 1 ? `還有 ${tour.length - 1} 個` : '';
-  const skip = document.createElement('button'); skip.textContent = '略過'; skip.className = 'ghost';
-  const next = document.createElement('button'); next.textContent = tour.length > 1 ? '下一個' : '知道了';
+  const n = document.createElement('span'); n.textContent = tour.length > 1 ? T('還有 {0} 個', tour.length - 1) : '';
+  const skip = document.createElement('button'); skip.textContent = T('略過'); skip.className = 'ghost';
+  const next = document.createElement('button'); next.textContent = T(tour.length > 1 ? '下一個' : '知道了');
   skip.addEventListener('click', ev => { ev.stopPropagation(); finishTour(); renderMenu(); });
   next.addEventListener('click', ev => { ev.stopPropagation(); tour.shift(); if (!tour.length) finishTour(); focusKey = null; renderMenu(); });
   row.append(n, skip, next); d.append(t, row);
@@ -410,7 +422,8 @@ if (IS_APP) {
   window.petAPI.getWallpaperStyle().then(s => { wpStyle = s || 'weather'; }); loadStyles();
   window.petAPI.getTimeMode().then(m => { timeMode = m || 'auto'; });
   if (window.petAPI.getDebugMode) window.petAPI.getDebugMode().then(on => { debugMode = !!on; });
-  window.petAPI.iconsHotkey().then(ok => { iconsKey = ok ? 'Ctrl+Alt+D' : '熱鍵被占用'; });
+  window.petAPI.iconsHotkey().then(ok => { iconsKey = ok ? 'Ctrl+Alt+D' : T('熱鍵被占用'); });
+  if (window.petAPI.getLang) window.petAPI.getLang().then(s => { langSetting = s || 'auto'; });
   const setBoss = s => { if (!s) return; boss = s; document.body.classList.toggle('stealth', !!s.hidden); if (settingsEl.classList.contains('open')) renderMenu(); };
   window.petAPI.bossKey().then(setBoss); window.petAPI.onBossState(setBoss);
   const setUpd = s => { if (!s) return; upd = s; renderMenu(); };   // renderMenu also sets the gear's dot

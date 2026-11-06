@@ -15,6 +15,7 @@ const { app, dialog } = require('electron');
 const { execFile, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const { T } = require('./i18n');
 const path = require('path');
 
 // top level of dist/win-unpacked (electron-builder, Electron 44); check again after an Electron upgrade
@@ -101,14 +102,14 @@ async function run({ claudeHooks, codexHooks, desktopIcons, loginItemArgs }) {
   const dir = programDir(), dataDir = app.getPath('userData');
   log(`uninstall asked (${app.getVersion()}, ${dir || 'from source'})`);
   const { response } = await dialog.showMessageBox({
-    type: 'warning', title: '解除安裝 VibingWrapper', message: '要解除安裝 VibingWrapper 嗎？',
-    detail: ['會做這些事：',
-      '・從 Claude Code／Codex 設定移除 VibingWrapper 的 hook（其他設定不動）',
-      '・關閉開機自動啟動',
-      `・刪除設定與紀錄（${dataDir}）`,
-      dir ? `・刪除程式檔案（${dir}）` : '・開發模式：不刪程式檔案',
-      '', '完成後程式會關閉。'].join('\n'),
-    buttons: ['解除安裝', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+    type: 'warning', title: T('解除安裝 VibingWrapper'), message: T('要解除安裝 VibingWrapper 嗎？'),
+    detail: [T('會做這些事：'),
+      T('・從 Claude Code／Codex 設定移除 VibingWrapper 的 hook（其他設定不動）'),
+      T('・關閉開機自動啟動'),
+      T('・刪除設定與紀錄（{0}）', dataDir),
+      dir ? T('・刪除程式檔案（{0}）', dir) : T('・開發模式：不刪程式檔案'),
+      '', T('完成後程式會關閉。')].join('\n'),
+    buttons: [T('解除安裝'), T('取消')], defaultId: 1, cancelId: 1, noLink: true,
   });
   log(`dialog response ${response}`);
   if (response !== 0) return false;
@@ -117,8 +118,8 @@ async function run({ claudeHooks, codexHooks, desktopIcons, loginItemArgs }) {
     const hooks = h.uninstall();
     log(`${name} hooks: ${hooks.msg}`);
     if (!hooks.ok) {
-      await dialog.showMessageBox({ type: 'error', title: '解除安裝 VibingWrapper', message: `沒辦法移除 ${name} hook，已停止解除安裝。`,
-        detail: `${hooks.msg}：${h.FILE}\n修好這個檔案後再試一次，或手動刪掉裡面含 127.0.0.1:47321 的 hook。`, buttons: ['好'], noLink: true });
+      await dialog.showMessageBox({ type: 'error', title: T('解除安裝 VibingWrapper'), message: T('沒辦法移除 {0} hook，已停止解除安裝。', name),
+        detail: T('{0}：{1}\n修好這個檔案後再試一次，或手動刪掉裡面含 127.0.0.1:47321 的 hook。', hooks.msg, h.FILE), buttons: [T('好')], noLink: true });
       return false;
     }
   }
@@ -132,8 +133,8 @@ async function run({ claudeHooks, codexHooks, desktopIcons, loginItemArgs }) {
   try { scheduleCleanup(dataDir, dir); log('cleanup launched'); }
   catch (e) {
     log(`cleanup launch failed: ${e.message}`);
-    await dialog.showMessageBox({ type: 'warning', title: '解除安裝 VibingWrapper', message: 'hook 已移除，但沒辦法自動刪除檔案。',
-      detail: `程式關閉後，請手動刪除：\n${dataDir}${dir ? '\n' + dir : ''}`, buttons: ['好'], noLink: true });
+    await dialog.showMessageBox({ type: 'warning', title: T('解除安裝 VibingWrapper'), message: T('hook 已移除，但沒辦法自動刪除檔案。'),
+      detail: T('程式關閉後，請手動刪除：\n{0}', dataDir + (dir ? '\n' + dir : '')), buttons: [T('好')], noLink: true });
   }
   app.exit(0);
   return true;

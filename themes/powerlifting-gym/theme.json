@@ -1,11 +1,10 @@
 {
   "name": "健力健身房",
+  "name_en": "Powerlifting Gym",
   "order": 40,
   "entry": "index.html",
   "enabled": true,
   "description": "美式地下健身房，Claude 幹活時選手拼命深蹲，越做槓越重",
-  "tags": [
-    "風格實驗",
-    "夜景"
-  ]
+  "description_en": "An American basement gym: while Claude works the lifter squats for dear life, and the bar gets heavier the longer it goes.",
+  "tags": ["風格實驗", "夜景"]
 }

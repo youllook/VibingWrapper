@@ -1,7 +1,9 @@
 {
   "name": "海",
+  "name_en": "Ocean",
   "order": 3,
   "entry": "index.html",
   "description": "貼近海面的立體海：浪頭、白沫、月光，船隊在浪裡起伏。",
+  "description_en": "A 3D sea close to the surface: crests, foam and moonlight, a fleet rising and falling on the waves.",
   "tags": ["海"]
 }

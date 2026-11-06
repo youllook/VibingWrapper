@@ -1,8 +1,10 @@
 {
   "name": "鷗航灣・Claude",
+  "name_en": "Gull Bay · Claude",
   "order": 54,
   "entry": "index.html",
   "enabled": true,
   "bundled": false,
-  "description": "空拍正上方的熱帶海灘：左 1/3 是林地與沙灘，右 2/3 是海到深海；每個對話是一艘下進上出的船，等你回應時海鳥盤旋。"
+  "description": "空拍正上方的熱帶海灘：左 1/3 是林地與沙灘，右 2/3 是海到深海；每個對話是一艘下進上出的船，等你回應時海鳥盤旋。",
+  "description_en": "A tropical beach seen straight from above: woods and sand on the left third, sea to deep water on the right. Each session is a boat that sails in and out; gulls circle while it waits for you."
 }

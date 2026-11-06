@@ -1,8 +1,10 @@
 {
   "name": "基礎版",
+  "name_en": "Basic",
   "order": 0,
   "entry": "index.html",
   "enabled": true,
   "description": "最輕的版本：低飽和的分層山霧，正中間即時顯示每個 session 的狀態、工具和活動量，右下角是除錯資訊。",
+  "description_en": "The lightest one: layered misty hills in muted colors, with every session's state, tools and activity live in the middle and debug info bottom-right.",
   "tags": ["簡約"]
 }

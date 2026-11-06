@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const i18n = require('./i18n'), { T } = i18n;
 const { execFile } = require('child_process');
 
 const RELEASE = 'https://github.com/youllook/VibingWrapper/releases/download/themes/';
@@ -40,7 +41,7 @@ async function open(file) {
     return { size: fs.statSync(f).size, body: fs.createReadStream(f, { highWaterMark: 256 * 1024 }) };
   }
   const r = await fetch(SOURCE + file, { cache: 'no-store' });
-  if (!r.ok || !r.body) throw new Error('下載失敗 ' + r.status);
+  if (!r.ok || !r.body) throw new Error(T('下載失敗 {0}', r.status));
   return { size: Number(r.headers.get('content-length')) || 0, body: r.body };
 }
 const packInfo = id => { try { return JSON.parse(fs.readFileSync(path.join(DIR, id, '.pack.json'), 'utf8')); } catch { return null; } };
@@ -50,7 +51,7 @@ async function fetchCatalog(fresh) {
   if (!fresh && cache && Date.now() - cacheT < 5 * 60000) return cache;
   let j;
   if (isLocal()) j = JSON.parse(fs.readFileSync(path.join(SOURCE, 'themes.json'), 'utf8'));
-  else { const r = await fetch(SOURCE + 'themes.json', { cache: 'no-store' }); if (!r.ok) throw new Error('讀不到主題清單（' + r.status + '）'); j = await r.json(); }
+  else { const r = await fetch(SOURCE + 'themes.json', { cache: 'no-store' }); if (!r.ok) throw new Error(T('讀不到主題清單（{0}）', r.status)); j = await r.json(); }
   cache = (Array.isArray(j.themes) ? j.themes : []).filter(t => t && ID_RE.test(t.id) && typeof t.file === 'string' && /^[\w.-]+\.zip$/.test(t.file));
   cacheT = Date.now();
   return cache;
@@ -66,7 +67,8 @@ async function list(installedThemes, fresh) {
     let status = 'available';
     if (p) status = p.version === t.version ? 'installed' : 'update';
     else if (h && h.builtin && h.bundled !== false) status = 'builtin';
-    return { id: t.id, name: String(t.name || t.id), description: String(t.description || ''), size: Number(t.size) || 0, status,
+    const en = i18n.lang() === 'en';
+    return { id: t.id, name: String((en && t.name_en) || t.name || t.id), description: String((en && t.description_en) || t.description || ''), size: Number(t.size) || 0, status,
       tags: Array.isArray(t.tags) ? t.tags.map(String).slice(0, 6) : [], preview: previewUrl(t.preview),
       order: (Number.isFinite(+t.order) ? +t.order : 99), job: busy.get(t.id) || null };
   }).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
@@ -76,10 +78,10 @@ const run = (cmd, args) => new Promise((res, rej) => execFile(cmd, args, { windo
 
 // onProgress({ id, phase: download | extract | done | error, got, total, msg })
 async function install(id, onProgress = () => {}) {
-  if (busy.has(id)) return { ok: false, msg: '正在安裝' };
+  if (busy.has(id)) return { ok: false, msg: T('正在安裝') };
   let t;
   try { t = (await fetchCatalog()).find(x => x.id === id); } catch (e) { return { ok: false, msg: String(e.message).slice(0, 60) }; }
-  if (!t) return { ok: false, msg: '清單裡沒有這個主題' };
+  if (!t) return { ok: false, msg: T('清單裡沒有這個主題') };
   const job = { phase: 'download', got: 0, total: t.size || 0 };
   const tell = extra => { Object.assign(job, extra); busy.set(id, job); onProgress({ id, ...job }); };
   tell({});
@@ -87,17 +89,17 @@ async function install(id, onProgress = () => {}) {
   try {
     const src = await open(t.file);
     const total = src.size || t.size || 0;
-    if (total > MAX_PACK) throw new Error('檔案太大');
+    if (total > MAX_PACK) throw new Error(T('檔案太大'));
     const hash = crypto.createHash('sha256'), out = fs.createWriteStream(zip);
     let got = 0, lastT = 0;
     for await (const chunk of src.body) {
-      got += chunk.length; if (got > MAX_PACK) throw new Error('檔案太大');
+      got += chunk.length; if (got > MAX_PACK) throw new Error(T('檔案太大'));
       hash.update(chunk); if (!out.write(chunk)) await new Promise(ok => out.once('drain', ok));
       if (Date.now() - lastT > 120) { lastT = Date.now(); tell({ got, total }); }
     }
     await new Promise((ok, no) => out.end(e => e ? no(e) : ok()));
     tell({ got, total, phase: 'extract' });
-    if (t.sha256 && hash.digest('hex') !== t.sha256) throw new Error('檔案校驗不符，請重試');
+    if (t.sha256 && hash.digest('hex') !== t.sha256) throw new Error(T('檔案校驗不符，請重試'));
     fs.mkdirSync(tmp);
     await run(TAR, ['-x', '-f', zip, '-C', tmp]);
     const inner = path.join(tmp, id);
@@ -108,7 +110,7 @@ async function install(id, onProgress = () => {}) {
     fs.renameSync(inner, dest);
     fs.rmSync(old, { recursive: true, force: true });
     busy.delete(id); onProgress({ id, phase: 'done', got, total });
-    return { ok: true, msg: '已安裝' };
+    return { ok: true, msg: T('已安裝') };
   } catch (e) {
     const msg = String(e.message || e).slice(0, 60);
     busy.delete(id); onProgress({ id, phase: 'error', msg });
@@ -120,9 +122,9 @@ async function install(id, onProgress = () => {}) {
 
 // only downloaded ones can go; a built-in theme of the same id comes back
 function remove(id) {
-  if (!ID_RE.test(id) || !packInfo(id)) return { ok: false, msg: '不是下載的主題' };
+  if (!ID_RE.test(id) || !packInfo(id)) return { ok: false, msg: T('不是下載的主題') };
   fs.rmSync(path.join(DIR, id), { recursive: true, force: true });
-  return { ok: true, msg: '已移除' };
+  return { ok: true, msg: T('已移除') };
 }
 
 module.exports = { init, list, install, remove, sourceLabel, RELEASE };

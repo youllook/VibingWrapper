@@ -15,6 +15,8 @@ const uninstall = require('./tools/uninstall');         // 解除安裝: hooks o
 const themeStore = require('./tools/theme-store');     // 主題庫: theme packs from GitHub Releases → userData/themes/
 const updater = require('./tools/updater');            // 自動更新: newer zip build from GitHub Releases, swapped in after exit
 const debugLog = require('./tools/debug-log');         // 除錯紀錄 → userData/debug.log (send this file when it won't open)
+const i18n = require('./tools/i18n');                  // 語言 (2026-11-06): 中文 / English, T('中文原文') everywhere
+const T = i18n.T;
 
 // a dev copy can run beside the installed app: its own profile (and VIBINGWRAPPER_PORT for the bridge)
 if (process.env.VIBINGWRAPPER_PROFILE) app.setPath('userData', process.env.VIBINGWRAPPER_PROFILE);
@@ -79,7 +81,7 @@ function createWindow() {
     },
   });
   win.setIgnoreMouseEvents(true, { forward: true });
-  win.loadFile(path.join(__dirname, 'prototype', PAGE));
+  win.loadFile(path.join(__dirname, 'prototype', PAGE), { query: { lang: i18n.lang() } });
   // a fresh page starts click-through again (a reload mid-hover used to leave the strip holding the mouse)
   win.webContents.on('did-finish-load', () => { if (alive()) { win.setIgnoreMouseEvents(true, { forward: true }); menuOnTop(false); } });
   win.once('ready-to-show', () => win.showInactive());
@@ -113,7 +115,7 @@ const wallpaperUrl = () => {
   return u && m !== 'auto' ? u + (u.includes('?') ? '&' : '?') + m + '=1' : u;
 };
 ipcMain.handle('pet:wallpaper-style', () => settings.wallpaperStyle);
-ipcMain.handle('pet:wallpaper-styles', () => claudeBridge.themes().map(t => ({ id: t.id, name: t.name })));
+ipcMain.handle('pet:wallpaper-styles', () => claudeBridge.themes().map(t => ({ id: t.id, name: t.name })));   // name in the current language
 // 最近用過 (2026-10-24): the gear menu's 桌布 page puts the last few picks on top, so a long list stays quick
 const recentThemes = () => (Array.isArray(settings.recentThemes) ? settings.recentThemes : []).filter(id => claudeBridge.themeUrl(id));
 ipcMain.handle('pet:recent-themes', () => recentThemes());
@@ -133,10 +135,10 @@ ipcMain.handle('pet:set-wallpaper-style', (_e, style) => setWallpaperStyle(style
 let storeWin = null;
 function openStore(focusId) {
   if (storeWin && !storeWin.isDestroyed()) { storeWin.show(); storeWin.focus(); storeWin.webContents.send('store:focus', focusId || null); return; }
-  storeWin = new BrowserWindow({ width: 820, height: 680, minWidth: 460, minHeight: 400, title: '主題庫 · VibingWrapper', autoHideMenuBar: true,
+  storeWin = new BrowserWindow({ width: 820, height: 680, minWidth: 460, minHeight: 400, title: T('主題庫 · VibingWrapper'), autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.ico'), backgroundColor: '#eef3f8', show: false,
     webPreferences: { preload: path.join(__dirname, 'tools', 'store-preload.js'), contextIsolation: true, nodeIntegration: false } });
-  storeWin.loadFile(path.join(__dirname, 'tools', 'store.html'));
+  storeWin.loadFile(path.join(__dirname, 'tools', 'store.html'), { query: { lang: i18n.lang() } });
   storeWin.once('ready-to-show', () => { storeWin.show(); if (focusId) storeWin.webContents.send('store:focus', focusId); });
   storeWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   storeWin.webContents.on('will-navigate', e => e.preventDefault());
@@ -178,15 +180,32 @@ ipcMain.handle('store:use', (_e, id) => setWallpaperStyle(String(id)));
 let helpWin = null;
 function openHelp() {
   if (helpWin && !helpWin.isDestroyed()) { helpWin.show(); helpWin.focus(); return; }
-  helpWin = new BrowserWindow({ width: 520, height: 640, minWidth: 380, minHeight: 360, title: '說明 · VibingWrapper', autoHideMenuBar: true,
+  helpWin = new BrowserWindow({ width: 520, height: 640, minWidth: 380, minHeight: 360, title: T('說明 · VibingWrapper'), autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.ico'), backgroundColor: '#eef3f8', show: false });
-  helpWin.loadFile(path.join(__dirname, 'tools', 'help.html'), { query: { v: app.getVersion() } });
+  helpWin.loadFile(path.join(__dirname, 'tools', 'help.html'), { query: { v: app.getVersion(), lang: i18n.lang() } });
   helpWin.once('ready-to-show', () => helpWin.show());
   helpWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   helpWin.webContents.on('will-navigate', e => e.preventDefault());
   helpWin.on('closed', () => { helpWin = null; });
 }
 ipcMain.on('pet:open-help', openHelp);
+// 語言 (2026-11-06): settings.lang 'auto' (Windows display language: zh* → 中文, else English) / 'zh' / 'en'
+const LANGS = ['auto', 'zh', 'en'];
+const langSetting = () => LANGS.includes(settings && settings.lang) ? settings.lang : 'auto';
+const systemLang = () => (app.getPreferredSystemLanguages && app.getPreferredSystemLanguages()[0]) || app.getLocale();   // the first one only
+const applyLang = () => i18n.setLang(i18n.resolve(langSetting(), systemLang()));
+function setLang(l) {
+  const before = i18n.lang();
+  settings.lang = LANGS.includes(l) ? l : 'auto'; saveSettings(); applyLang();
+  if (i18n.lang() !== before) {                         // reload what is on screen: HUD, tray, the open windows
+    if (alive()) win.loadFile(path.join(__dirname, 'prototype', PAGE), { query: { lang: i18n.lang() } });
+    for (const w of [storeWin, helpWin]) if (w && !w.isDestroyed()) w.close();
+    buildTrayMenu();
+  }
+  return settings.lang;
+}
+ipcMain.handle('pet:lang', () => langSetting());
+ipcMain.handle('pet:set-lang', (_e, l) => setLang(l));
 ipcMain.handle('pet:version', () => app.getVersion());
 // 自動更新: state for the gear menu (設定 → 更新) and the tray; install quits, a script swaps the files and restarts
 const updateMode = () => settings.updateMode === 'manual' ? 'manual' : 'auto';
@@ -256,41 +275,44 @@ function makeTray() {
 function buildTrayMenu() {
   if (!tray || tray.isDestroyed()) return;              // no tray while 老闆鍵 is on
   const openAtLogin = app.getLoginItemSettings(loginItemArgs()).openAtLogin;
+  const boss = bossKey.status(), bossKeyName = bossKey.pretty(boss.key);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '桌面圖示' + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : '（Ctrl+Alt+D 被占用）'), click: () => desktopIcons.toggle() },
-    { label: (bossKey.status().hidden ? '取消隱藏' : '還原桌面') + (bossKey.status().registered ? '\t' : '（') + bossKey.pretty(bossKey.status().key) + (bossKey.status().registered ? '' : ' 被占用）'), click: () => bossKey.toggle() },
+    { label: T('桌面圖示') + (desktopIcons.status.hotkey ? '\tCtrl+Alt+D' : T('（{0} 被占用）', 'Ctrl+Alt+D')), click: () => desktopIcons.toggle() },
+    { label: T(boss.hidden ? '取消隱藏' : '還原桌面') + (boss.registered ? '\t' + bossKeyName : T('（{0} 被占用）', bossKeyName)), click: () => bossKey.toggle() },
     { type: 'separator' },
     {
-      label: '動態桌布', type: 'checkbox', checked: settings.weatherWallpaper,
+      label: T('動態桌布'), type: 'checkbox', checked: settings.weatherWallpaper,
       click: item => { settings.weatherWallpaper = item.checked; wallpaper.setEnabled(item.checked, wallpaperUrl()); saveSettings(); },
     },
     // 桌布: the recent picks plus the current one, then 主題庫… for the rest (2026-10-24: a full radio list grows too long)
-    { label: '桌布', submenu: [
+    { label: T('桌布'), submenu: [
       ...claudeBridge.themes().filter(t => t.id === settings.wallpaperStyle || recentThemes().includes(t.id))
         .map(t => ({ label: t.name, type: 'radio', checked: t.id === settings.wallpaperStyle, click: () => setWallpaperStyle(t.id) })),
-      { type: 'separator' }, { label: '主題庫…', click: () => openStore() }] },
+      { type: 'separator' }, { label: T('主題庫…'), click: () => openStore() }] },
     {
-      label: '永遠在最上層', type: 'checkbox', checked: settings.alwaysOnTop,
+      label: T('永遠在最上層'), type: 'checkbox', checked: settings.alwaysOnTop,
       click: item => { settings.alwaysOnTop = item.checked; win.setAlwaysOnTop(item.checked); saveSettings(); },
     },
     {
-      label: '開機自動啟動', type: 'checkbox', checked: openAtLogin,
+      label: T('開機自動啟動'), type: 'checkbox', checked: openAtLogin,
       click: item => { app.setLoginItemSettings({ openAtLogin: item.checked, ...loginItemArgs() }); buildTrayMenu(); },
     },
-    { label: claudeHooks.status() === 'on' ? 'Claude hook 已安裝' : '安裝 Claude hook', enabled: claudeHooks.status() !== 'on', click: () => { claudeHooks.install(); buildTrayMenu(); } },
-    ...(codexHooks.status() === 'none' ? [] : [{ label: codexHooks.status() === 'on' ? 'Codex hook 已安裝' : '安裝 Codex hook', enabled: codexHooks.status() !== 'on', click: () => { codexHooks.install(); buildTrayMenu(); } }]),
+    { label: T(claudeHooks.status() === 'on' ? 'Claude hook 已安裝' : '安裝 Claude hook'), enabled: claudeHooks.status() !== 'on', click: () => { claudeHooks.install(); buildTrayMenu(); } },
+    ...(codexHooks.status() === 'none' ? [] : [{ label: T(codexHooks.status() === 'on' ? 'Codex hook 已安裝' : '安裝 Codex hook'), enabled: codexHooks.status() !== 'on', click: () => { codexHooks.install(); buildTrayMenu(); } }]),
+    { label: i18n.lang() === 'en' ? 'Language' : '語言 · Language', submenu: [['auto', T('自動')], ['zh', '中文'], ['en', 'English']]
+      .map(([k, label]) => ({ label, type: 'radio', checked: langSetting() === k, click: () => setLang(k) })) },
     { type: 'separator' },
-    { label: '主題庫…', click: () => openStore() },
-    ...(updater.status().phase === 'available' ? [{ label: `更新到 ${updater.status().version}`, enabled: !!updater.status().canInstall, click: () => updater.install() }] : []),
-    { label: '說明', click: openHelp },
+    { label: T('主題庫…'), click: () => openStore() },
+    ...(updater.status().phase === 'available' ? [{ label: T('更新到 {0}', updater.status().version), enabled: !!updater.status().canInstall, click: () => updater.install() }] : []),
+    { label: T('說明'), click: openHelp },
     { type: 'separator' },
-    { label: '開啟除錯紀錄', click: () => { const f = debugLog.file(); if (f) shell.showItemInFolder(f); } },
-    { label: '開發者工具', click: () => win.webContents.openDevTools({ mode: 'detach' }) },
-    { label: '重新載入', click: () => win.reload() },
+    { label: T('開啟除錯紀錄'), click: () => { const f = debugLog.file(); if (f) shell.showItemInFolder(f); } },
+    { label: T('開發者工具'), click: () => win.webContents.openDevTools({ mode: 'detach' }) },
+    { label: T('重新載入'), click: () => win.reload() },
     { type: 'separator' },
-    { label: '重新啟動', click: () => { app.relaunch(); app.exit(0); } },
-    { label: '解除安裝…', click: runUninstall },
-    { label: '結束', click: () => app.quit() },
+    { label: T('重新啟動'), click: () => { app.relaunch(); app.exit(0); } },
+    { label: T('解除安裝…'), click: runUninstall },
+    { label: T('結束'), click: () => app.quit() },
   ]));
 }
 
@@ -300,10 +322,10 @@ app.whenReady().then(() => {
   // no application menu: its default accelerators (Ctrl+R reload, Ctrl+Shift+I, Ctrl+W …) hit whichever of our
   // windows has focus — Ctrl+R reloaded the HUD mid-hover and left it stuck, grey gear (2026-10-21)
   Menu.setApplicationMenu(null);
+  settings = loadSettings(); applyLang();               // first: even the --uninstall dialog speaks the user's language
   // Windows 設定 →「已安裝的應用程式」→ 解除安裝 starts VibingWrapper.exe --uninstall: only the uninstall dialog
   if (process.argv.includes('--uninstall')) { runUninstall().then(done => { if (!done) app.quit(); }); return; }
   uninstall.register();
-  settings = loadSettings();
   createWindow();
   makeTray();
   claudeBridge.start({ logDir: app.getPath('userData'), stateDir: app.getPath('userData'), themeDirs: [themeStore.init(app.getPath('userData'), settings.themeStore)],
