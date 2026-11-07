@@ -1,0 +1,35 @@
+[package]
+name = "vibing-wrapper"
+version = "0.3.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "VibingWrapper"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-ico"] }
+tauri-plugin-single-instance = "2"
+serde_json = { version = "1", features = ["preserve_order"] }   # keeps the user's key order when we merge hooks into their settings
+tauri-plugin-global-shortcut = "2"
+ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
+native-tls = "0.2"
+sha2 = "0.10"
+tiny_http = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+sys-locale = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Threading"] }
+
+# small exe: the whole point of moving off Electron
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
