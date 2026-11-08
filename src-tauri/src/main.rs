@@ -89,13 +89,25 @@ impl Core {
     fn update_mode(&self) -> &'static str { if self.get("updateMode") == json!("manual") { "manual" } else { "auto" } }
     fn boss_status(&self) -> Value { let b = self.boss.lock().unwrap(); json!({ "key": b.key, "registered": b.registered, "hidden": b.hidden }) }
     // 除錯紀錄 → <data>/debug.log (send this file when something won't work); restarted above 1 MB
-    fn log(&self, m: &str) {
-        let f = self.data_dir.join("debug.log");
-        if std::fs::metadata(&f).map_or(false, |x| x.len() > 1 << 20) { let _ = std::fs::rename(&f, self.data_dir.join("debug.old.log")); }
-        if let Ok(mut h) = std::fs::OpenOptions::new().create(true).append(true).open(&f) {
-            let _ = writeln!(h, "{} {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), m);
-        }
+    fn log(&self, m: &str) { log_to(&self.data_dir, m); }
+}
+
+fn log_to(dir: &std::path::Path, m: &str) {
+    let f = dir.join("debug.log");
+    if std::fs::metadata(&f).map_or(false, |x| x.len() > 1 << 20) { let _ = std::fs::rename(&f, dir.join("debug.old.log")); }
+    if let Ok(mut h) = std::fs::OpenOptions::new().create(true).append(true).open(&f) {
+        let _ = writeln!(h, "{} {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), m);
     }
+}
+
+// Something we cannot run without: write it down, say so in a box (both languages: the settings may not be read
+// yet), and stop. Nothing should ever just vanish without a word.
+fn fatal(dir: &std::path::Path, what: &str, zh: &str, en: &str) -> ! {
+    log_to(dir, &format!("[fatal] {}", what));
+    let log = dir.join("debug.log");
+    desk::ask("VibingWrapper", &format!("{}\n\n{}\n\n{}\n{}", zh, en, what.chars().take(300).collect::<String>(), log.display()), false, true);
+    desk::reveal(&log);
+    std::process::exit(1);
 }
 
 fn core(app: &AppHandle) -> tauri::State<'_, Arc<Core>> { app.state::<Arc<Core>>() }
@@ -575,7 +587,31 @@ fn main() {
     let uninstall_only = std::env::args().any(|a| a == "--uninstall");
     let _ = WEBVIEW_DIR.set(data_dir.join("webview"));
 
-    tauri::Builder::default()
+    // preflight: any panic is reported instead of the process quietly disappearing (panic = "abort" in release)
+    let pdir = data_dir.clone();
+    std::panic::set_hook(Box::new(move |p| {
+        let loc = p.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
+        let msg = p.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.payload().downcast_ref::<String>().cloned()).unwrap_or_default();
+        log_to(&pdir, &format!("[panic] {}{}", msg, loc));
+        desk::ask("VibingWrapper", &format!("VibingWrapper 發生錯誤，已停止。\n請把 debug.log 傳給開發者。\n\nVibingWrapper hit an error and stopped.\nPlease send debug.log to the developer.\n\n{}{}\n{}",
+            msg.chars().take(300).collect::<String>(), loc, pdir.join("debug.log").display()), false, true);
+    }));
+    // preflight: the HUD and the wallpaper are WebView2 windows; without the runtime nothing can open
+    match desk::webview2_version() {
+        Some(v) => log_to(&data_dir, &format!("preflight webview2={}", v)),
+        None => {
+            log_to(&data_dir, "[fatal] WebView2 runtime not installed");
+            if desk::ask("VibingWrapper",
+                "這台電腦沒有安裝 Microsoft Edge WebView2 執行階段，VibingWrapper 無法啟動。\n要開啟微軟的下載頁嗎？（選「Evergreen Bootstrapper」，裝完再開一次 VibingWrapper）\n\n\
+                 Microsoft Edge WebView2 Runtime is not installed, so VibingWrapper cannot start.\nOpen Microsoft's download page? (pick \"Evergreen Bootstrapper\", then start VibingWrapper again)", true, true) {
+                desk::open_url("https://developer.microsoft.com/microsoft-edge/webview2/");
+            }
+            std::process::exit(1);
+        }
+    }
+
+    let fdir = data_dir.clone();
+    let app = tauri::Builder::default()
         // a second copy only hands its arguments to the first and leaves (Windows 設定 → 解除安裝 starts one with --uninstall)
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if argv.iter().any(|a| a == "--uninstall") { uninstall_async(app); }
@@ -647,8 +683,11 @@ fn main() {
             test_endpoint(h.clone());
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("error while building VibingWrapper")
-        // the HUD is rebuilt on a language change and the wallpaper comes and goes: only 結束 quits
-        .run(|_app, e| if let tauri::RunEvent::ExitRequested { code: None, api, .. } = e { api.prevent_exit(); });
+        .build(tauri::generate_context!());
+    let app = match app {
+        Ok(a) => a,
+        Err(e) => fatal(&fdir, &format!("startup failed: {}", e), "VibingWrapper 啟動失敗，已停止。請把 debug.log 傳給開發者。", "VibingWrapper failed to start. Please send debug.log to the developer."),
+    };
+    // the HUD is rebuilt on a language change and the wallpaper comes and goes: only 結束 quits
+    app.run(|_app, e| if let tauri::RunEvent::ExitRequested { code: None, api, .. } = e { api.prevent_exit(); });
 }

@@ -29,7 +29,7 @@ pub fn set_enabled(app: &AppHandle, on: bool, url: Option<String>) {
 
 fn create(app: &AppHandle, url: &str) {
     let Ok(parsed) = url.parse() else { return };
-    let Some(mon) = app.primary_monitor().ok().flatten() else { return };
+    let Some(mon) = app.primary_monitor().ok().flatten() else { crate::core(app).log("[wallpaper] no primary monitor yet: skipped"); return };
     let (pos, size) = (*mon.position(), *mon.size());   // full screen, behind the taskbar too
     let app2 = app.clone();
     let built = crate::with_args(WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(parsed)))
@@ -37,9 +37,9 @@ fn create(app: &AppHandle, url: &str) {
         .shadow(false).visible(false).background_color(tauri::window::Color(0x1b, 0x22, 0x30, 255))
         .on_page_load(move |_w, p| { if p.event() == tauri::webview::PageLoadEvent::Finished { apply_pause(&app2); } })
         .build();
-    let win = match built { Ok(w) => w, Err(e) => { eprintln!("[wallpaper] {}", e); return; } };
+    let win = match built { Ok(w) => w, Err(e) => { give_up(app, &format!("window: {}", e)); return; } };
     let _ = win.set_ignore_cursor_events(true);
-    attach(&win, pos.x, pos.y, size.width as i32, size.height as i32);
+    if let Err(diag) = attach(&win, pos.x, pos.y, size.width as i32, size.height as i32) { let _ = win.destroy(); give_up(app, &diag); return; }
     let _ = win.show();
     // Explorer restarts destroy the WorkerW (and our window with it): come back after a moment
     let app3 = app.clone();
@@ -68,21 +68,46 @@ pub fn set_paused(app: &AppHandle, on: bool) {
 #[allow(dead_code)]
 pub fn reattach(app: &AppHandle) {
     let (Some(win), Some(mon)) = (app.get_webview_window(LABEL), app.primary_monitor().ok().flatten()) else { return };
-    attach(&win, mon.position().x, mon.position().y, mon.size().width as i32, mon.size().height as i32);
+    if let Err(diag) = attach(&win, mon.position().x, mon.position().y, mon.size().width as i32, mon.size().height as i32) {
+        app.state::<State>().lock().unwrap().enabled = false;   // before destroy, so the Destroyed handler does not rebuild it
+        let _ = win.destroy();
+        give_up(app, &diag);
+    }
 }
 
+// The window could not be put behind the desktop icons (e.g. a Windows build whose desktop is laid out differently).
+// A full-screen window left on top would cover everything, so the wallpaper is switched off for this run, the
+// reason goes to debug.log, and the user is told once. The HUD keeps working.
+fn give_up(app: &AppHandle, diag: &str) {
+    static TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    app.state::<State>().lock().unwrap().enabled = false;
+    let c = crate::core(app);
+    c.log(&format!("[wallpaper] FAILED, wallpaper off for this run | {}", diag));
+    if TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) { return; }
+    let log = c.data_dir.join("debug.log");
+    let text = if c.is_en() {
+        format!("The wallpaper could not be placed behind the desktop icons on this Windows, so it is off for now. The HUD still works.
+Please send debug.log to the developer:
+{}", log.display())
+    } else {
+        format!("桌布沒辦法放到這台 Windows 的桌面圖示後面，這次先關閉桌布；HUD 照常可用。
+請把 debug.log 傳給開發者：
+{}", log.display())
+    };
+    std::thread::spawn(move || { crate::desk::ask("VibingWrapper", &text, false, true); });
+}
+
+// Ok = behind the icons (logged with the layout found, so a new Windows build can be read off debug.log)
 #[cfg(windows)]
-fn attach(win: &tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32) {
-    match win.hwnd() {
-        Ok(hwnd) => match desk::attach(hwnd.0 as _, x, y, w, h) {
-            (0, diag) => eprintln!("[wallpaper] attach FAILED | {}", diag),
-            (p, diag) => eprintln!("[wallpaper] attached under {} ({}x{}) | {}", p, w, h, diag),
-        },
-        Err(e) => eprintln!("[wallpaper] no hwnd: {}", e),
+fn attach(win: &tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
+    let hwnd = win.hwnd().map_err(|e| format!("no hwnd: {}", e))?;
+    match desk::attach(hwnd.0 as _, x, y, w, h) {
+        (0, diag) => Err(diag),
+        (p, diag) => { crate::core(win.app_handle()).log(&format!("[wallpaper] attached under {} ({}x{} at {},{}) | {}", p, w, h, x, y, diag)); Ok(()) }
     }
 }
 #[cfg(not(windows))]
-fn attach(_win: &tauri::WebviewWindow, _x: i32, _y: i32, _w: i32, _h: i32) {}
+fn attach(_win: &tauri::WebviewWindow, _x: i32, _y: i32, _w: i32, _h: i32) -> Result<(), String> { Err("desktop wallpaper is Windows only".into()) }
 
 #[cfg(windows)]
 mod desk {

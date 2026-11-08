@@ -94,6 +94,23 @@ pub fn covered() -> bool { false }
 pub fn ask(_t: &str, _x: &str, _y: bool, _w: bool) -> bool { false }
 
 /* ---- registry, through reg.exe (a handful of calls, no need for the registry API) ---- */
+// the Evergreen WebView2 runtime's version, from the keys its installer writes (machine-wide or per-user)
+#[cfg(windows)]
+pub fn webview2_version() -> Option<String> {
+    const ID: &str = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+    for root in [r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients", r"HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients", r"HKCU\Software\Microsoft\EdgeUpdate\Clients"] {
+        let Ok(o) = hidden("reg").args(["query", &format!(r"{}\{}", root, ID), "/v", "pv"]).output() else { continue };
+        if !o.status.success() { continue; }
+        let out = String::from_utf8_lossy(&o.stdout).to_string();
+        if let Some(v) = out.lines().find(|l| l.trim_start().starts_with("pv")).and_then(|l| l.split_whitespace().last()) {
+            if v != "0.0.0.0" && v.contains('.') { return Some(v.to_string()); }
+        }
+    }
+    None
+}
+#[cfg(not(windows))]
+pub fn webview2_version() -> Option<String> { Some("n/a".into()) }
+pub fn open_url(url: &str) { let _ = Command::new("explorer").arg(url).spawn(); }
 const RUN: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const UNINSTALL: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\VibingWrapper";
 fn exe() -> String { std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default() }
