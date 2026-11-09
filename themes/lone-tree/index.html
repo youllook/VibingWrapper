@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>孤樹</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b2230; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+           image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; }
+  #panel { position: fixed; right: 12px; bottom: 12px; max-width: calc(100% - 24px); box-sizing: border-box;
+           background: rgba(14, 17, 26, .8); color: #e8ecf2; font: 12px/1.4 system-ui, "Microsoft JhengHei", sans-serif;
+           border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; backdrop-filter: blur(6px); }
+  #panel[hidden] { display: none; }
+  #panel .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #panel button { font: inherit; color: inherit; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.18);
+                  border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+  #panel button.on { background: #f5d35c; color: #1b1a12; border-color: #f5d35c; }
+  #panel input[type=range] { width: 150px; }
+  #panel .dim { opacity: .65; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel" hidden>
+  <div class="row" id="states"></div>
+  <div class="row">
+    <label><input type="checkbox" id="tour"> 自動輪播</label>
+    <button id="dir">風向 →</button>
+    <button id="shake">搖一下</button>
+    <button id="seed">換一棵</button>
+  </div>
+  <div class="row">
+    <span>時間</span><input type="range" id="hour" min="0" max="24" step="0.25">
+    <span id="hourText"></span>
+    <label><input type="checkbox" id="realtime"> 真實時間</label>
+  </div>
+  <div class="row dim" id="status"></div>
+</div>
+<script>
+'use strict';
+// 孤樹：一棵有骨架的像素橡樹。每根樹枝是一個角度彈簧，風（跟著 Claude 狀態）推它，葉團掛在樹枝上跟著動。
+// 全部是程式生成，沒有外部圖檔。
+const Q = new URLSearchParams(location.search);
+const CONFIG = {
+  px: +Q.get('px') || 4,                 // 一個像素格 = 幾個螢幕像素
+  seed: +Q.get('seed') || 7,
+  clockHours: Q.has('day') ? 10.5 : Q.has('night') ? 22 : (Q.has('hour') ? +Q.get('hour') : null),
+  polling: true,
+  fps: 30,
+};
+const LABELS = { none: '不在', clear: '待命', overcast: '思考', storm: '執行', clearing: '收尾', waiting: '等你' };
+const STATES = {
+  clear:    { wind: .16, gust: .3,  flutter: .45, dim: 0,   cloud: .08, glow: 1,    shed: 0,   rain: 0,  pulse: 0 },
+  overcast: { wind: .36, gust: .5,  flutter: 1,   dim: .1,  cloud: .6,  glow: .75,  shed: .12, rain: 0,  pulse: 0 },
+  storm:    { wind: .9,  gust: 1,   flutter: 1.6, dim: .3,  cloud: .95, glow: .4,   shed: 1,   rain: .7, pulse: 0 },
+  clearing: { wind: .07, gust: .15, flutter: .35, dim: 0,   cloud: .25, glow: 1.35, shed: 0,   rain: 0,  pulse: 0 },
+  waiting:  { wind: .02, gust: .05, flutter: .12, dim: .05, cloud: .2,  glow: 1,    shed: 0,   rain: 0,  pulse: 1 },
+};
+const PARAMS = Object.assign({ dir: 1 }, STATES.clear);
+let target = Object.assign({ dir: 1 }, STATES.clear), stateName = 'clear';
+// 不在（no Claude session at all）: the leaves let go cluster by cluster until the branches are bare;
+// when a session shows up again they bud and grow back
+let absent = false, foliage = 1, foliageSet = false;
+
+// ---------- helpers ----------
+function mulberry(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const NZ = new Float32Array(1024); { const r = mulberry(99); for (let i = 0; i < 1024; i++) NZ[i] = r(); }
+function noise1(x) { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return NZ[i & 1023] * (1 - u) + NZ[(i + 1) & 1023] * u; }
+function hash(a, b, c) { let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263) ^ Math.imul(c | 0, 1440662683); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => (v + .5) / 16);
+const bayer = (x, y) => BAYER[(y & 3) * 4 + (x & 3)];
+const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const css = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+
+// ---------- palettes: night / golden hour / day ----------
+const PAL = {
+  night: { skyTop: '#0b1028', skyMid: '#18214a', skyLow: '#34406e', hill: '#1c2546', grassFar: '#16291f', grassNear: '#0b1810', grassLit: '#2a4a35', shadow: '#060d09',
+           leafD: '#050c08', leafM: '#0c1c14', leafL: '#173220', rim: '#5b7aa0', bark: '#07090a', barkRim: '#3a4a66', sun: '#e9eef7', glow: '#8fa6d8', cloud: '#3a4672' },
+  gold:  { skyTop: '#557b9c', skyMid: '#a9b7b0', skyLow: '#f7dc8f', hill: '#8d9bb3', grassFar: '#b0bd52', grassNear: '#6c972b', grassLit: '#e4e47a', shadow: '#36531a',
+           leafD: '#0f1e0c', leafM: '#1c2e12', leafL: '#334a1c', rim: '#f5d35c', bark: '#1f170f', barkRim: '#c99a3f', sun: '#fff6cf', glow: '#ffd772', cloud: '#f3e3c0' },
+  day:   { skyTop: '#5a8ccc', skyMid: '#7fb2e0', skyLow: '#cfe7f3', hill: '#8db3a6', grassFar: '#86b64e', grassNear: '#5a8f38', grassLit: '#b6dc62', shadow: '#2c561b',
+           leafD: '#17351a', leafM: '#2c5a24', leafL: '#4f8a33', rim: '#a8d45a', bark: '#2b2016', barkRim: '#7a6040', sun: '#fffbe8', glow: '#fff2b0', cloud: '#ffffff' },
+};
+for (const k in PAL) for (const c in PAL[k]) PAL[k][c] = hex(PAL[k][c]);
+
+// ---------- world ----------
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W, H, horizonY, groundY, trunkX, T0, tree, nodes, clusters, backC, frontC, crown, blades, bg, pal, light, sun, clouds = [];
+let leaves = [], drops = [], flies = [], paused = false, time = 0, shedAcc = 0;
+
+function hours() { if (CONFIG.clockHours != null) return CONFIG.clockHours; const d = new Date(); return d.getHours() + d.getMinutes() / 60; }
+
+function computeLight() {
+  const h = hours();
+  const elev = Math.sin((h - 6) / 12 * Math.PI);          // >0 day, <0 night
+  let wg = clamp(1 - Math.abs(elev - .1) / .35), wd = clamp((elev - .1) / .4), wn = clamp((.05 - elev) / .25);
+  const s = wg + wd + wn || 1; wg /= s; wd /= s; wn /= s;
+  const p = {};
+  for (const k in PAL.day) p[k] = [0, 1, 2].map(i => PAL.night[k][i] * wn + PAL.gold[k][i] * wg + PAL.day[k][i] * wd);
+  const isMoon = elev < 0;
+  const frac = isMoon ? (((h + 12) % 24) - 6) / 12 : (h - 6) / 12;
+  const e2 = isMoon ? Math.sin(frac * Math.PI) : elev;
+  // at golden hour the disc peeks out beside the trunk instead of hiding behind it
+  const x = W * .08 + (trunkX + W * .015 + H * .055 - W * .08) * clamp(frac);
+  const y = Math.max(H * .1, horizonY - e2 * H * .9 - H * .04);
+  return { pal: p, wn, wg, wd, sun: { x, y, moon: isMoon, r: Math.max(2, Math.round(H * (isMoon ? .014 : .018))) } };
+}
+
+// ---------- tree ----------
+function genTree() {
+  const R = mulberry(CONFIG.seed * 7919 + 1);
+  nodes = []; clusters = [];
+  T0 = Math.max(3, Math.round(H * .036));
+  function grow(depth, len, thick, rel, pw) {
+    let world = pw + rel;
+    if (Math.abs(world) > 1.45) { rel -= Math.sign(world) * (Math.abs(world) - 1.45) * .9; world = pw + rel; }
+    const n = { depth, len, thick, rel, th: 0, w: 0, kids: [], ph: R() * 99, bend: (R() - .5) * (depth === 0 ? .06 : .3) * len, x0: 0, y0: 0, x1: 0, y1: 0, wa: 0, leafy: 0 };
+    n.tr = thick / T0;
+    n.k = 32 + 240 * n.tr * n.tr;
+    n.c = 2 * Math.sqrt(n.k) * .13;
+    n.sens = Math.pow(1 - Math.min(1, n.tr), 1.5) + .05;
+    nodes.push(n);
+    if (depth < 6) {
+      const count = depth === 0 ? 3 : depth < 3 ? 2 + (R() < .45 ? 1 : 0) : 2 + (R() < .2 ? 1 : 0);
+      for (let i = 0; i < count; i++) {
+        if (depth >= 4 && R() < .08) continue;
+        const s = (i / (count - 1)) * 2 - 1;
+        const spread = depth === 0 ? 1.15 : depth === 1 ? .7 : .55;
+        const a = s * spread * (.75 + R() * .5) + (R() - .5) * .35;
+        const kl = depth === 0 ? 1.06 : .72 + R() * .12;   // short stout trunk, long first limbs: a broad dome
+        n.kids.push(grow(depth + 1, len * kl, Math.max(1, thick * (depth === 0 ? .62 : .66)), a, world));
+      }
+    }
+    const baseR = H * (.06 - depth * .005);
+    if (depth === 2) { clusters.push(cluster(n, .9, baseR * 1.4, .05, R)); clusters.push(cluster(n, .5, baseR * 1.2, .1, R)); }   // dark fill inside the crown
+    if (depth >= 3) {
+      clusters.push(cluster(n, 1, baseR, R(), R));
+      if (depth < 6) clusters.push(cluster(n, .45 + R() * .35, baseR * .85, R(), R));
+    }
+    return n;
+  }
+  tree = grow(0, H * .13, T0, (R() - .5) * .06, 0);
+  (function leafy(n) { let c = clusters.filter(c => c.n === n).length; for (const k of n.kids) c += leafy(k); n.leafy = Math.min(1.5, c / 8); return c; })(tree);
+  solve(tree, trunkX, groundY, 0);
+  clusters.forEach(placeCluster);
+  let cx = 0, cy = 0; for (const c of clusters) { cx += c.x; cy += c.y; } cx /= clusters.length; cy /= clusters.length;
+  let r = 0; for (const c of clusters) r = Math.max(r, Math.hypot(c.x - cx, c.y - cy) + c.r);
+  crown = { x: cx, y: cy, r };
+  const TR = mulberry(CONFIG.seed + 3);
+  for (const c of clusters) { c.rx = c.x; c.ry = c.y;
+    const outer = Math.hypot(c.x - cx, c.y - cy) / r;
+    c.th = .08 + .84 * clamp(TR() * .55 + outer * .45 + (c.z < .1 ? -.3 : 0));
+    c.g = foliage > c.th ? 1 : 0; }
+  backC = clusters.filter(c => c.z < .4).sort((a, b) => a.z - b.z);
+  frontC = clusters.filter(c => c.z >= .4).sort((a, b) => a.z - b.z);
+}
+function cluster(n, f, r, z, R) {
+  r = Math.max(3, Math.round(r * (.8 + R() * .5)));
+  const lobes = [], nl = 3 + (R() * 3 | 0);
+  for (let i = 0; i < nl; i++) lobes.push({ dx: (R() - .5) * r, dy: (R() - .5) * r * .8, rr: r * (.55 + R() * .3) });
+  lobes.push({ dx: 0, dy: 0, rr: r * .7 });
+  return { n, f, off: (R() - .5) * r * .8, r, z, ph: R() * 6.28, lobes, id: (R() * 1e6) | 0, spr: [null, null], x: 0, y: 0 };
+}
+function solve(n, x, y, pw) {
+  n.wa = pw + n.rel + n.th; n.x0 = x; n.y0 = y;
+  n.x1 = x + Math.sin(n.wa) * n.len; n.y1 = y - Math.cos(n.wa) * n.len;
+  for (const k of n.kids) solve(k, n.x1, n.y1, n.wa);
+}
+function placeCluster(c) {
+  const n = c.n;
+  c.x = n.x0 + (n.x1 - n.x0) * c.f + Math.cos(n.wa) * c.off;
+  c.y = n.y0 + (n.y1 - n.y0) * c.f + Math.sin(n.wa) * c.off;
+}
+// two frames per cluster (the second shimmers, for rustling); indices → current palette
+function buildSprites() {
+  const p = pal, cols = [p.leafD, p.leafM, p.leafL, p.rim];
+  const rimOn = light.wg + light.wd * .5 + light.wn * .6;
+  for (const c of clusters) {
+    const S = c.r * 2 + 5, o = c.r + 2;
+    const sx = sun.x - c.rx, sy = sun.y - c.ry, sl = Math.hypot(sx, sy) || 1;
+    const cny = (c.ry - crown.y) / crown.r, outer = Math.hypot(c.rx - crown.x, c.ry - crown.y) / crown.r;
+    const base = .44 - .28 * cny + .14 * outer - (c.z < .4 ? .24 : 0);
+    const back = c.z < .4 ? .35 : 0;
+    const near = clamp(1 - Math.hypot(sun.x - c.rx, sun.y - c.ry) / (crown.r * 1.5));
+    const rimP = rimOn * (.4 + .6 * near), rimCol = mix(p.rim, p.leafL, .25);
+    // backlight rims the silhouette of the whole crown (not each clump): judge by the crown's outward normal
+    const ssx = sun.x - crown.x, ssy = sun.y - crown.y, ssl = Math.hypot(ssx, ssy) || 1;
+    const warm = .12 * light.wg;
+    for (let fr = 0; fr < 2; fr++) {
+      const can = c.spr[fr] || (c.spr[fr] = document.createElement('canvas'));
+      can.width = S; can.height = S;
+      const g = can.getContext('2d'), img = g.createImageData(S, S), d = img.data;
+      for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+        const dx = px - o, dy = py - o;
+        let md = 9;
+        for (const l of c.lobes) md = Math.min(md, Math.hypot(dx - l.dx, dy - l.dy) / l.rr);
+        if (md > .86 + .28 * hash(c.id, px, py)) continue;
+        if (md > .72 && hash(c.id + 7, px, py) < .13) continue;            // ragged leafy edge
+        const nx = dx / c.r, ny = dy / c.r;
+        let v = base - .34 * ny + (hash(c.id + 3, px, py) - .5) * .3 + (bayer(px, py) - .5) * .22;
+        let idx = v < .32 ? 0 : v < .6 ? 1 : 2;
+        if (fr === 1 && hash(c.id + 11, px, py) < .22) idx = idx === 2 ? 1 : idx === 1 ? 2 : 0;
+        const wx = c.rx + dx - crown.x, wy = c.ry + dy - crown.y, pr = Math.hypot(wx, wy) / crown.r;
+        const face = clamp(((wx * ssx + wy * ssy) / ((pr * crown.r || 1) * ssl)) * .5 + .5);
+        let col = cols[idx];
+        if (rimOn > .3 && md > .8 && pr > .62 && hash(c.id + 5, px, py) < rimP * (.35 + .65 * face)) col = rimCol;
+        else { if (back) col = mix(col, p.leafD, back); if (warm > .01) col = mix(col, p.rim, warm); }
+        const i = (py * S + px) * 4; d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255;
+      }
+      g.putImageData(img, 0, 0);
+    }
+    c.o = o;
+  }
+}
+
+// ---------- background (sky, hills, meadow, the tree's shadow) ----------
+function shadowAt(x, y) {
+  if (y < groundY - 1) return 0;
+  const slope = clamp((trunkX - sun.x) / (H * .5), -1.6, 1.6);
+  const cx = trunkX + (y - groundY) * slope, w = T0 * .7 + (y - groundY) * .25;
+  const d = Math.abs(x - cx) / w;
+  return d < 1 ? (1 - d * d) : 0;
+}
+function buildBg() {
+  bg = bg || document.createElement('canvas'); bg.width = W; bg.height = H;
+  const g = bg.getContext('2d'), img = g.createImageData(W, H), d = img.data, p = pal;
+  const hillH = new Float32Array(W);
+  for (let x = 0; x < W; x++) hillH[x] = (noise1(x * .02 + 3) * .6 + noise1(x * .06 + 11) * .4) * H * .05 + Math.exp(-(((x - W * .3) / (W * .07)) ** 2)) * H * .035;
+  const shadowK = (light.wg + light.wd) * (sun.moon ? 0 : 1);
+  const q = 9, fog = .6 * (.35 + .65 * light.wg);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let c;
+    if (y < horizonY - hillH[x]) {
+      const t = y / horizonY;
+      c = t < .55 ? mix(p.skyTop, p.skyMid, t / .55) : mix(p.skyMid, p.skyLow, (t - .55) / .45);
+      const sd = Math.hypot(x - sun.x, (y - sun.y) * 1.3) / H;
+      c = mix(c, p.glow, clamp(.45 * Math.exp(-sd * sd * 10)) * (sun.moon ? .4 : 1));
+      const gr = (hash(x >> 1, y >> 1, 1) - .5) * 8 * light.wg + (noise1(x * .013 + y * .05) - .5) * 10 * light.wg;   // paper grain
+      c = [c[0] + gr, c[1] + gr, c[2] + gr];
+      c = mix(c, p.skyLow, fog * Math.exp(-(((horizonY - y) / (H * .08)) ** 2)));
+    } else if (y < horizonY) {
+      c = mix(p.hill, p.skyLow, .55 + .3 * (1 - (horizonY - y) / Math.max(1, hillH[x])));
+      c = mix(c, p.skyLow, fog * .5 * Math.exp(-(((horizonY - y) / (H * .08)) ** 2)));
+    } else {
+      const t = (y - horizonY) / (H - horizonY);
+      c = mix(p.grassFar, p.grassNear, Math.pow(t, .8));
+      if (noise1(x * .045 + y * .35) > .62) c = mix(c, p.grassLit, .35 * (1 - t * .6));
+      c = mix(c, p.skyLow, Math.pow(1 - t, 4) * .7);
+      const s = shadowAt(x, y) * shadowK;
+      if (Math.sqrt(s) > bayer(x, y)) c = mix(c, p.shadow, .45);
+    }
+    const b = (bayer(x, y) - .5) * q;
+    const i = (y * W + x) * 4;
+    d[i] = Math.round((c[0] + b) / q) * q; d[i + 1] = Math.round((c[1] + b) / q) * q; d[i + 2] = Math.round((c[2] + b) / q) * q; d[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+}
+function genBlades() {
+  const R = mulberry(5); blades = [[], [], [], []];
+  const N = Math.round(W * (H - horizonY) * .08);
+  for (let i = 0; i < N; i++) {
+    const t = Math.pow(R(), .55), y = Math.round(horizonY + 2 + (H - horizonY - 2) * t);
+    const x = Math.round(R() * W), h = Math.max(1, Math.round((1 + t * 7) * (.5 + R() * .7)));
+    blades[0].push({ x, y, h, t, ph: R() * 6.28, sh: 0 });
+  }
+}
+function sortBlades() {
+  const all = blades.flat(); blades = [[], [], [], []];
+  const k = (light.wg + light.wd) * (sun.moon ? 0 : 1);
+  for (const b of all) { b.sh = Math.sqrt(shadowAt(b.x, b.y) * k) > .5; blades[b.sh ? 3 : b.t < .35 ? 0 : (b.ph > 4.4 ? 2 : 1)].push(b); }
+}
+function genClouds() {
+  const R = mulberry(CONFIG.seed + 41); clouds = [];
+  for (let i = 0; i < 6; i++) {
+    const w = Math.round(W * (.1 + R() * .14)), h = Math.round(w * .32);
+    const can = document.createElement('canvas'); can.width = w; can.height = h;
+    const g = can.getContext('2d'), img = g.createImageData(w, h), d = img.data;
+    const puffs = []; for (let k = 0; k < 6; k++) { const py = h * (.45 + R() * .3); puffs.push({ x: w * (.15 + R() * .7), y: py, r: Math.min(h * (.3 + R() * .35), py) }); }   // no puff pokes out of the top (flat-topped clouds)
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let m = 9; for (const p of puffs) m = Math.min(m, Math.hypot((x - p.x) * .8, y - p.y) / p.r);
+      if (m > 1 || y > h * .85) continue;
+      const shade = clamp((y / h - .35) * 1.6) > bayer(x, y);
+      const c = shade ? mix(pal.cloud, pal.skyMid, .45) : pal.cloud;
+      const i = (y * w + x) * 4; d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    clouds.push({ can, x: R() * W, y: H * (.06 + R() * .32), sp: .6 + R() });
+  }
+}
+
+function refresh() { light = computeLight(); pal = light.pal; sun = light.sun; buildBg(); buildSprites(); sortBlades(); genClouds(); }
+function rebuild() {
+  // the wallpaper window can be created hidden (0×0 viewport): fall back to the screen size until a resize arrives
+  W = Math.ceil((innerWidth || screen.width) / CONFIG.px); H = Math.ceil((innerHeight || screen.height) / CONFIG.px);
+  cv.width = W; cv.height = H; ctx.imageSmoothingEnabled = false;
+  horizonY = Math.round(H * .72); groundY = Math.round(H * .8); trunkX = Math.round(W * .64);
+  light = computeLight(); sun = light.sun;
+  genTree(); genBlades(); refresh();
+  leaves = []; flies = [];
+  for (let i = 0; i < 14; i++) flies.push({ x: crown.x + (Math.random() - .5) * crown.r * 2, y: crown.y + Math.random() * crown.r, ph: Math.random() * 6.28 });
+}
+
+// ---------- wind & physics ----------
+function windAt(x, t) {
+  const g = noise1(x / W * 1.6 - PARAMS.dir * t * (.25 + PARAMS.wind * .6) + 50);
+  return PARAMS.dir * PARAMS.wind * (.7 + .15 * Math.sin(t * .37) + PARAMS.gust * g * g * 1.6);
+}
+let drag = null;
+function physics(dt, t) {
+  for (const n of nodes) {
+    const F = windAt((n.x0 + n.x1) / 2, t);
+    let tq = F * 14 * n.sens * Math.cos(n.wa) * (.6 + n.leafy);
+    tq += (noise1(t * 7 + n.ph) - .5) * PARAMS.flutter * 7 * n.sens * (.3 + Math.abs(F) * 2);
+    if (drag && drag.n === n) {
+      let diff = Math.atan2(drag.x - n.x0, -(drag.y - n.y0)) - n.wa;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      tq += diff * n.k * 1.3 - n.w * n.c * 2;
+    }
+    n.w += (tq - n.k * n.th - n.c * n.w) * dt;
+    n.th += n.w * dt;
+    const lim = drag && drag.n === n ? 1.1 : .8;
+    if (n.th > lim) { n.th = lim; n.w *= -.3; } else if (n.th < -lim) { n.th = -lim; n.w *= -.3; }
+  }
+}
+function visibleCluster() {
+  for (let i = 0; i < 12; i++) { const c = clusters[(Math.random() * clusters.length) | 0]; if (c.g > .5) return c; }
+  return null;
+}
+function spawnLeaf(c) {
+  if (!c) return;
+  const p = pal, R = Math.random;
+  const col = [p.leafL, p.rim, p.leafM, mix(p.rim, [214, 160, 60], .5)][(R() * 4) | 0];
+  leaves.push({ x: c.x + (R() - .5) * c.r * 1.4, y: c.y + (R() - .5) * c.r, vx: 0, vy: 0, ph: R() * 6.28, col,
+                gy: groundY - 3 + R() * (H - groundY) * .9, land: false, life: 18 + R() * 10 });
+}
+function shake(x, y, power) {
+  for (const n of nodes) {
+    const d = Math.hypot(n.x1 - x, n.y1 - y) / (crown.r * 1.2);
+    n.w += (Math.random() - .5) * 2 * 7 * n.sens * power * clamp(1.3 - d, .35, 1.3);
+  }
+  for (let i = 0; i < 26 * power; i++) spawnLeaf(visibleCluster());
+}
+
+// ---------- frame ----------
+function update(dt) {
+  const k = 1 - Math.exp(-dt * .7);
+  for (const key in target) PARAMS[key] += (target[key] - PARAMS[key]) * k;
+  for (let s = 0; s < 2; s++) { physics(dt / 2, time); solve(tree, trunkX, groundY, 0); }
+  clusters.forEach(placeCluster);
+  foliage = absent ? Math.max(0, foliage - dt * .13) : Math.min(1, foliage + dt * .22);
+  for (const c of clusters) {
+    if (foliage > c.th) c.g = Math.min(1, c.g + dt * (.6 + c.th));
+    else if (c.g > 0) {                                                 // this cluster lets go: its leaves fall
+      if (c.g >= 1) for (let i = 0; i < c.r * 1.6; i++) if (leaves.length < 600) spawnLeaf(c);
+      c.g = Math.max(0, c.g - dt * 2.5);
+    }
+  }
+  // leaves let go with the gusts (and the odd one even on a calm day)
+  const gustNow = Math.abs(windAt(crown.x, time));
+  shedAcc += (PARAMS.shed * gustNow * 28 + .04) * dt;
+  if (drag && drag.n) shedAcc += Math.min(6, Math.abs(drag.n.w)) * dt * 6;
+  while (shedAcc > 1) { shedAcc--; if (leaves.length < 420) spawnLeaf(visibleCluster()); }
+  for (let i = leaves.length - 1; i >= 0; i--) {
+    const l = leaves[i];
+    if (!l.land) {
+      const wx = windAt(l.x, time) * 45;
+      l.vx += (wx - l.vx) * dt * 1.2;
+      l.vy += (9 + Math.sin(time * 3 + l.ph) * 7 - l.vy) * dt * 1.5;
+      l.x += l.vx * dt + Math.sin(time * 4 + l.ph) * 7 * dt; l.y += l.vy * dt;
+      if (l.y >= l.gy) { l.y = l.gy; l.land = true; }
+    } else {
+      const w = windAt(l.x, time);
+      if (Math.abs(w) > .55) l.x += w * 14 * dt * (.5 + Math.sin(l.ph) * .5);
+      l.life -= dt;
+    }
+    if (l.life < 0 || l.x < -5 || l.x > W + 5) leaves.splice(i, 1);
+  }
+  for (const c of clouds) { c.x += PARAMS.dir * (1.5 + PARAMS.wind * 9) * c.sp * dt; const w = c.can.width; if (c.x > W + 4) c.x = -w; if (c.x < -w - 4) c.x = W; }
+  for (const f of flies) { f.ph += dt; f.x += Math.sin(f.ph * .7) * 6 * dt + windAt(f.x, time) * 8 * dt; f.y += Math.cos(f.ph * .53) * 4 * dt;
+    if (Math.hypot(f.x - crown.x, f.y - crown.y) > crown.r * 1.3) { f.x += (crown.x - f.x) * .02; f.y += (crown.y - f.y) * .02; } }
+}
+
+function branchPts(n, fn) {
+  const steps = Math.ceil(n.len * 1.2), px = Math.cos(n.wa), py = Math.sin(n.wa);
+  for (let s = 0; s <= steps; s++) {
+    const f = s / steps, b = n.bend * 4 * f * (1 - f);
+    fn(n.x0 + (n.x1 - n.x0) * f + px * b, n.y0 + (n.y1 - n.y0) * f + py * b, n.thick * (1 - f * .3), f);
+  }
+}
+function drawBranches() {
+  const sgn = sun.x > trunkX ? 1 : -1;
+  ctx.fillStyle = css(pal.bark);
+  for (const n of nodes) branchPts(n, (x, y, t) => ctx.fillRect(Math.round(x - t / 2), Math.round(y - t / 2), Math.ceil(t), Math.ceil(t)));
+  for (let i = 0; i < 3; i++) ctx.fillRect(trunkX - T0 + i - 1, groundY - 3 + i, T0 * 2 - i * 2 + 2, 1);   // root flare
+  ctx.fillStyle = css(mix(pal.bark, pal.barkRim, .55), .8);
+  for (const n of nodes) {
+    if (n.depth > 1) continue;
+    branchPts(n, (x, y, t) => ctx.fillRect(Math.round(x + sgn * (t / 2 - 1)), Math.round(y), 1, 1));
+  }
+}
+function drawClusters(list) {
+  const fl = PARAMS.flutter;
+  for (const c of list) {
+    if (c.g <= .02) continue;
+    const fr = fl > .5 && Math.sin(time * (3 + fl * 7) + c.ph) > .2 ? 1 : 0;
+    if (c.g >= 1) { ctx.drawImage(c.spr[fr], Math.round(c.x - c.o), Math.round(c.y - c.o)); continue; }
+    const k = c.g * c.g * (3 - 2 * c.g), S = c.spr[fr].width;
+    const w = Math.max(1, Math.round(S * k));
+    ctx.drawImage(c.spr[fr], Math.round(c.x - c.o * k), Math.round(c.y - c.o * k), w, w);
+  }
+}
+function drawGlow(r, a) {
+  if (a <= 0) return;
+  const g = ctx.createRadialGradient(sun.x, sun.y, 0, sun.x, sun.y, r);
+  g.addColorStop(0, css(pal.glow, a)); g.addColorStop(1, css(pal.glow, 0));
+  ctx.fillStyle = g; ctx.fillRect(sun.x - r, sun.y - r, r * 2, r * 2);
+}
+// sunstar: thin pixel rays from the disc, fading out, breathing a little (golden hour mostly)
+function drawRays(glow) {
+  const a0 = .38 * glow * (light.wg + light.wd * .2);
+  if (a0 < .02) return;
+  const L0 = H * .18, sx = Math.round(sun.x), sy = Math.round(sun.y);
+  for (let i = 0; i < 11; i++) {
+    const ang = (i / 11) * Math.PI * 2 + (hash(i, 7, 3) - .5) * .4, L = L0 * (.45 + hash(i, 8, 3) * .55);
+    const a = a0 * (.7 + .3 * Math.sin(time * .8 + i * 1.9)), cx = Math.cos(ang), cy = Math.sin(ang);
+    for (let j = sun.r + 1; j < L; j++) {
+      ctx.fillStyle = css(pal.glow, a * (1 - j / L));
+      ctx.fillRect(sx + Math.round(cx * j), sy + Math.round(cy * j), 1, 1);
+    }
+  }
+}
+function drawGrass() {
+  const cols = [mix(pal.grassFar, pal.grassLit, .25), mix(pal.grassNear, pal.grassFar, .35), mix(pal.grassNear, pal.grassLit, .5), mix(pal.shadow, pal.grassNear, .35)];
+  for (let k = 0; k < 4; k++) {
+    ctx.fillStyle = css(cols[k]);
+    for (const b of blades[k]) {
+      const bend = windAt(b.x, time) * 1.7 + Math.sin(time * 1.3 + b.ph) * .25 * PARAMS.flutter;
+      for (let j = 0; j < b.h; j++) { const f = j / b.h; ctx.fillRect(b.x + Math.round(bend * f * f * b.h * .7), b.y - j, 1, 1); }
+    }
+  }
+}
+function draw() {
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.drawImage(bg, 0, 0);
+  // clouds (thicker when Claude is thinking / working)
+  ctx.globalAlpha = clamp(PARAMS.cloud * (sun.moon ? .6 : 1));
+  for (const c of clouds) ctx.drawImage(c.can, Math.round(c.x), Math.round(c.y));
+  ctx.globalAlpha = 1;
+  // sun or moon, behind the tree
+  const pulse = 1 + Math.sin(time * 1.7) * .3 * PARAMS.pulse;
+  const glow = PARAMS.glow * pulse * (1 - PARAMS.dim);
+  ctx.globalCompositeOperation = 'lighter'; drawGlow(H * .38 * Math.min(1.3, glow), .32 * glow * (sun.moon ? .45 : 1)); ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = css(pal.sun);
+  for (let y = -sun.r; y <= sun.r; y++) { const w = Math.round(Math.sqrt(sun.r * sun.r - y * y)); ctx.fillRect(Math.round(sun.x) - w, Math.round(sun.y) + y, w * 2 + 1, 1); }
+  // tree
+  drawClusters(backC); drawBranches(); drawClusters(frontC);
+  // light bleeding through the canopy (the sun sits behind the tree at golden hour)
+  if (!sun.moon) { ctx.globalCompositeOperation = 'lighter'; drawGlow(H * .09 * glow, .55 * glow * light.wg + .2 * light.wd); drawRays(glow); ctx.globalCompositeOperation = 'source-over'; }
+  for (const l of leaves) if (l.land) { ctx.fillStyle = css(l.col); ctx.fillRect(Math.round(l.x), Math.round(l.y), 1, 1); }
+  drawGrass();
+  for (const l of leaves) if (!l.land) { ctx.fillStyle = css(l.col); ctx.fillRect(Math.round(l.x), Math.round(l.y), Math.sin(time * 6 + l.ph) > 0 ? 2 : 1, 1); }
+  // rain while it works hard
+  if (PARAMS.rain > .03) {
+    ctx.fillStyle = css(mix(pal.skyMid, [255, 255, 255], .4), .55);
+    const n = Math.round(PARAMS.rain * W * .5), slant = PARAMS.dir * PARAMS.wind * 1.5;
+    for (let i = 0; i < n; i++) {
+      const x = ((hash(i, 1, 9) * W + time * slant * 60) % W + W) % W, y = (hash(i, 2, 9) * H + time * (110 + hash(i, 3, 9) * 40)) % H;
+      for (let j = 0; j < 3; j++) ctx.fillRect(Math.round(x + slant * j), Math.round(y + j), 1, 1);
+    }
+  }
+  // fireflies at night, and while it waits for you
+  const fv = Math.max(light.wn, PARAMS.pulse * .8);
+  if (fv > .15) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const f of flies) { const a = Math.pow(Math.max(0, Math.sin(time * 1.6 + f.ph * 3)), 3) * fv; if (a < .05) continue;
+      ctx.fillStyle = `rgba(255,240,150,${a})`; ctx.fillRect(Math.round(f.x), Math.round(f.y), 1, 1);
+      ctx.fillStyle = `rgba(255,240,150,${a * .3})`; ctx.fillRect(Math.round(f.x) - 1, Math.round(f.y), 3, 1); ctx.fillRect(Math.round(f.x), Math.round(f.y) - 1, 1, 3); }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  if (PARAMS.dim > .01) { ctx.fillStyle = `rgba(16,20,34,${PARAMS.dim})`; ctx.fillRect(0, 0, W, H); }
+}
+
+let last = 0, lastRefresh = 0, lastHours = -1;
+function loop(now) {
+  if (paused || document.hidden) return;
+  requestAnimationFrame(loop);
+  if (now - last < 1000 / CONFIG.fps - 2) return;
+  const dt = Math.min(.05, (now - last) / 1000 || 1 / 30); last = now; time += dt;
+  const h = hours();
+  if (now - lastRefresh > 30000 || Math.abs(h - lastHours) > .05) { lastRefresh = now; lastHours = h; refresh(); }
+  update(dt); draw();
+}
+
+// ---------- state from VibingWrapper ----------
+function setAbsent(v) {
+  absent = !!v;
+  if (!foliageSet) { foliageSet = true; foliage = absent ? 0 : 1; if (clusters) for (const c of clusters) c.g = foliage > c.th ? 1 : 0; }
+}
+function applyState(j) {
+  if (typeof j === 'string') j = { state: j, force: true };
+  if (j && j.state === 'none') setAbsent(true);
+  else if (j && Array.isArray(j.sessions)) setAbsent(j.sessions.every(x => !x));
+  else if (j && j.state) setAbsent(false);
+  const s = (j && STATES[j.state]) ? j.state : 'clear';
+  if (s === stateName && j && !j.force) return;
+  stateName = s; target = Object.assign({ dir: target.dir }, STATES[s]);
+  if (s === 'storm') shedAcc += 8;                                      // the first gust takes a handful
+  markPanel();
+}
+async function requestState() { try { const r = await fetch('state.json', { cache: 'no-store' }); if (r.ok) applyState(await r.json()); } catch (e) {} }
+setInterval(() => { if (CONFIG.polling && !paused && !document.hidden) requestState(); }, 1000);
+window.wpPause = on => { paused = !!on; if (!paused) { last = performance.now(); requestAnimationFrame(loop); } };
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) { last = performance.now(); requestAnimationFrame(loop); } });
+function setSessions(a) { if (Array.isArray(a)) setAbsent(a.every(x => !x)); }   // one tree for all sessions (for now)
+function setOverride(p) { if (p) Object.assign(target, p); else target = Object.assign({ dir: target.dir }, STATES[stateName]); }
+window.theme = { requestState, applyState, setSessions, setOverride, STATES, PARAMS, CONFIG, refresh, shake: () => shake(crown.x, crown.y, 1) };
+
+// ---------- touch the tree (in a browser; the real wallpaper ignores the mouse) ----------
+function toWorld(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+cv.addEventListener('pointerdown', e => {
+  const p = toWorld(e); let best = null, bd = 16;
+  for (const n of nodes) { if (n.depth === 0) continue; const d = Math.hypot(n.x1 - p.x, n.y1 - p.y); if (d < bd) { bd = d; best = n; } }
+  const inCrown = Math.hypot(p.x - crown.x, p.y - crown.y) < crown.r || (Math.abs(p.x - trunkX) < T0 * 2 && p.y > crown.y && p.y < groundY + 2);
+  if (!best && !inCrown) return;
+  drag = { n: null, cand: best, x: p.x, y: p.y, sx: p.x, sy: p.y, t: performance.now() };
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) { const p = toWorld(e); cv.style.cursor = crown && Math.hypot(p.x - crown.x, p.y - crown.y) < crown.r ? 'grab' : ''; return; }
+  const p = toWorld(e); drag.x = p.x; drag.y = p.y;
+  if (!drag.n && drag.cand && Math.hypot(p.x - drag.sx, p.y - drag.sy) > 2) { drag.n = drag.cand; cv.style.cursor = 'grabbing'; }
+});
+cv.addEventListener('pointerup', () => {
+  if (!drag) return;
+  if (!drag.n) shake(drag.sx, drag.sy, 1);
+  else { const n = drag.n; for (let i = 0; i < Math.min(30, Math.abs(n.th) * 30); i++) spawnLeaf(visibleCluster()); }
+  drag = null; cv.style.cursor = '';
+});
+
+// ---------- test panel (?panel=1) ----------
+const panel = document.getElementById('panel');
+function markPanel() {
+  if (panel.hidden) return;
+  for (const b of document.querySelectorAll('#states button')) b.classList.toggle('on', b.dataset.s === (absent ? 'none' : stateName));
+}
+if (Q.has('panel')) {
+  panel.hidden = false;
+  const box = document.getElementById('states');
+  for (const s of ['none', ...Object.keys(STATES)]) { const b = document.createElement('button'); b.textContent = LABELS[s]; b.dataset.s = s;
+    b.onclick = () => { CONFIG.polling = false; tour.checked = false; applyState(s); }; box.appendChild(b); }
+  const tour = document.getElementById('tour'), order = ['none', 'clear', 'overcast', 'storm', 'clearing', 'waiting'];
+  setInterval(() => { if (tour.checked) { CONFIG.polling = false; const cur = absent ? 'none' : stateName; applyState(order[(order.indexOf(cur) + 1) % order.length]); } }, 9000);
+  const dirB = document.getElementById('dir');
+  dirB.onclick = () => { target.dir = -Math.sign(target.dir || 1); dirB.textContent = target.dir > 0 ? '風向 →' : '風向 ←'; };
+  document.getElementById('shake').onclick = () => shake(crown.x, crown.y, 1.2);
+  document.getElementById('seed').onclick = () => { CONFIG.seed++; rebuild(); };
+  const hour = document.getElementById('hour'), ht = document.getElementById('hourText'), rt = document.getElementById('realtime');
+  const showH = () => { const h = hours(); ht.textContent = String(Math.floor(h)).padStart(2, '0') + ':' + String(Math.round(h % 1 * 60)).padStart(2, '0'); hour.value = h; };
+  hour.oninput = () => { CONFIG.clockHours = +hour.value; rt.checked = false; refresh(); showH(); };
+  rt.checked = CONFIG.clockHours == null; rt.onchange = () => { CONFIG.clockHours = rt.checked ? null : +hour.value; refresh(); showH(); };
+  showH();
+  const st = document.getElementById('status');
+  setInterval(() => { st.textContent = `${LABELS[absent ? 'none' : stateName]}・葉 ${Math.round(foliage * 100)}%・風 ${PARAMS.wind.toFixed(2)}・落葉 ${leaves.length}・種子 ${CONFIG.seed}`; }, 300);
+}
+
+addEventListener('resize', () => { clearTimeout(rebuild.t); rebuild.t = setTimeout(rebuild, 200); });
+rebuild(); markPanel(); requestState();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

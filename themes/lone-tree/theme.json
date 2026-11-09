@@ -1,0 +1,11 @@
+{
+  "name": "孤樹（像素）",
+  "name_en": "Lone Tree (pixel)",
+  "order": 60,
+  "entry": "index.html",
+  "enabled": true,
+  "bundled": false,
+  "description": "草原上一棵有骨架的像素橡樹：樹枝是彈簧，風跟著 Claude 的狀態走，執行時起陣風、葉子會掉。試作中。",
+  "description_en": "A pixel oak with a real skeleton on a meadow: branches are springs, the wind follows Claude's state, and leaves let go when it works. Prototype.",
+  "tags": ["像素", "鄉村", "風格實驗"]
+}
