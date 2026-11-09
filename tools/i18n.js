@@ -75,7 +75,7 @@
   // setting + the system's locale(s) → 'zh' / 'en'
   const resolve = (setting, locales) => setting === 'zh' || setting === 'en' ? setting
     : [].concat(locales || []).some(l => /^zh/i.test(String(l))) ? 'zh' : 'en';
-  const api = { T, resolve, setLang: l => { lang = l === 'en' ? 'en' : 'zh'; }, lang: () => lang, has: s => Object.prototype.hasOwnProperty.call(EN, s) };
+  const api = { en: EN, T, resolve, setLang: l => { lang = l === 'en' ? 'en' : 'zh'; }, lang: () => lang, has: s => Object.prototype.hasOwnProperty.call(EN, s) };
 
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {

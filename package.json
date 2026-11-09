@@ -1,6 +1,6 @@
 {
   "name": "vibing-wrapper",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "VibingWrapper：跟著 Claude Code 工作節奏變天的動態桌布（天空、海、船隊）＋桌面小工具",
   "main": "main.js",
@@ -10,9 +10,11 @@
     "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1",
     "dist": "node scripts/dist.js",
     "dist:lite": "node scripts/dist-lite.js",
-    "themes:pack": "node scripts/pack-themes.js"
+    "themes:pack": "node scripts/pack-themes.js",
+    "dist:tauri": "node scripts/tauri-pack.js"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3"
   },
