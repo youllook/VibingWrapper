@@ -146,6 +146,9 @@ fn page_vars(c: &Core) -> String { format!("window.__VW_LANG={:?};window.__VW_VE
 // process must be built with the same options, so each builder goes through here
 static WEBVIEW_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 pub fn with_args<'a, R: tauri::Runtime, M: Manager<R>>(b: WebviewWindowBuilder<'a, R, M>) -> WebviewWindowBuilder<'a, R, M> {
+    // Tauri's own default flags, plus: keep painting when Chromium thinks a window is covered. The HUD is a small
+    // transparent click-through window; native occlusion tracking can mark it hidden and leave it blank
+    let b = b.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows");
     match WEBVIEW_DIR.get() { Some(d) => b.data_directory(d.clone()), None => b }
 }
 fn only_app_pages(u: &tauri::Url) -> bool { u.scheme() == "tauri" || u.host_str() == Some("tauri.localhost") }
@@ -153,7 +156,10 @@ fn only_app_pages(u: &tauri::Url) -> bool { u.scheme() == "tauri" || u.host_str(
 fn create_hud(app: &AppHandle) -> tauri::Result<()> {
     let c = core(app);
     let win = with_args(WebviewWindowBuilder::new(app, "hud", WebviewUrl::App("prototype/hud.html".into())))
+        // not minimizable (as in the Electron build): Win+D / 顯示桌面 would minimize it, and with no taskbar button
+        // there is no way to bring it back
         .title("VibingWrapper").transparent(true).decorations(false).shadow(false).resizable(false).skip_taskbar(true)
+        .minimizable(false).maximizable(false)
         .always_on_top(c.get("alwaysOnTop") == json!(true)).focused(false).visible(false)
         .inner_size(HUD_W, HUD_H).initialization_script(&(page_vars(&c) + include_str!("shim.js")))
         .on_navigation(only_app_pages)   // keep links out of the HUD
@@ -560,10 +566,35 @@ fn watchers(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_screen = None;
         let mut n = 0u32;
+        let mut hud_lost = false;
+        let mut desk_up = false;
         loop {
             std::thread::sleep(Duration::from_millis(700));
             let c = core(&app);
             if c.get("weatherWallpaper") != json!(false) { wallpaper::set_paused(&app, desk::covered()); }
+            // the HUD is never hidden on purpose (the boss key only shrinks it): if something minimized or hid it, bring it back
+            // (straight ShowWindow: tao's show() trusts its own idea of the state and skips a window hidden from outside)
+            if let Some(w) = app.get_webview_window("hud") {
+                let (min, vis) = (w.is_minimized().unwrap_or(false), w.is_visible().unwrap_or(true));
+                if min || !vis {
+                    if !hud_lost { c.log(&format!("[hud] found minimized={} visible={}: restoring", min, vis)); }
+                    hud_lost = true;
+                    let a = app.clone();
+                    let _ = app.run_on_main_thread(move || if let Some(w) = a.get_webview_window("hud") {
+                        if let Ok(h) = w.hwnd() { desk::show_noactivate(h.0 as isize); }
+                        place_hud(&a);
+                    });
+                } else if hud_lost { hud_lost = false; c.log("[hud] back"); }
+                // 顯示桌面 puts the desktop above it: the gear stays reachable, so lift it back over the desktop
+                else if let Ok(h) = w.hwnd() {
+                    let h = h.0 as isize;
+                    if desk::desktop_above(h) {
+                        if !desk_up { c.log("[hud] under the desktop (顯示桌面): lifting"); }
+                        desk_up = true;
+                        let _ = app.run_on_main_thread(move || desk::raise_noactivate(h));
+                    } else { desk_up = false; }
+                }
+            }
             n += 1;
             if n % 3 == 0 {
                 let now = app.primary_monitor().ok().flatten().map(|m| (*m.position(), *m.size(), m.work_area().size.clone(), m.scale_factor().to_bits()));

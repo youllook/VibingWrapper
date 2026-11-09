@@ -84,6 +84,43 @@ mod w {
 }
 #[cfg(windows)]
 pub use w::{ask, covered, icons_visible, toggle_icons};
+// restore + show without taking the focus
+#[cfg(windows)]
+pub fn show_noactivate(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, IsIconic, SW_SHOWNOACTIVATE, SW_SHOWNA};
+    unsafe { let h = hwnd as _; ShowWindow(h, if IsIconic(h) != 0 { SW_SHOWNOACTIVATE } else { SW_SHOWNA }); }
+}
+#[cfg(not(windows))]
+pub fn show_noactivate(_hwnd: isize) {}
+// 顯示桌面 (Win+D, the taskbar corner) lifts the desktop's WorkerW above every normal window, the HUD included, until
+// something else is activated. True while a top-level WorkerW sits above `hwnd` in the z-order.
+#[cfg(windows)]
+pub fn desktop_above(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetTopWindow, GetWindow, GetClassNameW, IsWindowVisible, GW_HWNDNEXT};
+    unsafe {
+        let me = hwnd as windows_sys::Win32::Foundation::HWND;
+        let mut h = GetTopWindow(std::ptr::null_mut());
+        let mut buf = [0u16; 16];
+        while !h.is_null() && h != me {
+            if IsWindowVisible(h) != 0 {
+                let n = GetClassNameW(h, buf.as_mut_ptr(), 16) as usize;
+                if String::from_utf16_lossy(&buf[..n]) == "WorkerW" { return true; }
+            }
+            h = GetWindow(h, GW_HWNDNEXT);
+        }
+        false
+    }
+}
+// to the top of the non-topmost windows, without taking the focus (a second Win+D still brings the windows back)
+#[cfg(windows)]
+pub fn raise_noactivate(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE};
+    unsafe { SetWindowPos(hwnd as _, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
+}
+#[cfg(not(windows))]
+pub fn desktop_above(_hwnd: isize) -> bool { false }
+#[cfg(not(windows))]
+pub fn raise_noactivate(_hwnd: isize) {}
 #[cfg(not(windows))]
 pub fn icons_visible() -> bool { true }
 #[cfg(not(windows))]
