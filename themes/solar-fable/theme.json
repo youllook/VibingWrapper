@@ -1,0 +1,15 @@
+{
+  "name": "太陽系・Fable",
+  "name_en": "Solar System / Fable",
+  "order": 62,
+  "entry": "index.html",
+  "enabled": true,
+  "bundled": false,
+  "description": "會動的科幻電影劇照：九大行星照真實軌道縮時繞太陽，從今天的真實位置出發（地球約 91 秒一圈），月亮跟著走、土星環方向不變、冥王星的斜軌道穿過畫面。待命是平靜的光、思考時變冷且時間放慢、執行時太陽風極光閃電且時間加速、收尾一片金色、等你則日全蝕——時間幾乎凍結，一圈光波沿軌道面掃過各行星。每個 session 是天上一顆彗星。",
+  "description_en": "A moving sci-fi film still: the nine planets run on their real orbits in time-lapse from today's true positions (Earth goes round in about 91 s), moons in tow, Saturn's rings fixed in space, Pluto's tilted orbit cutting across the frame. Calm light when idle, colder and slower while thinking, solar wind, aurorae, lightning and faster time while working, gold when wrapping up, and a total eclipse with time almost frozen and a wave of light sweeping the orbital plane while waiting for you. Each session is a comet.",
+  "tags": [
+    "天空",
+    "夜景",
+    "風格實驗"
+  ]
+}

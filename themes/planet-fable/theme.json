@@ -1,0 +1,11 @@
+{
+  "name": "行星・Fable",
+  "name_en": "Planet / Fable",
+  "order": 61,
+  "entry": "index.html",
+  "enabled": true,
+  "bundled": false,
+  "description": "科幻電影劇照：衛星地平線上，一顆帶環的氣態巨行星。恆星繞著它走——待命是側光、思考雲帶翻湧、執行時夜面閃電與極光、收尾日出破限、等你則整顆行星日蝕只剩一圈呼吸的大氣光。每個 session 是地平線上一艘小船。",
+  "description_en": "A sci-fi film still: a ringed gas giant over a moon's horizon. The star moves around it: side-lit when idle, churning bands while thinking, night-side lightning and aurorae while working, sunrise over the limb when wrapping up, and a full eclipse with a breathing ring of atmosphere while waiting for you. Each session is a small ship above the horizon.",
+  "tags": ["天空", "夜景", "風格實驗"]
+}
