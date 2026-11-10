@@ -1,0 +1,11 @@
+{
+  "name": "孤樹・聖誕燈",
+  "name_en": "Lone Tree · Winter Lights",
+  "order": 61,
+  "entry": "index.html",
+  "enabled": true,
+  "bundled": false,
+  "description": "雪夜裡的孤樹掛上一串像素燈泡，燈就是 Claude 的狀態：待命時暖黃慢呼吸、思考時亂閃、執行時跑馬燈、等你時整串一起眨。Claude 一上線，燈一顆顆點亮、最後亮起樹頂的星；不在時燈熄，只剩雪靜靜積著。",
+  "description_en": "A lone oak in a snowy night, wrapped in a string of pixel bulbs that show what Claude is doing: a slow warm breath when idle, scattered twinkling while thinking, a marquee chase while it works, the whole string blinking together when it needs you. When Claude comes online the bulbs light one by one until the star on top pops on; when it leaves, the lights go out and only the snow keeps falling.",
+  "tags": ["像素", "聖誕", "冬季", "風格實驗"]
+}
