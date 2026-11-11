@@ -44,6 +44,17 @@ class School:
 	var c := Vector2.ZERO
 	var h := Vector2.RIGHT
 	var R := 1.0
+	# its shape's numbers, read out of S once (the per-fish loop looked them up by name every frame)
+	var zr := 0.0
+	var zo := 0.0
+	var za := 0.0
+	var goal := 0.0
+	var turn := 0.0
+	var cruise := 0.0
+	var band := false
+	var scatter := false
+	var ringy := false
+	var mates: Array[Fish] = []     # its fish, while a step runs (emptied after: a fish and its school must not hold each other)
 
 class Fish:
 	var p := Vector2.ZERO
@@ -77,7 +88,16 @@ var buf := PackedFloat32Array()
 var cam: Camera3D
 var t := 0.0
 var fish_mat: ShaderMaterial
-var surface: Callable          # (x, z) → the swell's height there (main.gd): depths are under the moving surface
+# the threat of this step, flattened (2026-11-11: _near() walked a Dictionary per squid for every fish, two or three
+# times a frame — the largest part of the script's time while Claude runs): per shape a point (circle) or a segment
+# (capsule: a, a→b and its squared length; -1 marks a circle) and its reach
+var th_n := 0
+var th_a := PackedVector2Array()
+var th_v := PackedVector2Array()
+var th_l2 := PackedFloat64Array()
+var th_r := PackedFloat64Array()
+var near_e := INF              # _near2's answer: distance past the nearest edge …
+var near_u := Vector2.RIGHT    # … and the unit direction away from it
 
 func setup(camera: Camera3D) -> void:
 	cam = camera
@@ -120,6 +140,15 @@ func spawn(n: int, shape: String, target = null, at = null, life := randf_range(
 	sc.emerge = emerge
 	sc.scare_after = scare_after
 	sc.dep = randf_range(0.3, 1.0)
+	sc.zr = sc.S.zr * BL * SPREAD
+	sc.zo = sc.zr + sc.S.dzo * BL * SPREAD
+	sc.za = sc.zo + sc.S.dza * BL * SPREAD
+	sc.goal = sc.S.goal
+	sc.turn = sc.S.turn
+	sc.cruise = sc.S.speed * PACE * BL
+	sc.band = shape == "band"
+	sc.scatter = shape == "scatter"
+	sc.ringy = shape == "ring"
 	var rad := sqrt(n) * BL * 0.9 * SPREAD
 	var from: Vector2
 	var side := randi() % 4
@@ -148,7 +177,7 @@ func spawn(n: int, shape: String, target = null, at = null, life := randf_range(
 		var f := Fish.new()
 		f.p = from + Vector2.from_angle(randf() * TAU) * sqrt(randf()) * rad
 		f.h = Vector2.from_angle(a0 + randf_range(-0.3, 0.3))
-		f.sp = sc.S.speed * PACE * BL
+		f.sp = sc.cruise
 		f.sc = sc
 		f.k = randf_range(0.85, 1.18) if shape == "band" else randf_range(0.95, 1.05)
 		f.ph = randf() * TAU
@@ -182,26 +211,60 @@ func release_ring() -> void:
 
 # ---------------------------------------------------------------- threats: {kind: "circle", c, r, rear} / {kind: "capsule", a, b, r, rear}
 # / {kind: "multi", list: [circle|capsule…], rear}
-func _near(th: Dictionary, p: Vector2) -> Array:      # [distance past the edge, unit direction away]
-	if th.kind == "multi":                               # several squid: the nearest one
-		var best := [INF, Vector2.RIGHT]
-		for one in th.list:
-			var r := _near(one, p)
-			if r[0] < best[0]:
-				best = r
-		return best
-	var q: Vector2
-	if th.kind == "circle":
-		q = th.c
-	else:
-		var v: Vector2 = th.b - th.a
-		q = th.a + v * clampf((p - th.a).dot(v) / v.length_squared(), 0.0, 1.0)
-	var d := p - q
-	var l := maxf(d.length(), 1e-4)
-	return [l - th.r, d / l]
+func _set_threat(th) -> void:
+	th_n = 0
+	th_a.clear()
+	th_v.clear()
+	th_l2.clear()
+	th_r.clear()
+	if th == null:
+		return
+	for one in (th.list if th.kind == "multi" else [th]):
+		if one.kind == "circle":
+			th_a.append(one.c)
+			th_v.append(Vector2.ZERO)
+			th_l2.append(-1.0)
+		else:
+			var v: Vector2 = one.b - one.a
+			th_a.append(one.a)
+			th_v.append(v)
+			th_l2.append(v.length_squared())
+		th_r.append(one.r)
+	th_n = th_r.size()
+
+# how far p is past the edge of the nearest threat (several squid: the nearest one)
+func _edge(p: Vector2) -> float:
+	var best := INF
+	for i in th_n:
+		var q := th_a[i]
+		var l2 := th_l2[i]
+		if l2 >= 0.0:
+			var v := th_v[i]
+			q += v * clampf((p - q).dot(v) / l2, 0.0, 1.0)
+		var e := maxf((p - q).length(), 1e-4) - th_r[i]
+		if e < best:
+			best = e
+	return best
+
+# the same, and the unit direction away from it: into near_e / near_u
+func _near2(p: Vector2) -> void:
+	near_e = INF
+	near_u = Vector2.RIGHT
+	for i in th_n:
+		var q := th_a[i]
+		var l2 := th_l2[i]
+		if l2 >= 0.0:
+			var v := th_v[i]
+			q += v * clampf((p - q).dot(v) / l2, 0.0, 1.0)
+		var d := p - q
+		var l := maxf(d.length(), 1e-4)
+		if l - th_r[i] < near_e:
+			near_e = l - th_r[i]
+			near_u = d / l
 
 func _cstart(f: Fish, th: Dictionary) -> void:
-	var u: Vector2 = _near(th, f.p)[1]
+	_near2(f.p)
+	var u := near_u
 	var a1 := u.rotated(ESC_ANGLE)
 	var a2 := u.rotated(-ESC_ANGLE)
 	var rear: Vector2 = th.get("rear", Vector2(0, 1))
@@ -224,16 +287,13 @@ func step(dt: float, env: Dictionary) -> void:
 	var ring = env.get("ring")
 	var boat = env.get("boat")
 	frame += 1
-	var members := {}
-	for f in fish:
-		if not members.has(f.sc):
-			members[f.sc] = []
-		members[f.sc].append(f)
+	_set_threat(threat)
 	for sc in schools:
 		sc.n = 0
 		sc.c = Vector2.ZERO
 		sc.h = Vector2.ZERO
 	for f in fish:
+		f.sc.mates.append(f)
 		if f.fear == 0.0:
 			f.sc.n += 1
 			f.sc.c += f.p
@@ -259,24 +319,41 @@ func step(dt: float, env: Dictionary) -> void:
 			var f0 := screen_frac(sc.c)
 			var out := Vector2(-0.35 if f0.x < 0.5 else 1.35, f0.y) if absf(f0.x - 0.5) > absf(f0.y - 0.5) else Vector2(f0.x, -0.35 if f0.y < 0.5 else 1.35)
 			sc.target = water_at(out)
+	var has_threat := threat != null
+	var has_boat := boat != null
+	var boat_p := Vector2.ZERO
+	var boat_h := Vector2.RIGHT
+	var boat_half := 0.0
+	var Rb := 1.0
+	if has_boat:
+		boat_p = boat.p
+		boat_h = boat.h
+		boat_half = boat.len / 2.0
+		Rb = boat.beam * 0.5 + 4.0 * BL
+	var has_ring := ring != null
+	var ring_c := Vector2.ZERO
+	var ring_r := 1.0
+	if has_ring:
+		ring_c = ring.c
+		ring_r = ring.r
 	for idx in fish.size():
 		var f := fish[idx]
-		var S: Dictionary = f.sc.S
-		var zr: float = S.zr * BL * SPREAD
-		var zo: float = zr + S.dzo * BL * SPREAD
-		var za: float = zo + S.dza * BL * SPREAD
+		var sc := f.sc
+		var zr := sc.zr
+		var zo := sc.zo
+		var za := sc.za
 		# a rolling sample of schoolmates: repulsion inside zr, else align inside zo, else attract inside za
-		var mates: Array = members[f.sc]
+		var mates := sc.mates
 		var nm := mates.size()
 		var rep := Vector2.ZERO
 		var o := Vector2.ZERO
 		var startled := false
 		var fresh := (idx + frame) % 2 == 0 or f.esc < 0.5     # half the fish look round each frame; the rest keep their last look
 		for q in (mini(SAMPLE, nm - 1) if fresh else 0):
-			var g: Fish = mates[(idx * 7 + frame * 3 + q * 13 + 1) % nm]
+			var g := mates[(idx * 7 + frame * 3 + q * 13 + 1) % nm]
 			if g == f:
 				continue
-			var dv: Vector2 = g.p - f.p
+			var dv := g.p - f.p
 			var d2 := dv.length_squared()
 			if d2 >= za * za:
 				continue
@@ -298,15 +375,14 @@ func step(dt: float, env: Dictionary) -> void:
 			want = (o.normalized() if o.length() > 1e-5 else f.h) + f.h * 0.6
 		f.soc = want
 		want = want.normalized()
-		var sc := f.sc
 		var gv := sc.target - f.p
 		var gd := maxf(gv.length(), 1e-3)
-		var gw: float = (1.0 if sc.leaving or sc.through else minf(1.0, gd / 10.0)) * S.goal * maxf(1.0 - f.fear, 0.7 if sc.fled else 0.0)
+		var gw: float = (1.0 if sc.leaving or sc.through else minf(1.0, gd / 10.0)) * sc.goal * maxf(1.0 - f.fear, 0.7 if sc.fled else 0.0)
 		want += gv / gd * gw
 		if f.fear == 0.0 and sc.n > 3:
 			var cv := sc.c - f.p
 			var cd := maxf(cv.length(), 1e-4)
-			if sc.shape == "band":          # pulled onto the school's axis, free along it
+			if sc.band:                     # pulled onto the school's axis, free along it
 				var lat := -cv.x * sc.h.y + cv.y * sc.h.x
 				var lon := cv.dot(sc.h)
 				var W := 3.0 * BL * SPREAD
@@ -314,29 +390,28 @@ func step(dt: float, env: Dictionary) -> void:
 				want += Vector2(-sc.h.y, sc.h.x) * pl
 				want += sc.h * 0.5 * maxf(0.0, absf(lon) - sc.R * 4.0) / sc.R * signf(lon)
 			else:
-				var pull := (0.25 if sc.shape == "scatter" else 0.6) * clampf((cd - sc.R) / sc.R, 0.0, 1.0)
+				var pull := (0.25 if sc.scatter else 0.6) * clampf((cd - sc.R) / sc.R, 0.0, 1.0)
 				want += cv / cd * pull
-			if sc.shape == "ring" and not f.ring:
+			if sc.ringy and not f.ring:
 				var Rr := sc.R * 1.4
 				var e := (cd - Rr) / Rr
 				want += Vector2(-cv.y, cv.x) / cd * 0.9 + cv / cd * e * 1.2
-		if boat != null:                     # swim round the hull
-			var bx: Vector2 = f.p - boat.p
-			var along := clampf(bx.dot(boat.h), -boat.len / 2.0, boat.len / 2.0)
-			var pv: Vector2 = f.p - (boat.p + boat.h * along)
+		if has_boat:                         # swim round the hull
+			var bx := f.p - boat_p
+			var along := clampf(bx.dot(boat_h), -boat_half, boat_half)
+			var pv := f.p - (boat_p + boat_h * along)
 			var pd := maxf(pv.length(), 1e-4)
-			var Rb: float = boat.beam * 0.5 + 4.0 * BL
 			if pd < Rb:
 				want += pv / pd * 2.5 * (1.0 - pd / Rb)
-		if ring != null and f.fear == 0.0 and f.ring:    # waiting: circle the boat
-			var qv: Vector2 = f.p - ring.c
+		if has_ring and f.fear == 0.0 and f.ring:        # waiting: circle the boat
+			var qv := f.p - ring_c
 			var qd := maxf(qv.length(), 1e-4)
-			var e2: float = (ring.r - qd) / ring.r
-			f.far = absf(qd - ring.r) > 4.0
+			var e2 := (ring_r - qd) / ring_r
+			f.far = absf(qd - ring_r) > 4.0
 			want += Vector2(-qv.y, qv.x) / qd * 1.2 + qv / qd * e2 * 2.5
-		if threat != null and f.fear > 0.0:              # keep running while it's close
-			var nr := _near(threat, f.p)
-			want += nr[1] * f.fear * 1.5 * maxf(0.0, 1.0 - nr[0] / 25.0)
+		if has_threat and f.fear > 0.0:                  # keep running while it's close
+			_near2(f.p)
+			want += near_u * f.fear * 1.5 * maxf(0.0, 1.0 - near_e / 25.0)
 		want = want.normalized()
 		# startle: by itself near the threat's edge, or caught from a neighbour 2–4 frames later
 		if f.pend > 0.0:
@@ -344,19 +419,21 @@ func step(dt: float, env: Dictionary) -> void:
 			if f.pend <= 0.0 and threat != null:
 				_cstart(f, threat)
 				continue
-		elif threat != null and f.esc > 2.0 and f.sc.seen:
-			if _near(threat, f.p)[0] < 2.0 * BL:
+		elif has_threat and f.esc > 2.0 and sc.seen:
+			if _edge(f.p) < 2.0 * BL:
 				_cstart(f, threat)
 				continue
 			if startled:
 				f.pend = randf_range(2, 4) / 30.0
-		var maxT: float = S.turn * (2.5 if f.esc < 1.5 else 1.0) * dt
+		var maxT := sc.turn * (2.5 if f.esc < 1.5 else 1.0) * dt
 		var turn := clampf(f.h.angle_to(want), -maxT, maxT)
 		f.h = f.h.rotated(turn)
 		f.yaw = turn / dt
 		f.flash = maxf(f.flash - dt * 2.5, minf(1.0, absf(turn) / dt / 6.0))
+	for sc in schools:
+		sc.mates.clear()
 	for f in fish:
-		var cruise: float = f.sc.S.speed * PACE * BL * f.k * (3.0 if f.ring and f.far else 1.0)
+		var cruise := f.sc.cruise * f.k * (3.0 if f.ring and f.far else 1.0)
 		var burst := 1.5 + 2.5 * pow(1.0 - f.esc / 1.5, 2) if f.esc < 1.5 else 1.0 + 0.5 * f.fear
 		f.sp += (cruise * burst - f.sp) * minf(1.0, (30.0 if f.esc < 0.1 else 2.0) * dt)
 		if f.esc < 0.1:
@@ -364,7 +441,7 @@ func step(dt: float, env: Dictionary) -> void:
 		f.p += f.h * f.sp * dt
 		f.esc += dt
 		f.jt = f.esc < dt * 1.01
-		if threat == null or _near(threat, f.p)[0] > 20.0:
+		if f.fear > 0.0 and (not has_threat or _edge(f.p) > 20.0):   # (a calm fish has nothing to forget)
 			f.fear = maxf(0.0, f.fear - dt * 0.15)
 		f.alpha = minf(1.0, f.alpha + dt * 1.5)
 	# a school that took fright doesn't come back: it heads out of the frame, away from where the fright was
@@ -381,7 +458,8 @@ func step(dt: float, env: Dictionary) -> void:
 			if k < 3:
 				continue
 			s /= k
-			sc.target = s + (_near(threat, s)[1] as Vector2) * 200.0
+			_near2(s)
+			sc.target = s + near_u * 200.0
 			sc.fled = true
 			sc.leaving = true
 	# gone: off the frame and done with it
@@ -417,7 +495,7 @@ func _draw(dt: float, murk: float) -> void:
 		var o := i * 16
 		# rows of [X Y Z | origin]: X = (hx, 0, hz), Y = (-hz·sr, cr, hx·sr), Z = (-hz·cr, -sr, hx·cr) … ×L
 		buf[o] = hx * L;        buf[o + 1] = -hz * sr * L; buf[o + 2] = -hz * cr * L; buf[o + 3] = f.p.x
-		buf[o + 4] = 0.0;       buf[o + 5] = cr * L;       buf[o + 6] = -sr * L;      buf[o + 7] = (surface.call(f.p) if surface.is_valid() else 0.0) - (f.dep + 6.0 * f.rise * f.rise)
+		buf[o + 4] = 0.0;       buf[o + 5] = cr * L;       buf[o + 6] = -sr * L;      buf[o + 7] = -(f.dep + 6.0 * f.rise * f.rise)   # under a flat sea: fish.gdshader lifts it with the swell
 		buf[o + 8] = hz * L;    buf[o + 9] = hx * sr * L;  buf[o + 10] = hx * cr * L; buf[o + 11] = f.p.y
 		buf[o + 12] = f.tp;     buf[o + 13] = f.flash;     buf[o + 14] = 0.0;         buf[o + 15] = 0.0
 	multimesh.buffer = buf      # one upload instead of two calls per fish

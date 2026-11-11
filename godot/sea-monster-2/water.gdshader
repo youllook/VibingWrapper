@@ -34,6 +34,15 @@ uniform vec2 glint = vec2(0.0008, 0.9);         // sun glint: base roughness, st
 varying vec3 wpos;
 varying vec3 swell_n;
 varying float crest;
+varying vec3 slow;        // the three slow noise fields, worked out per grid point (see vertex())
+
+// hash without sine (Dave Hoskins): the sin() one falls apart into blocks on WebGL
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p) {
+	vec2 i = floor(p), f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
 
 // the swell, as sea3d: each wave moves the grid round a circle (q sharpens the crests), normals analytically.
 // The grid stays on the boat (only translated), the waves are laid on the drifting water
@@ -55,15 +64,13 @@ void vertex() {
 	wpos = p + d;
 	swell_n = vec3(n.x * swell, 1.0 - (1.0 - n.y) * swell, n.z * swell);
 	crest = cr * swell;
+	// the gust fields (9 m and 22 m features) and the big patches of darker water (50 m) vary far more slowly than the
+	// 1.25 m grid: worked out here and interpolated, instead of twelve hashes for every pixel (2026-11-11)
+	vec2 w = wpos.xz + drift;
+	vec2 wind = vec2(0.6, -0.8);
+	slow = vec3(vnoise(w * 0.045 - wind * time * 0.4), vnoise(w * 0.11 + 3.3 - wind * time * 0.6), vnoise(w * 0.02 + time * 0.005));
 }
 
-// hash without sine (Dave Hoskins): the sin() one falls apart into blocks on WebGL
-float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
-float vnoise(vec2 p) {
-	vec2 i = floor(p), f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
-}
 float fbm(vec2 p) {
 	float a = 0.5, s = 0.0;
 	for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = mat2(vec2(1.6, 1.2), vec2(-1.2, 1.6)) * p; a *= 0.5; }
@@ -80,10 +87,9 @@ const float RIP_ROT[NL] = float[](0.0, 0.6, -0.5, 1.2, -1.4);
 const float RIP_GUST[NL] = float[](0.0, 0.3, 0.7, 1.0, 1.0);   // sea3d: the finer the layer, the more the gusts rule it
 // two gust fields drift downwind; where they blow the fine layers roughen, elsewhere they lie flat (cat's paws).
 // lost = the slope variance of layers finer than the pixel, which widens the sun's glint into a sheen (sea3d)
-vec2 wave_slope(vec2 p, float fw, out float lost) {
-	vec2 wind = vec2(0.6, -0.8);
-	float gA = smoothstep(0.15, 0.85, vnoise(p * 0.045 - wind * time * 0.4));
-	float gB = smoothstep(0.15, 0.85, vnoise(p * 0.11 + 3.3 - wind * time * 0.6));
+vec2 wave_slope(vec2 p, vec2 gust, float fw, out float lost) {
+	float gA = smoothstep(0.15, 0.85, gust.x);
+	float gB = smoothstep(0.15, 0.85, gust.y);
 	vec2 g = vec2(0.0);
 	lost = 0.0;
 	for (int i = 0; i < NL; i++) {
@@ -125,7 +131,7 @@ void fragment() {
 	if (bu > -2.35 && bu < 2.45 && abs(bv) < half_beam && world_at(SCREEN_UV, texture(depth_tex, SCREEN_UV).r, INV_PROJECTION_MATRIX, INV_VIEW_MATRIX).y > wpos.y - 1.5) { discard; }
 	vec2 p = wpos.xz + drift;
 	float lost;
-	vec2 g = wave_slope(p, length(fwidth(wpos.xz)), lost);
+	vec2 g = wave_slope(p, slow.xy, length(fwidth(wpos.xz)), lost);
 	vec3 n = normalize(normalize(swell_n) + vec3(-g.x, 0.0, -g.y));
 	vec3 V = normalize(CAMERA_POSITION_WORLD - wpos);
 
@@ -150,7 +156,7 @@ void fragment() {
 	float shade = smoothstep(2.0, 7.0, depth_below) * (1.0 - smoothstep(45.0, 58.0, depth_below));
 	col *= 1.0 - 0.7 * shade * (1.0 - clear_here);   // gone once it is up: then the water over it clears instead
 	// big slow patches of darker / lighter water
-	col *= 0.8 + 0.4 * vnoise(p * 0.02 + time * 0.005);
+	col *= 0.8 + 0.4 * slow.z;
 
 	// surface, as sea3d: the sky mirrored by Fresnel, a crest facing the sun lets a little green through, and the sun's
 	// glint as a Beckmann lobe that the unresolved ripple slope widens (sparkle near, sheen far)
