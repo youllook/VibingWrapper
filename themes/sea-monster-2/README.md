@@ -69,4 +69,4 @@ godot --headless --path godot/sea-monster-2 --export-release "Web" ../../themes/
 
 - 船上的人換成真模型（現在是膠囊）。
 - 腕攤得更開（參考圖觸腕穗伸到左右兩邊畫框）。
-- 下載量：`index.pck` 75 MB（巨魷貼圖照原尺寸壓），可在匯入設定縮貼圖。
+- 下載量：`index.pck` 12 MB（2026-11-11 貼圖匯入改有損 WebP 0.85、解析度不變；原本無損 75 MB）。主題包 21.5 MB。
