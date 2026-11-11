@@ -58,6 +58,10 @@ const BOAT_LENGTH := 5.0
 const BOAT_DRAFT := 0.25                        # how deep the hull sits
 const PEOPLE_FLOOR := 0.05                      # deck height above the water line, for the two men
 const SWELL_N := 10
+const AXIS_Z := Vector3(0, 0, 1)                # a limb bone's side-to-side axis …
+const AXIS_X := Vector3(1, 0, 0)                # … and its up-and-down one (tools/armaxis.gd)
+const WATER_SIZE := 700.0                     # the sea's sheet (m) …
+const WATER_SUB := 560                        # … and its PlaneMesh subdivisions: 561 quads a side, about 1.25 m each
 const BOAT_SPEED := 2.2                       # m/s, the water scrolls under a boat that stays put in frame
 
 var state := "clear"           # what state.json says
@@ -70,6 +74,8 @@ var warped := false
 var dbg_applied := ""
 var no_squid := false
 var water_mi: MeshInstance3D
+var water_lo := Vector2i.ZERO   # the part of the sea's grid that is built (PlaneMesh vertex columns / rows), see _fit_water
+var water_hi := Vector2i.ZERO
 var prof_acc := 0
 var prof_n := 0
 var dbg := ""
@@ -86,7 +92,7 @@ var sun: DirectionalLight3D
 var water_mat: ShaderMaterial
 var squid: Node3D
 var skel: Skeleton3D
-var limbs := []              # [{bones: [idx…], rest: [Quaternion…], phase}]
+var limbs := []              # [Limb…]
 var eyes := []               # eye MeshInstance3Ds
 var squid_depth := 40.0
 var depth := Tw.new(DEEP)
@@ -139,10 +145,13 @@ func _ready() -> void:
 		if v.size() == 6:
 			cam.position = Vector3(v[0], v[1], v[2])
 			cam.look_at(Vector3(v[3], v[4], v[5]), Vector3.UP)
+	_fit_water()
+	get_viewport().size_changed.connect(_fit_water)
 	fishes = load("res://fish.gd").new()
 	add_child(fishes)
 	fishes.setup(cam)
-	fishes.surface = func(p: Vector2) -> float: return _swell_at(p + drift).x * swell_k
+	fishes.fish_mat.set_shader_parameter("wa", water_mat.get_shader_parameter("wa"))   # the fish ride the same swell
+	fishes.fish_mat.set_shader_parameter("wb", water_mat.get_shader_parameter("wb"))
 	if dbg != "":
 		_apply_dbg()      # natively the switches come from the command line (on the web, from the page)
 	_enter(state, true)
@@ -206,10 +215,6 @@ func _build_water() -> void:
 		swell.append(w)
 		wa.append(Vector4(w.d.x, w.d.y, k, w.a))
 		wb.append(Vector4(w.q, w.w, w.ph, 0.0))
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(700, 700)
-	plane.subdivide_width = 560
-	plane.subdivide_depth = 560
 	water_mat = ShaderMaterial.new()
 	water_mat.shader = load("res://water.gdshader")
 	water_mat.set_shader_parameter("sun_dir", -sun.global_transform.basis.z)
@@ -220,13 +225,79 @@ func _build_water() -> void:
 	# sparkle the user liked went flat — stronger here (mood over optics)
 	water_mat.set_shader_parameter("glint", Vector2(0.0008, 5.0))
 	var mi := MeshInstance3D.new()
-	mi.mesh = plane
 	mi.position = Vector3(boat_pos.x, 0.0, boat_pos.z)
 	mi.extra_cull_margin = 4.0
 	mi.material_override = water_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	water_mi = mi
+
+# The water's grid: a 700 m sheet centred on the boat, 561 quads a side (1.25 m, fine enough for the 3 m waves) — but
+# only the part of it the frame can see is built (2026-11-11: the whole sheet is 316 000 vertices, each working out
+# ten waves, nearly all of them off screen; the fixed camera sees about 10 000). The part is cut out of the very same
+# PlaneMesh, vertex for vertex and triangle for triangle, so what is drawn does not change by a single pixel.
+# The moving cameras (shot=, dbg cam=) and any camera that sees the horizon keep the whole sheet.
+func _fit_water() -> void:
+	var n := WATER_SUB + 2                   # vertices a side
+	var lo := Vector2i(0, 0)
+	var hi := Vector2i(n - 1, n - 1)
+	if shot == "" and dbg.find("cam=") < 0:
+		var rise := 0.0                      # the most a crest can stand above / a trough lie below the flat sea …
+		var slide := 0.0                     # … and the most a Gerstner wave pushes a grid point sideways
+		for w in swell:
+			rise += w.a
+			slide += w.q * w.a
+		var vs := get_viewport().get_visible_rect().size
+		var a := Vector2(INF, INF)
+		var b := Vector2(-INF, -INF)
+		var open := false
+		for f in [Vector2(0, 0), Vector2(1, 0), Vector2(0, 1), Vector2(1, 1)]:
+			var o := cam.project_ray_origin(f * vs)
+			var d := cam.project_ray_normal(f * vs)
+			if d.y > -0.05:
+				open = true
+				break
+			for h in [rise, -rise]:
+				var k: float = (h - o.y) / d.y
+				var p := Vector2(o.x + d.x * k, o.z + d.z * k) - Vector2(boat_pos.x, boat_pos.z)
+				a = a.min(p)
+				b = b.max(p)
+		if not open:
+			# PlaneMesh lays its vertices from +size/2 down to -size/2 on both axes
+			var cell := WATER_SIZE / (WATER_SUB + 1.0)
+			var m := slide + 2.0 * cell + 4.0
+			var half := WATER_SIZE * 0.5
+			lo = Vector2i(floori((half - b.x - m) / cell), floori((half - b.y - m) / cell)).clampi(0, n - 1)
+			hi = Vector2i(ceili((half - a.x + m) / cell), ceili((half - a.y + m) / cell)).clampi(0, n - 1)
+	if water_mi.mesh != null and lo == water_lo and hi == water_hi:
+		return
+	water_lo = lo
+	water_hi = hi
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(WATER_SIZE, WATER_SIZE)
+	plane.subdivide_width = WATER_SUB
+	plane.subdivide_depth = WATER_SUB
+	if lo == Vector2i(0, 0) and hi == Vector2i(n - 1, n - 1):
+		water_mi.mesh = plane
+		return
+	var src: PackedVector3Array = plane.get_mesh_arrays()[Mesh.ARRAY_VERTEX]
+	var w := hi.x - lo.x + 1
+	var verts := PackedVector3Array()
+	var idx := PackedInt32Array()
+	for j in range(lo.y, hi.y + 1):
+		verts.append_array(src.slice(j * n + lo.x, j * n + hi.x + 1))
+	for j in range(1, hi.y - lo.y + 1):          # the two triangles of each quad, as PlaneMesh orders them
+		for i in range(1, w):
+			var p0 := (j - 1) * w + i
+			var t0 := j * w + i
+			idx.append_array([p0 - 1, p0, t0 - 1, p0, t0, t0 - 1])
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_INDEX] = idx
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	water_mi.mesh = am
 
 func _build_squid() -> void:
 	eye_mat = ShaderMaterial.new()
@@ -286,30 +357,63 @@ func _make_kraken(scale_v: Vector3, pose: Basis) -> Dictionary:
 	var lb := []
 	for prefix in ["arm_%d_", "tentacle_%d_"]:
 		for k in range(1, 8):
-			var bones := []
-			var rest := []
+			var L := Limb.new()
 			for j in 22:
 				var bi := sk.find_bone((prefix % k) + ("%02d" % j))
 				if bi < 0:
 					break
-				bones.append(bi)
-				rest.append(sk.get_bone_pose_rotation(bi))
-			if bones.size() > 0:
-				lb.append({"bones": bones, "rest": rest, "phase": randf() * TAU, "rate": randf_range(0.18, 0.3)})
+				L.bones.append(bi)
+				L.rest.append(sk.get_bone_pose_rotation(bi))
+			var n := L.bones.size()
+			if n > 0:
+				L.phase = randf() * TAU
+				L.rate = randf_range(0.18, 0.3)
+				L.phase17 = L.phase * 1.7
+				L.beat = 8.0 + fmod(L.phase * 3.1, 4.0)
+				for j in n:
+					var u := float(j) / float(n)
+					L.u5.append(u * 5.0)
+					L.u3.append(u * 3.0)
+					L.u35.append(u * 3.5)
+					L.g.append(0.3 + u)
+				lb.append(L)
 	return {"node": node, "skel": sk, "limbs": lb, "eyes": ey, "base_y": -top}
+
+# one arm or tentacle: its bones root to tip, their rest rotations, and the wave's numbers — everything that does not
+# change from frame to frame worked out once (2026-11-11; u = how far along the limb a bone is, 0 root … 1 tip)
+class Limb:
+	var bones := PackedInt32Array()
+	var rest: Array[Quaternion] = []
+	var phase := 0.0
+	var rate := 0.0
+	var phase17 := 0.0            # phase × 1.7
+	var beat := 8.0               # seconds per up-and-down swell: 8 … 12
+	var u5 := PackedFloat64Array()    # u × 5, u × 3, u × 3.5
+	var u3 := PackedFloat64Array()
+	var u35 := PackedFloat64Array()
+	var g := PackedFloat64Array()     # 0.3 + u: the tip swings widest
 
 # the travelling wave down every arm; amp scales it (the pack swims, so theirs is larger)
 func _wave_limbs(sk: Skeleton3D, lb: Array, amp: float) -> void:
-	for L in lb:
-		var bones: Array = L["bones"]
-		var n := bones.size()
-		for j in n:
-			var u := float(j) / float(n)
-			var a := sin(t * L["rate"] * TAU / 4.0 - u * 5.0 + L["phase"]) * 0.05 * amp * (0.3 + u)
-			var b := sin(t * 0.11 - u * 3.0 + L["phase"] * 1.7) * 0.025 * amp
+	var t11 := t * 0.11
+	for L: Limb in lb:
+		var bones := L.bones
+		var rest := L.rest
+		var u5 := L.u5
+		var u3 := L.u3
+		var u35 := L.u35
+		var g := L.g
+		var ph := L.phase
+		var ph17 := L.phase17
+		var ta := t * L.rate * TAU / 4.0
+		var tc := TAU * t / L.beat
+		for j in bones.size():
+			var gj := g[j]
+			var a := sin(ta - u5[j] + ph) * 0.05 * amp * gj
+			var b := sin(t11 - u3[j] + ph17) * 0.025 * amp
 			# up and down (user 2026-10-27): a slow swell running out along the arm, each arm on its own beat
-			b += sin(TAU * t / (8.0 + fmod(L["phase"] * 3.1, 4.0)) - u * 3.5 + L["phase"]) * 0.03 * (0.3 + u)
-			sk.set_bone_pose_rotation(bones[j], L["rest"][j] * Quaternion(Vector3(0, 0, 1), a) * Quaternion(Vector3(1, 0, 0), b))
+			b += sin(tc - u35[j] + ph) * 0.03 * gj
+			sk.set_bone_pose_rotation(bones[j], rest[j] * Quaternion(AXIS_Z, a) * Quaternion(AXIS_X, b))
 
 func _build_boat() -> void:
 	boat = Node3D.new()
@@ -691,6 +795,9 @@ func _step(dt: float) -> void:
 	water_mat.set_shader_parameter("drift", drift)
 	water_mat.set_shader_parameter("boat_pos", Vector2(boat_pos.x, boat_pos.z))
 	water_mat.set_shader_parameter("boat_dir", fwd)
+	fishes.fish_mat.set_shader_parameter("swell", sw)
+	fishes.fish_mat.set_shader_parameter("time", t)
+	fishes.fish_mat.set_shader_parameter("drift", drift)
 	_drive_fish(dt, fwd)
 	# mood (氛圍優先於光學): bright blue at rest, blue-black while it works; the water over the squid clears and the
 	# sea stills as it comes up from half depth, so it emerges from the dark
