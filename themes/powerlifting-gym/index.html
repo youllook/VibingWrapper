@@ -30,7 +30,7 @@ const STATIC_URL = LAYERS || q.has('clip') || q.has('t') || q.has('tune');   // 
 // 擺放（three 座標：選手原點在腳中間地板、面朝 +Z）。相機由 gym1 的選手關節點反解（docs/健力健身房/03-擺放.md）
 const LAYOUT = {
   cam: { pos: [-0.963, 0.60, 1.804], target: [1.379, 1.023, -1.411], up: [-0.104, 0.993, 0.055], fov: 53.0 },
-  lifter: { x: 0, z: 0, yaw: 0, clip: 'Squat', t: 1.8 },
+  lifter: { x: 0, z: 0, yaw: 0, clip: 'Setup', t: 1.8 },   // 驗收姿勢＝舊手調深蹲（Setup）第 1.8 秒，和 gym1 對過
   plates: 6,
   rack: { x: -0.05, z: 0.06, yaw: 0, depth: 0.6, hook: 1.466 },
   platform: { x: 0, z: 0, yaw: 0 },
@@ -246,7 +246,9 @@ function* rootClip(name, anchor, { fade = 0.3, at = -1, hit } = {}) {
   }
 }
 // 槓下蓄力（思考）：膝髖微屈、肩膀剛好頂到槓，慢慢吸吐（Squat 1.0–1.1 秒之間來回）
+// Setup＝舊的手調深蹲，只剩進槓下、蓄力用；真正的深蹲（Squat／Grind／Hold）是 Mixamo 動捕（2026-11-27，docs/健力健身房/07-Mixamo動作.md）
 const BRACE = 1.05;
+const GRIND_AT = 1.77;   // Squat 起身到 55 % 的時間（黏滯點），Grind 就在這一格附近抖
 function* toBar() {     // 走到架子正前方、轉身背對槓、蹲低倒退進槓下，停在蓄力姿勢
   if (where === 'bar' || barOnBone) return;
   appear();
@@ -254,15 +256,15 @@ function* toBar() {     // 走到架子正前方、轉身背對槓、蹲低倒�
   where = 'free';
   for (const p of [...route, BAR_FRONT]) yield* walkTo(p);
   yield* turnTo(0);
-  play('Squat', { pause: true, at: 1.3, fade: 0.5 });
+  play('Setup', { pause: true, at: 1.3, fade: 0.5 });
   yield* wait(0.3);
   yield* slideZ(BAR_FRONT.y, RACK0.y, 0.9);
-  play('Squat', { pause: true, at: BRACE, fade: 0.6 }); where = 'bar';
+  play('Setup', { pause: true, at: BRACE, fade: 0.6 }); where = 'bar';
   yield* wait(0.6);
 }
 function* leaveBar() {  // 槓還在鉤上、人在槓下：蹲低往前退出來
   if (where !== 'bar') return;
-  play('Squat', { pause: true, at: 1.3, fade: 0.4 });
+  play('Setup', { pause: true, at: 1.3, fade: 0.4 });
   yield* wait(0.3);
   yield* slideZ(lifter.position.z, BAR_FRONT.y, 0.7);
   where = 'free';
@@ -310,14 +312,14 @@ function* plan(s) {
   if (s === 'overcast') {
     if (barOnBone) { play('Hold', { loop: true }); return; }
     yield* toBar();
-    for (let t = 0; ; ) { t += yield; if (A.Squat === cur) A.Squat.time = BRACE + 0.05 * (1 - Math.cos(t * Math.PI * 2 / 5)); }
+    for (let t = 0; ; ) { t += yield; if (A.Setup === cur) A.Setup.time = BRACE + 0.05 * (1 - Math.cos(t * Math.PI * 2 / 5)); }
   }
   if (!barOnBone) { yield* toBar(); yield* doUnrack(); }
   if (s === 'waiting') { play('Hold', { loop: true, fade: 0.5 }); yield* wait(0.8); FX.holding = true; FX.waitT = 0; return; }
   for (let rep = 1; ; rep++) {   // 執行：一下接一下，每 3 下卡一次黏滯點
     if (rep % 3) yield* clip('Squat', { fade: 0.25 });
-    else { yield* clip('Squat', { fade: 0.25, dur: 2.33 }); FX.grinding = true; yield* clip('Grind', { loop: true, dur: 3, fade: 0.3 }); FX.grinding = false; yield* clip('Squat', { at: 2.33, fade: 0.3 }); }
-    yield* clip('Hold', { loop: true, dur: 0.8, fade: 0.3 });
+    else { yield* clip('Squat', { fade: 0.25, dur: GRIND_AT }); FX.grinding = true; yield* clip('Grind', { loop: true, dur: 3, fade: 0.3 }); FX.grinding = false; yield* clip('Squat', { at: GRIND_AT, fade: 0.3 }); }
+    yield* clip('Hold', { loop: true, dur: 1.2, fade: 0.3 });   // 動捕一下 2.3 秒，比舊的快：組間多喘一點
   }
 }
 function applyState(s) {
