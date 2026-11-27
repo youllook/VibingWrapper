@@ -441,7 +441,7 @@ const STATES = {
   working:   { speed: 95, sun: 2.6, glow: 0.9, fog: 0.00024, night: 0,    lamp: 2.6, haze: '#d3e6df' },
   finishing: { speed: 24, sun: 2.2, glow: 1.7, fog: 0.00030, night: 0.1,  lamp: 1.0, haze: '#e6dcc4' },
   waiting:   { speed: 0,  sun: 2.2, glow: 1.2, fog: 0.00026, night: 0.15, lamp: 1.6, haze: '#d6e2da' },
-  absent:    { speed: 30, sun: 0.35, glow: 0.35, fog: 0.00030, night: 1,  lamp: 1.8, haze: '#26313d' },
+  absent:    { speed: 30, sun: 0.35, glow: 0.35, fog: 0.00030, night: 1,  lamp: 0.75, haze: '#26313d' },
 };
 const SKY2STATE = { clear: 'idle', overcast: 'thinking', storm: 'working', clearing: 'finishing', waiting: 'waiting' };
 // 時鐘：19–6 點是人造太陽的夜間（18–19、6–7 點漸變；?day=1／?night=1 固定）
@@ -475,7 +475,8 @@ function applyAtmos(dt) {
   for (const key of ['sun', 'glow', 'fog', 'lamp']) {
     let t = tgt[key];
     if (key === 'sun' || key === 'glow') t = THREE.MathUtils.lerp(t, 0.35, clockNight);
-    if (key === 'lamp') t = Math.max(t, 1.8 * clockNight);
+    // 夜裡桁架燈整體壓暗（各狀態仍保留相對亮暗：執行最亮），免得爆成白塊
+    if (key === 'lamp') t = THREE.MathUtils.lerp(t, 0.7 + 0.25 * (t - 1), clockNight);
     cur[key] += (t - cur[key]) * k;
   }
   cur.night += (night - cur.night) * k;
@@ -490,7 +491,7 @@ function applyAtmos(dt) {
   if (M.window.uniforms) M.window.uniforms.uHaze.value.copy(cur.haze);
   if (sunGlow) { sunGlow.material.opacity = Math.min(0.85, 0.2 + 0.4 * cur.glow) * pulse; sunDisc.material.color.setScalar(0.4 + 0.6 * Math.min(1, cur.sun / 2)); }
   NIGHT.value = cur.night; AXIAL.value = 0.9 * cur.sun / 2.4;
-  M.lamp.color.setRGB(1, 0.95, 0.78).multiplyScalar(cur.lamp);
+  M.lamp.color.setRGB(1, 0.72, 0.42).multiplyScalar(cur.lamp);   // 暖黃、夜裡不爆成純白（爆白的小燈被動態模糊拖成白條很突兀）
   // 等你：列車停下，維修工出現在停車位置旁
   if (stateName !== 'waiting') workerPlaced = false;
   else if (!workerPlaced && worker && speed < 0.8) {               // 幾乎停住了才擺，位置才準

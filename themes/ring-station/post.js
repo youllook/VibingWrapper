@@ -1,5 +1,5 @@
 // 步驟 6 動態模糊：鏡頭固定、棲地繞軸等速轉，所以每個像素的運動向量可以「精確」算出來：
-// 由深度還原世界座標 → 繞軸轉（角速度 × 快門）→ 再投影回螢幕 → 沿這個向量取 8 個樣本平均。
+// 由深度還原世界座標 → 繞軸轉（角速度 × 快門）→ 再投影回螢幕 → 沿這個向量取 12 個樣本平均（起點逐像素錯開）。
 // 前提：main.js 把色調映射改成在每個材質裡強制做（畫到 render target 時 three.js 預設會跳過）。
 // 車窗框、座椅、太陽不隨棲地轉 → 視距 2.5 m 以內不模糊（太陽另外由 depth＝1 跳過）。
 import * as THREE from 'three';
@@ -38,9 +38,11 @@ export function makeMotionBlur(renderer, camera, R) {
           }
         }
         if (dot(vel, vel) > 1e-8) {
+          // 每個像素的取樣起點錯開（interleaved gradient noise）：亮的小東西（桁架燈）不會被蓋成一排等距的白條
+          float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
           vec4 acc = vec4(0.);
-          for (int i = 0; i < 8; i++) { float t = (float(i) + 0.5) / 8. - 0.5; acc += texture2D(tColor, vUv + vel * t); }
-          col = acc / 8.;
+          for (int i = 0; i < 12; i++) { float t = (float(i) + n) / 12. - 0.5; acc += texture2D(tColor, vUv + vel * t); }
+          col = acc / 12.;
         }
         gl_FragColor = col;
       }`,
