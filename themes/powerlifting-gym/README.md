@@ -37,7 +37,7 @@
 | `textures/` | `backdrop.webp`（Codex 背景，已修掉舊吊扇）、`mask-glow.png`（RGB：霓虹／燈泡／窗）、`mask-beam.png`（光束）、`micro_grime.jpg`（ambientCG CC0） |
 | `assets.html`、`models.html`、`textures/dev-layers-bg.png` | 開發用檢視頁與分層比對底圖 |
 
-網址參數 `?layers=1`、`?clip=Squat&t=1.8`、`?tune={json}` 是靜態驗收模式（選手停在單一姿勢、1:1 解析度），給 `docs/健力健身房/tools/` 的截圖與比對工具用。
+網址參數 `?layers=1`、`?clip=Setup&t=1.8`（舊手調深蹲；Mixamo 深蹲用 `?clip=Squat&t=1.27`）、`?tune={json}` 是靜態驗收模式（選手停在單一姿勢、1:1 解析度），給 `docs/健力健身房/tools/` 的截圖與比對工具用。
 
 ## 效能
 

@@ -44,3 +44,5 @@ blender -b -P stress.py -- <glb 或 blend> <輸出資料夾> [姿勢,...]   # �
 - `Rack` 要在**架原點**播（起點身體在 -Z 0.30、終點在 +Z 0.275）；第 **54 格（1.80 s）槓降到鉤高**，這時把槓從 Bar 骨脫開留在鉤上。
 - 動作之間用 0.3 s crossfade；`Walk` 接 `Unrack` 起點會有跳，靠 crossfade 蓋。
 - 呼吸／咬牙已烘進動作（`Breath` 骨縮放、`Belly` 位移、`Jaw` 旋轉）。
+
+> 2026-11-27：`Squat`／`Grind`／`Hold` 換成 Mixamo 動捕（`bake_mixamo.py`），舊手調 `Squat` 改名 `Setup`。見 [07-Mixamo動作.md](../../../07-Mixamo動作.md)。
