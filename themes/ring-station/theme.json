@@ -1,8 +1,11 @@
 {
   "name": "環形太空站",
-  "order": 60,
+  "name_en": "Ring Station",
+  "order": 63,
   "entry": "index.html",
   "enabled": false,
-  "description": "坐在環形太空站的軌道列車上，整座城市沿圓筒內壁升起、從頭頂倒掛而過",
+  "bundled": false,
+  "description": "坐在環形太空站的軌道列車上，城市沿圓筒內壁升起、越過玻璃拱窗、在頭頂倒掛而過；執行時列車加速，等你時停車、維修工出現。",
+  "description_en": "Ride an orbital train inside a ring station: the city climbs the cylinder wall, passes a glass arch and hangs upside down overhead. The train speeds up while Claude works and stops when it needs you.",
   "tags": ["鐵道", "風格實驗"]
 }
