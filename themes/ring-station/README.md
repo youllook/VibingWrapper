@@ -3,7 +3,9 @@
 坐在環形太空站的軌道列車上，從車窗往前方偏右看：城市沿圓筒內壁往上爬、越過玻璃拱窗、在頭頂倒掛而過；近景護欄桁架高速掠過。
 無限系列第 4 支（目標圖：`docs/infinite-series/x02.png`；製作文件：`docs/ring-station/`）。
 
-**目前做完步驟 5（燈光、霧、狀態）**：大氣與窗燈在 `atmos.js`、材質在 `materials.js`、狀態表 `STATES` 在 `main.js`。剩步驟 6（裝桌面實跑、內顯效能、動態模糊）。`?gray=1` 可切回灰模。
+**六步都做完（2026-11-28）**：大氣與窗燈在 `atmos.js`、材質在 `materials.js`、動態模糊在 `post.js`、狀態表 `STATES` 在 `main.js`；製作紀錄 `docs/ring-station/00–06`。`?gray=1` 可切回灰模。
+
+**注意**：`main.js` 把 three.js 的 `tonemapping_fragment`、`colorspace_fragment` 改成在 shader 裡強制做（renderer 的色調映射關掉），動態模糊才能跟直接畫到螢幕一致。新增材質不用另外處理；自寫的 ShaderMaterial 要 `#include <colorspace_fragment>`，霧要在它之後混。
 
 ## 幾何
 - 棲地＝半徑 2 km 的圓筒內壁，轉軸沿世界 +X、穿過 (0, 2000, 0)；鏡頭腳下地面 y＝0。座標換算在 `ring.js`（`hab`、`standMatrix`）。
@@ -40,6 +42,7 @@ LOD：每款兩個 InstancedMesh，每 12 格依棲地轉角重新分配（離�
 | `spin wnear wfar` | 星空隨自轉掃過的速度 rad/s、窗帶由星空漸變成霧的距離 |
 | `state` | 固定狀態：idle／thinking／working／finishing／waiting／absent |
 | `day` `night` | 固定白天／夜間 |
+| `blur shutter` | 動態模糊開關（預設開）、快門秒數（預設 1/45） |
 | `fog exp pr` | 霧密度、曝光、渲染解析度倍率（預設 0.6） |
 | `lodnear lodmid lodtree` | LOD 距離（500／1500／150 m） |
 | `speed` | 待命速度 m/s（各狀態速度在 `STATES`） |

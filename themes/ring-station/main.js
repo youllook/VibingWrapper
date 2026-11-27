@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { applyMaterials } from './materials.js';
+import { makeMotionBlur } from './post.js';
 import { installHaze, makeSun, addWindowGlow, addProxyGlow, NIGHT, AXIAL } from './atmos.js';
 import { R, X0, X1, DECK_H, SUN_X, LAND_HALF, landAt, shell, hab, standMatrix, rng } from './ring.js';
 
@@ -27,7 +28,21 @@ const OMEGA = SPEED / RT;                 // ?t= 換算角度用的基準角速�
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: Q.has('shot') });
 renderer.setPixelRatio(num('pr', 0.6));                       // 規格：半解析度
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-if (!IDS) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = num('exp', 1.05); }
+// 色調映射在每個材質裡強制做（含畫到動態模糊的 render target 時），霧才會像直接畫到螢幕一樣疊在色調映射之後
+if (!IDS) {
+  renderer.toneMapping = THREE.NoToneMapping; renderer.toneMappingExposure = num('exp', 1.05);
+  // 渲染器關掉色調映射時 three.js 不會宣告 ACES 函式，所以這裡把同一個 ACES Filmic 公式直接寫進 main()
+  THREE.ShaderChunk.tonemapping_fragment = `#ifndef RS_NO_TM
+  { vec3 c = gl_FragColor.rgb * (${num('exp', 1.05).toFixed(3)} / 0.6);
+    mat3 aIn = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+    mat3 aOut = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+    c = aIn * c; c = (c * (c + 0.0245786) - 0.000090537) / (c * (0.983729 * c + 0.4329510) + 0.238081); c = aOut * c;
+    gl_FragColor.rgb = clamp(c, 0., 1.); }
+#endif`;
+  // 同理：sRGB 編碼也一律在 shader 裡做（浮點 render target 不會幫你編碼），畫到螢幕或 render target 結果一樣
+  THREE.ShaderChunk.colorspace_fragment = 'gl_FragColor = sRGBTransferOETF( gl_FragColor );';
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;   // 已經在 shader 編過，別再編一次
+}
 renderer.localClippingEnabled = IDS;
 document.body.appendChild(renderer.domElement);
 
@@ -92,8 +107,10 @@ if (!IDS) M.window = new THREE.ShaderMaterial({
       vec3 space = vec3(0.002, 0.004, 0.012) + vec3(0.02, 0.01, 0.035) * pow(max(0., 1. - abs(d.y + 0.2)), 6.);
       vec3 col = space + vec3(0.9, 0.95, 1.) * st;
       col += vec3(0.010, 0.016, 0.014);                            // 玻璃本身一點綠灰
-      gl_FragColor = vec4(mix(col, uHaze, smoothstep(uFade.x, uFade.y, dist)), 1.);
+      gl_FragColor = vec4(col, 1.);
       #include <colorspace_fragment>
+      // 霧跟其他材質一樣在編碼之後才混（atmos.js 的霧 chunk 也是），遠處窗帶才會跟霧同色
+      gl_FragColor.rgb = mix(gl_FragColor.rgb, uHaze, smoothstep(uFade.x, uFade.y, dist));
     }`,
 });
 for (const k of ['floor', 'window', 'rib', 'water', 'deck']) M[k].side = THREE.DoubleSide;
@@ -314,6 +331,7 @@ for (let x = 800; x < X1; x += 650) {
 let sunGlow = null, sunDisc = null;
 {
   const s = new THREE.Mesh(new THREE.SphereGeometry(42, 32, 16), new THREE.MeshBasicMaterial({ color: IDS ? '#000' : '#fffbe8', fog: false, toneMapped: false }));
+  s.material.defines = { RS_NO_TM: '' };
   s.position.copy(SUN_POS); scene.add(s);
   if (!IDS) { sunGlow = makeSun(SUN_POS, 820); scene.add(sunGlow); }
   sunDisc = s;
@@ -358,6 +376,7 @@ const WIN = { wx: num('wx', 0.55), zr: num('zr', 0.35), zf: -9, ys: num('ys', -2
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
       fragmentShader: /* glsl */`varying vec2 vUv;
+        #define GLASS_K 1.0
         float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         void main(){
           float near = smoothstep(0.55, 1.0, vUv.x);                         // 靠近鏡頭那端反光較強
@@ -365,7 +384,7 @@ const WIN = { wx: num('wx', 0.55), zr: num('zr', 0.35), zf: -9, ys: num('ys', -2
           float wipe = smoothstep(0.02, 0.0, abs(fract(vUv.x * 3.0 + vUv.y * 0.8) - 0.5) - 0.42) * 0.4;   // 斜向擦拭痕
           float dust = step(0.997, h(floor(vUv * vec2(900., 160.)))) * 0.5;
           float a = (0.05 + 0.10 * near * top + 0.04 * wipe) + dust * 0.15;
-          gl_FragColor = vec4(vec3(1.0, 0.97, 0.9) * a, 1.);
+          gl_FragColor = vec4(vec3(1.0, 0.97, 0.9) * a * GLASS_K, 1.);   // 有動態模糊時是在線性 HDR 裡疊加，要換成線性的量
         }`,
     }));
     glass.position.set(WX + WIN.thick * 0.5, (b0 + b1) / 2, (a0 + a1) / 2); glass.rotation.y = -Math.PI / 2; glass.renderOrder = 5;
@@ -398,9 +417,14 @@ if (Q.has('ref')) {
 }
 
 // ── 迴圈 ──
+// 動態模糊（post.js）：快門 1/45 秒內棲地轉過的角度；?blur=0 關掉
+const SHUTTER = num('shutter', 1 / 45);
+const mb = !IDS && num('blur', 1) > 0 ? makeMotionBlur(renderer, camera, R) : null;
+function draw() { if (mb) mb.render(scene, (speed / RT) * SHUTTER); else renderer.render(scene, camera); }
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (mb) mb.resize();
 }
 addEventListener('resize', resize); resize();
 
@@ -421,14 +445,21 @@ const STATES = {
 };
 const SKY2STATE = { clear: 'idle', overcast: 'thinking', storm: 'working', clearing: 'finishing', waiting: 'waiting' };
 // 時鐘：19–6 點是人造太陽的夜間（18–19、6–7 點漸變；?day=1／?night=1 固定）
-const clockHours = () => Q.has('day') ? 10.5 : Q.has('night') ? 22 : new Date().getHours() + new Date().getMinutes() / 60;
-let stateName = Q.get('state') || 'idle';
+// 測試介面（themes/README.md 第 5 點；錄影工具會關掉 polling、固定 clockHours）
+const CONFIG = { polling: !Q.has('state'), clockHours: Q.has('day') ? 10.5 : Q.has('night') ? 22 : null };
+const clockHours = () => CONFIG.clockHours != null ? CONFIG.clockHours : new Date().getHours() + new Date().getMinutes() / 60;
+let stateName = Q.get('state') || 'idle', sessions = [null];
+// bridge 的天空狀態＋各 session → 本主題的狀態名
+function applyState(sky, sess) {
+  if (sess !== undefined) sessions = sess || [];
+  const any = (sessions || []).some((x) => x);
+  stateName = !any || sky === 'none' ? 'absent' : SKY2STATE[sky] || 'idle';
+}
 async function poll() {
-  if (Q.has('state')) return;
+  if (!CONFIG.polling) return;
   try {
     const j = await (await fetch('state.json', { cache: 'no-store' })).json();
-    const any = (j.sessions || []).some((x) => x);
-    stateName = !any ? 'absent' : SKY2STATE[j.state] || 'idle';
+    applyState(j.state, j.sessions);
   } catch { /* 開發時沒有 bridge：維持目前狀態 */ }
 }
 setInterval(poll, 1000); poll();
@@ -480,10 +511,11 @@ function frame(now) {
   habitat.rotation.x = -(phi + OMEGA * T0);
   if (M.window.uniforms) M.window.uniforms.uAng.value = (habitat.rotation.x - SPIN * (now / 1000 + T0)) % (Math.PI * 2);
   if (++frameNo % 8 === 0 && Object.keys(city.meshes).length) updateLOD();
-  renderer.render(scene, camera);
+  draw();
 }
 requestAnimationFrame(frame);
-window.theme = { CAM, camera, habitat, renderer, scene, city, cityReady, updateLOD, STATES, setState: (n) => { stateName = n; } };
+window.theme = { CAM, camera, habitat, renderer, scene, city, cityReady, updateLOD, STATES, CONFIG, PARAMS: STATES,
+  draw: () => draw(), resizePost: () => mb && mb.resize(), applyState, setSessions: (a) => { sessions = a || []; }, requestState: () => stateName, setState: (n) => { stateName = n; } };
 // 驗收：用 480×270 算一張遮罩，回傳 PNG dataURL
 window.theme.mask = (w = 480, h = 270) => {
   const rt = new THREE.WebGLRenderTarget(w, h); const a = camera.aspect; camera.aspect = 16 / 9; camera.updateProjectionMatrix();
@@ -499,7 +531,7 @@ window.theme.mask = (w = 480, h = 270) => {
 window.theme.shot = async (name = 'shot.jpg') => {
   await cityReady; habitat.rotation.x = -(phi + OMEGA * T0); updateLOD(); if (!IDS) applyAtmos(1e6);
   const pr = renderer.getPixelRatio(); renderer.setPixelRatio(1); renderer.setSize(1920, 1080, false);
-  camera.aspect = 16 / 9; camera.updateProjectionMatrix(); renderer.render(scene, camera);
+  camera.aspect = 16 / 9; camera.updateProjectionMatrix(); if (mb) mb.resize(); draw();
   const blob = await new Promise((ok) => renderer.domElement.toBlob(ok, name.endsWith('.png') ? 'image/png' : 'image/jpeg', 0.9));
   renderer.setPixelRatio(pr); resize();
   const r = await fetch('/_save/' + name, { method: 'PUT', body: blob }); return r.status;
