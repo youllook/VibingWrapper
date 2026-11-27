@@ -1,0 +1,8 @@
+{
+  "name": "環形太空站",
+  "order": 60,
+  "entry": "index.html",
+  "enabled": false,
+  "description": "坐在環形太空站的軌道列車上，整座城市沿圓筒內壁升起、從頭頂倒掛而過",
+  "tags": ["鐵道", "風格實驗"]
+}

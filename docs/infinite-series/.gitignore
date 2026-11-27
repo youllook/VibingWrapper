@@ -1,0 +1,4 @@
+# 原圖 1920×1080 PNG 與 Codex 工作檔不進 git（公開 repo）；備份在 E:\tmp\ring-station-archive\infinite-series\
+*.png
+_jobs/**/*.log
+_jobs/**/.done

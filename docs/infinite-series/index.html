@@ -1,0 +1,113 @@
+<title>無限系列試鏡</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: a casting board — four leads big, the bench in a grid, the passes small */
+:root{
+  --bg:#f3f1ec; --surface:#ffffff; --fg:#1f2430; --muted:#5d6472; --line:#dcd8cf;
+  --a:#d9762b; --b:#3f7f9c; --c:#8a8f99;
+  --display:"Noto Serif TC","Songti TC",serif;
+  --body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#13161c; --surface:#1c2028; --fg:#e9e6df; --muted:#9aa1ad; --line:#2c323d;
+  --a:#f0954c; --b:#6fb0cf; --c:#7b818c; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#13161c; --surface:#1c2028; --fg:#e9e6df; --muted:#9aa1ad; --line:#2c323d;
+  --a:#f0954c; --b:#6fb0cf; --c:#7b818c; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.65}
+.wrap{max-width:1240px;margin:0 auto;padding-block:40px 64px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header{display:grid;gap:10px;margin-bottom:36px}
+h1{font-family:var(--display);font-weight:900;font-size:clamp(2rem,5vw,3.2rem);line-height:1.15;margin:0;text-wrap:balance}
+.lead{color:var(--muted);max-width:62ch;margin:0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:.9rem;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;background:var(--k);vertical-align:-1px}
+section{margin-top:44px}
+.sh{display:flex;align-items:baseline;gap:12px;border-bottom:2px solid var(--k);padding-bottom:6px;margin-bottom:18px}
+.sh h2{font-family:var(--display);font-weight:600;font-size:1.45rem;margin:0}
+.sh p{margin:0;color:var(--muted);font-size:.92rem}
+.grid{display:grid;gap:20px}
+.g2{grid-template-columns:repeat(auto-fill,minmax(min(100%,520px),1fr))}
+.g3{grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:6px;overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.card button{all:unset;cursor:zoom-in;display:block;aspect-ratio:16/9;max-width:100%}
+.card button:focus-visible{outline:3px solid var(--k);outline-offset:-3px}
+.card img{width:100%;height:100%;object-fit:cover;display:block}
+.c .card img{filter:saturate(.75)}
+.meta{padding:12px 16px 16px;display:grid;gap:6px}
+.row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.code{font-family:var(--mono);font-size:.78rem;color:var(--k);letter-spacing:.04em}
+.name{font-weight:700;font-size:1.08rem}
+.why{margin:0;font-size:.93rem}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tag{font-size:.75rem;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.tag.ok{border-color:var(--b);color:var(--b)}
+.tag.warn{border-color:var(--a);color:var(--a)}
+.A{--k:var(--a)} .B{--k:var(--b)} .C{--k:var(--c)}
+.note{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:.88rem;max-width:70ch}
+dialog{border:0;padding:0;background:transparent;max-width:96vw;max-height:94vh}
+dialog::backdrop{background:rgba(8,10,14,.88)}
+dialog img{display:block;max-width:96vw;max-height:88vh;border-radius:4px}
+dialog p{color:#e9e6df;text-align:center;margin:8px 0 0;font-size:.95rem}
+@media (prefers-reduced-motion:no-preference){.card{transition:transform .2s}.card:hover{transform:translateY(-2px)}}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>無限系列試鏡</h1>
+  <p class="lead">《無限運動情景清單》裡 16 個布景各生一張概念圖（同一套滑板下坡的畫風）。依「做成即時 3D 桌布值不值得」分三組：無角色、能沿用現成素材、loop 天生成立的排前面；生物或角色是主體的往後放。</p>
+  <div class="legend"><span class="A" style="--k:var(--a)">先做</span><span class="B" style="--k:var(--b)">可做</span><span class="C" style="--k:var(--c)">先不做</span></div>
+</header>
+
+<section class="A">
+  <div class="sh"><h2>先做</h2><p>4 張｜成本低、無限感天生、畫面已經夠好</p></div>
+  <div class="grid g2" id="A"></div>
+</section>
+<section class="B">
+  <div class="sh"><h2>可做</h2><p>6 張｜好看但有一個明確難點</p></div>
+  <div class="grid g3" id="B"></div>
+</section>
+<section class="C">
+  <div class="sh"><h2>先不做</h2><p>6 張｜生物步態、角色、或和現有主題撞</p></div>
+  <div class="grid g3" id="C"></div>
+</section>
+
+<p class="note">概念圖由 Codex 生成，原圖 1920×1080 在 repo 的 docs/infinite-series/。點圖可放大。</p>
+</div>
+
+<dialog id="lb"><img id="lbImg" alt=""><p id="lbCap"></p></dialog>
+
+<script>
+const D=[
+ ["A","s07","霓虹隧道","隧道本身就是無限：一段燈管模組不斷重複就成立，沒有角色、沒有地形。亮點在擋風玻璃雨滴和雨刷，出口白光可隨狀態推近。",[["無角色","ok"],["模組 loop","ok"],["雨滴 shader","warn"]]],
+ ["A","s01","南迴海線","車窗框固定等於鏡頭固定，四層視差最乾淨。海面可直接用 sea3d，電線桿與台鐵素材有平交道的底。進隧道變黑再亮是現成轉場。",[["無角色","ok"],["沿用 sea3d","ok"],["台灣路線","ok"]]],
+ ["A","s11","夢境走廊","門框是同一個模組換材質，門後世界只要一張遠景貼圖，最省又最有記憶點。主角走路可借滑板女孩模型配 Mixamo 走路。",[["模組 loop","ok"],["門後用貼圖","ok"],["走路動作","warn"]]],
+ ["A","s06","稻田燕飛","只露一點翅尖，等於沒有角色；和 WhenIwasKid 老家田同一條情感線。難點是貼著稻穗高速飛，要大量 instanced 稻株加動態模糊。",[["無角色","ok"],["接老家主題","ok"],["近景稻株量","warn"]]],
+
+ ["B","x02","環形太空站","整批最驚豔，也能和南迴共用一套「車窗」框架。難在往上彎、倒掛的城市：可先用貼圖貼在圓柱內側騙過去。",[["無角色","ok"],["共用車窗框架","ok"],["彎曲城市","warn"]]],
+ ["B","s10","河燈漂流","節奏最慢、最耐看。水面用 sea3d，河燈只是一個發光方塊。老屋和垂柳要找素材，倒影要調。",[["無角色","ok"],["沿用 sea3d","ok"],["老屋素材","warn"]]],
+ ["B","x03","土星環滑行","滑板下坡的女孩換上太空衣、動作直接沿用，就是同系列的太空版。環面是平的，好做；土星本體一張大貼圖。",[["借滑板動作","ok"],["環面簡單","ok"],["太空衣模型","warn"]]],
+ ["B","s08","書架長廊","書架模組化、loop 容易，暖光好看。騎書的女孩要角色加飄髮；也可以改成沒有人、只有書自己飛。",[["模組 loop","ok"],["角色＋飄髮","warn"]]],
+ ["B","x04","太空電梯","沒有角色，主體是幾何纜繩和車廂，雲層下沉由程式做。垂直移動的前進感比較弱，地球弧線要一張好貼圖。",[["無角色","ok"],["幾何簡單","ok"],["前進感弱","warn"]]],
+ ["B","x01","小行星帶","程序岩石最好生，駕駛艙框固定鏡頭。缺點是畫面普通，和其他太空題材差異不大。",[["程序生成","ok"],["畫面普通","warn"]]],
+
+ ["C","s02","台26夜騎","畫面很好，但和「無限騎行」重疊。比較適合當騎行的夜間模式，不另開主題。",[["和騎行重疊","warn"]]],
+ ["C","s03","雲海鯨行","鯨魚加騎士是兩個生物細節，雲要做體積感。生物是目前的瓶頸。",[["生物主體","warn"],["體積雲","warn"]]],
+ ["C","s04","雪原雪橇","六隻狗步態要同步，還要拉索與雪橇物理，整批最難。",[["多隻生物步態","warn"]]],
+ ["C","s05","深海潛航","和水母、大海怪系列的水下路線重疊，新鮮感不夠。",[["和水下主題撞","warn"]]],
+ ["C","s09","沙漠商隊","駱駝步態加上側面行進，往前的感覺弱；沙漠也剛退役沙蟲。",[["生物步態","warn"],["前進感弱","warn"]]],
+ ["C","x05","星際鯨洄游","發光半抽象可以糊過去，但仍是群體生物動畫；畫面也偏單色。",[["群體生物","warn"]]],
+];
+for(const [t,code,name,why,tags] of D){
+  const el=document.createElement("article");el.className="card";
+  el.innerHTML=`<button type="button" aria-label="放大 ${name}"><img loading="lazy" src="web/${code}.webp" alt="${name} 概念圖"></button>
+  <div class="meta"><div class="row"><span class="code">${code.toUpperCase()}</span><span class="name">${name}</span></div>
+  <p class="why">${why}</p><div class="tags">${tags.map(([x,k])=>`<span class="tag ${k}">${x}</span>`).join("")}</div></div>`;
+  el.querySelector("button").onclick=()=>{lbImg.src=`web/${code}.webp`;lbImg.alt=name;lbCap.textContent=`${code.toUpperCase()}　${name}`;lb.showModal()};
+  document.getElementById(t).appendChild(el);
+}
+lb.addEventListener("click",()=>lb.close());
+</script>

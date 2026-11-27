@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ring-station 模型檢視</title>
+<style>html,body{margin:0;height:100%;background:#cfe3dc;overflow:hidden}</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const r = new THREE.WebGLRenderer({ antialias: true }); r.setSize(innerWidth, innerHeight); r.outputColorSpace = THREE.SRGBColorSpace; document.body.appendChild(r.domElement);
+const s = new THREE.Scene(); s.background = new THREE.Color('#cfe3dc');
+s.add(new THREE.HemisphereLight('#fff', '#9aa', 1.4)); const d = new THREE.DirectionalLight('#fff3dc', 2); d.position.set(3, 5, 4); s.add(d);
+const cam = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 5000);
+// 每件縮到同高 10 單位排一排，標尺寸
+const names = ['dome_hall', 'greenhouse', 'round_tower', 'spire_tower', 'terrace_block', 'townhouses', 'tree', 'worker', 'service_panel'];
+const L = new GLTFLoader(); let x = 0;
+for (const n of names) {
+  const g = (await L.loadAsync('models/' + n + '.glb')).scene;
+  const b = new THREE.Box3().setFromObject(g), sz = b.getSize(new THREE.Vector3());
+  const k = 10 / Math.max(sz.x, sz.y, sz.z); g.scale.setScalar(k); g.rotation.y = -0.6;
+  g.position.x = x; x += 13; s.add(g); console.log(n, sz.toArray().map(v => v.toFixed(1)).join('×'));
+}
+cam.position.set(x / 2 - 6.5, 14, 62); cam.lookAt(x / 2 - 6.5, 3, 0); r.render(s, cam);
+</script>

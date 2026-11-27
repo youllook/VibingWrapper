@@ -1,0 +1,8 @@
+# 大檔不進 git（公開 repo）；備份在 E:\tmp\ring-station-archive\ring-station\
+# 保留：target.png、_codex/layers/L*.png（check.js 驗收要用）、Tripo 輸入圖的 JPG 版
+_codex/assets-*/*.png
+_codex/*/target.png
+_codex/**/*.log
+_codex/**/.done
+_codex/layers/.layer_work/
+shots/
