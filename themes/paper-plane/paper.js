@@ -5,6 +5,7 @@ import * as THREE from 'three';
 
 export const NIGHT = { value: 0 };          // 0 白天 → 1 夜晚（窗燈）
 export const TRAVEL = { value: 0 };         // 全域行進距離 s（地面花紋用）
+export const CANYON = { value: 0.70 };      // 街谷底部的暗度（1＝不暗）
 
 const NOISE = /* glsl */`
   float h13(vec3 p){ p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
@@ -20,7 +21,7 @@ const NOISE = /* glsl */`
 export function makeCityMaterial() {
   const m = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: false });
   m.onBeforeCompile = (sh) => {
-    sh.uniforms.uNight = NIGHT;
+    sh.uniforms.uNight = NIGHT; sh.uniforms.uCanyon = CANYON;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         varying vec3 vLoc; varying vec3 vNl; varying vec3 vUnit; varying vec3 vScl; varying vec3 vPrm;`)
@@ -32,7 +33,7 @@ export function makeCityMaterial() {
         vPrm = instanceColor;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform float uNight;
+        uniform float uNight; uniform float uCanyon;
         varying vec3 vLoc; varying vec3 vNl; varying vec3 vUnit; varying vec3 vScl; varying vec3 vPrm;
         ${NOISE}`)
       // instanceColor 是參數，不乘進顏色
@@ -82,8 +83,9 @@ export function makeCityMaterial() {
         // 切口亮邊：立面頂端一條薄薄的亮線（紙板切口吃光）
         shade += .05 * side * (1. - smoothstep(.06, .2, yt));
         // 盒子接地／接上一層的暗化＋街谷底部偏暗（假 AO）
-        float ao = mix(.84, 1., smoothstep(0., 3.5, yb)) * mix(.86, 1., smoothstep(0., 40., vLoc.y));
-        if (side < .5) ao *= 1.;
+        float ao = mix(.80, 1., smoothstep(0., 3.5, yb));                     // 接地／接上一層
+        // 街谷：越低越暗（紙模的深巷吃不到天光），只算立面，屋頂不受影響
+        ao *= mix(1., mix(uCanyon, 1., smoothstep(0., 70., vLoc.y)), side);
         float tint = .955 + .045 * vPrm.r;
         diffuseColor.rgb *= tint * shade * ao * (1. + fiber(vLoc));
         // 夜：窗帶裡少數格子亮暖燈
@@ -103,13 +105,13 @@ export function makeCityMaterial() {
 export function makeGroundMaterial(street) {
   const m = new THREE.MeshLambertMaterial({ color: 0xffffff });
   m.onBeforeCompile = (sh) => {
-    sh.uniforms.uS = TRAVEL;
+    sh.uniforms.uS = TRAVEL; sh.uniforms.uCanyon = CANYON;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n varying vec3 vW;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n vW = (modelMatrix * vec4(position, 1.)).xyz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform float uS; varying vec3 vW; ${NOISE}`)
+        uniform float uS, uCanyon; varying vec3 vW; ${NOISE}`)
       .replace('#include <color_fragment>', `
         float d = uS - vW.z;                                  // 全域距離：同一點的花紋跟著城市流
         vec3 p = vec3(vW.x, 0., d);
@@ -118,7 +120,7 @@ export function makeGroundMaterial(street) {
         s -= .06 * (1. - smoothstep(.0, .25, abs(ax - ${(street - 4.5).toFixed(1)})));                 // 人行道邊
         float dash = step(.5, fract(d / 9.)) * (1. - smoothstep(.08, .2, abs(ax - 6.)));
         s -= .05 * dash;
-        s *= mix(.84, 1., smoothstep(0., 5., ${street.toFixed(1)} - ax));                              // 靠牆腳偏暗（假 AO）
+        s *= mix(.70, 1., smoothstep(0., 7., ${street.toFixed(1)} - ax)) * mix(uCanyon + .16, uCanyon + .04, step(${street.toFixed(1)}, ax)); // 靠牆腳偏暗（假 AO）；街底整片偏灰、巷子更暗
         diffuseColor.rgb *= s * (1. + fiber(p));
       `);
   };

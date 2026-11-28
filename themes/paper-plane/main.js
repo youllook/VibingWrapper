@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { SEG, FAR_SEG, STREET, Strip, buildSegment, buildFarSegment } from './city.js';
 import { makePaperPlane } from './plane.js';
-import { makeCityMaterial, makeGroundMaterial, makePlaneMaterial, NIGHT, TRAVEL } from './paper.js';
+import { makeCityMaterial, makeGroundMaterial, makePlaneMaterial, NIGHT, TRAVEL, CANYON } from './paper.js';
 import { makeMotionBlur } from './post.js';
 
 const Q = new URLSearchParams(location.search);
@@ -45,6 +45,7 @@ scene.add(camera);
 // 光：午後側光從右上後方來（街上投出長影）＋天光
 const hemi = new THREE.HemisphereLight('#f5f5f9', '#dcdbe2', num('hemi', 0.9));
 const sun = new THREE.DirectionalLight('#fff3e4', 2.0);
+CANYON.value = num('canyon', CANYON.value);
 const SUN_DIR = new THREE.Vector3(num('sx', 0.45), num('sy', 0.62), num('sz', 0.65)).normalize();
 sun.target.position.set(0, 0, -160);
 sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 700);
