@@ -12,7 +12,7 @@ const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
 
 const CAM = {
   yaw: num('yaw', -20), pitch: num('pitch', -12), roll: num('roll', 0), fov: num('fov', 60),
-  x: num('cx', 2), y: num('cy', 74),
+  x: num('cx', 2), y: num('cy', 92),                 // 2026-11-28 拉高 18 m：俯衝空間更大、不擦到樓頂
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: Q.has('shot') });
@@ -143,6 +143,12 @@ let night = 0, circleT = 0, circleW = 0, ph = 0;
 const camLag = { x: 0, y: 0, roll: 0, yaw: 0, pitch: 0 };
 // 上下穿梭的間隔（秒）：[最短, 最長]；等你不俯衝
 const DIVE_EVERY = { idle: [12, 20], thinking: [26, 40], working: [6, 10], finishing: [14, 20], waiting: [1e9, 1e9], absent: [18, 30] };
+const VIEW_SEQ = ['normal', 'top', 'normal', 'fpv'], VIEW_SEC = num('viewsec', 40);
+const VIEW_LOCK = ['normal', 'top', 'fpv'].includes(Q.get('view')) ? Q.get('view') : null;   // ?view=normal|top|fpv 鎖定
+const viewW = { normal: VIEW_LOCK && VIEW_LOCK !== 'normal' ? 0 : 1, top: VIEW_LOCK === 'top' ? 1 : 0, fpv: VIEW_LOCK === 'fpv' ? 1 : 0 };
+const topLag = { x: 0, y: 0 }, fpvLag = { pitch: 0, yaw: 0, roll: 0 };
+const _pN = new THREE.Vector3(), _pT = new THREE.Vector3(), _pF = new THREE.Vector3(), _v = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _zAx = new THREE.Vector3(0, 0, 1);
+const _qN = new THREE.Quaternion(), _qT = new THREE.Quaternion(), _qF = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _eu = new THREE.Euler(), _tmpM = new THREE.Matrix4();
 let clk = 0, dive = null, nextDive = 5, rollT = -1, rollNext = 22, lastState = null, lastY = null, vyS = 0;
 function applyAtmos(dt) {
   const tgt = STATES[stateName] || STATES.idle;
@@ -197,7 +203,7 @@ function step(now, dt) {
   const fwd = Math.max(cur.speed, 5);
   if (stateName !== lastState) { if (stateName === 'finishing') rollNext = clk + 1.2; nextDive = Math.min(nextDive, clk + 3); lastState = stateName; }
   // 上下穿梭：時候到了就挑前方一座空橋，算好時間俯衝 —— 高的橋鑽橋下、低的橋擦過橋面，再拉回巡航高度
-  const DW = 2.6, DH = 0.5, DD = 7;                           // 下降秒數、谷底停留、俯衝時往前拉開的距離
+  const DW = 3.2, DH = 0.5, DD = 7;                           // 下降秒數、谷底停留、俯衝時往前拉開的距離
   if (!dive && FLY > 0 && clk > nextDive) {
     const v = Math.max(cur.speed, 2), zp = CAM0.z + PDIR.z * (PLANE.d + DD);
     let best = null;
@@ -205,7 +211,7 @@ function step(now, dt) {
       const T = (b.D + zp - s) / v;
       if (T > DW + DH + 0.3 && T < DW + 6 && (!best || T < best.T)) best = { T, y: b.y };
     }
-    if (best) dive = { tp: clk + best.T, yd: best.y >= 33 ? best.y - 4.2 : Math.max(29, best.y + 7.5) };
+    if (best) dive = { tp: clk + best.T, yd: best.y >= 37 ? best.y - 4.5 : Math.max(33, best.y + 9) };   // 單軌頂 26 m，飛機最低 32.5（含機頭下壓）
     else nextDive = clk + 1;
   }
   let env = 0;
@@ -240,18 +246,48 @@ function step(now, dt) {
   const pitch = PLANE.pitch + THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(Math.atan2(vyS, fwd)) * 1.4, -50, 40) + 3 * Math.cos(t * 1.3);
   plane.rotation.set(THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(-PLANE.yaw - heading + show), THREE.MathUtils.degToRad(-bank));
   planeShadow.position.copy(plane.position); planeShadow.rotation.copy(plane.rotation);
-  // 鏡頭：落後約 1 秒跟上飛機的橫移與升降（俯衝時跟得多、快一點），再低頭把飛機留在畫面裡
+  // ── 鏡頭：一般（延遲跟拍）／大俯視／第一人稱，三組姿勢依權重混合 ──
   const kc = dt > 0 ? 1 - Math.exp(-dt / 1.1) : 1, ky = dt > 0 ? 1 - Math.exp(-dt / 0.8) : 1;
   const dy = y - (CAM0.y + PDIR.y * PLANE.d);
   camLag.x += ((x - (CAM0.x + PDIR.x * PLANE.d)) * 0.75 - camLag.x) * kc;
   camLag.y += (dy * THREE.MathUtils.lerp(0.6, 0.78, env) - camLag.y) * ky;
   camLag.roll += (turn * 0.28 - camLag.roll) * kc;
   camLag.yaw += (heading * 0.3 - camLag.yaw) * kc;
+  // 一般
   const camY = CAM.y + camLag.y + 0.15 * Math.sin(t * 0.7);
   const aim = Math.atan2(y - camY, Math.hypot(x - CAM.x - camLag.x, bz)) - Math.atan2(PDIR.y, Math.hypot(PDIR.x, PDIR.z));
   camLag.pitch += (aim * 0.8 - camLag.pitch) * ky;
-  camera.position.set(CAM.x + camLag.x, camY, 0);
-  camera.rotation.set(THREE.MathUtils.degToRad(CAM.pitch) + camLag.pitch, THREE.MathUtils.degToRad(-CAM.yaw - camLag.yaw), THREE.MathUtils.degToRad(CAM.roll - camLag.roll));
+  _pN.set(CAM.x + camLag.x, camY, 0);
+  _qN.setFromEuler(_eu.set(THREE.MathUtils.degToRad(CAM.pitch) + camLag.pitch, THREE.MathUtils.degToRad(-CAM.yaw - camLag.yaw), THREE.MathUtils.degToRad(CAM.roll - camLag.roll), 'YXZ'));
+  // 大俯視：高處往前下方看整座紙模城，飛機在畫面中下方；升降只跟一半
+  topLag.x += (x * 0.6 - topLag.x) * kc; topLag.y += ((y - cruiseY) * 0.55 - topLag.y) * ky;
+  _pT.set(topLag.x * 0.9 + 2, cruiseY + 38 + topLag.y, bz + 26);
+  _tmpM.lookAt(_pT, _v.set(topLag.x * 0.9, y - 12, bz - 24), _up);
+  _qT.setFromRotationMatrix(_tmpM).multiply(_q2.setFromAxisAngle(_zAx, THREE.MathUtils.degToRad(-turn * 0.12)));
+  // 第一人稱：在機尾後上方 12 m、順著飛行方向看，翼面留在畫面下緣；側傾只跟一半
+  fpvLag.pitch += (THREE.MathUtils.clamp(Math.atan2(vyS, fwd), -0.8, 0.6) * 0.85 - fpvLag.pitch) * ky;
+  fpvLag.yaw += (-Math.atan2(vx, fwd) * 0.9 - fpvLag.yaw) * kc;
+  fpvLag.roll += (THREE.MathUtils.degToRad(-(turn + rollAng * 0.15) * 0.45) - fpvLag.roll) * ky;
+  _qF.setFromEuler(_eu.set(fpvLag.pitch - 0.16, fpvLag.yaw, fpvLag.roll, 'YXZ'));
+  _pF.set(0, 3.4, 12).applyQuaternion(_qF).add(plane.position);
+  // 權重：auto 依時間輪播，?view= 鎖定
+  const want = VIEW_LOCK || VIEW_SEQ[Math.floor(clk / VIEW_SEC) % VIEW_SEQ.length];
+  const kv = dt > 0 ? 1 - Math.exp(-dt / 0.9) : 1;
+  for (const k of ['normal', 'top', 'fpv']) viewW[k] += ((k === want ? 1 : 0) - viewW[k]) * kv;
+  const wsum = viewW.normal + viewW.top + viewW.fpv;
+  const wT = viewW.top / wsum, wF = viewW.fpv / wsum;
+  camera.position.copy(_pN).multiplyScalar(1 - wT - wF).addScaledVector(_pT, wT).addScaledVector(_pF, wF);
+  camera.quaternion.copy(_qN).slerp(_qT, wT / Math.max(1e-4, 1 - wF)).slerp(_qF, wF);
+  // 第一人稱時，飛機機頭轉回順著飛行方向（一般視角那 35° 斜擺是構圖用的）
+  plane.rotation.y += THREE.MathUtils.degToRad(PLANE.yaw - show) * wF;
+  planeShadow.rotation.copy(plane.rotation);
+  plane.scale.setScalar(PLANE.s * (1 + 0.35 * wT));                 // 大俯視時放大一點，才讀得到
+  // 鏡頭別鑽進空橋：附近的橋頂以上留 3 m
+  for (const sl of near.slots) for (const b of sl.bridges || []) {
+    const zw = s - b.D;
+    if (Math.abs(zw - camera.position.z) < 6) camera.position.y = Math.max(camera.position.y, b.y + 3.7 + 3);
+  }
+  camera.position.y = Math.max(camera.position.y, 30);
   draw();
 }
 function draw() {
