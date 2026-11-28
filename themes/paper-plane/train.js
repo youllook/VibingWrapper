@@ -14,7 +14,7 @@ const EVERY = { idle: [18, 30], thinking: [30, 45], working: [8, 14], finishing:
 const SPEED = { idle: 22, thinking: 14, working: 34, finishing: 20, waiting: 10, absent: 18 };
 
 export function makeTrain(scene, NIGHT) {
-  const paper = new THREE.MeshLambertMaterial({ color: 0xfffefb, flatShading: true });
+  const paper = new THREE.MeshLambertMaterial({ color: 0xe8eef6, flatShading: true });        // 淡藍灰紙：跟暖白城市分得開
   const shade = new THREE.MeshLambertMaterial({ color: 0xb9bcc2, flatShading: true });        // 車窗帶（凹進去的暗面）
   const glass = new THREE.MeshLambertMaterial({ color: 0xa9b1bc, emissive: 0x000000 });       // 窗格：夜裡亮暖燈
   const blue = new THREE.MeshLambertMaterial({ color: 0x8fb6e0 });

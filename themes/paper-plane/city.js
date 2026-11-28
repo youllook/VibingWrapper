@@ -21,7 +21,8 @@ const SIDES = [
 const ROW_GAP = 8;               // 排與排之間的巷子
 
 // 高架單軌：全域距離 d 的函數（跨段連續）
-export function railX(d) { return 6 + 9 * Math.sin(d / 260) + 3 * Math.sin(d / 97 + 1.3); }
+// 2026-11-29 移到街心（約 −9～+5 m，略偏左）：一般視角往左看，原本偏右的軌道和電車常被右側樓群擋住
+export function railX(d) { return -2 + 5 * Math.sin(d / 260) + 2 * Math.sin(d / 97 + 1.3); }
 export const RAIL_Y = 24;
 
 const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);  // 原點在底面中心
