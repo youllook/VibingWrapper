@@ -62,7 +62,24 @@ export function buildSegment(i) {
         const split = R() < 0.55;
         const h1 = split ? h * r(0.45, 0.7) : h;
         const tiers = [{ x: cx, y: 0, z: cz, sx: depth, sy: h1, sz: bw }];
-        if (split) {
+        // 中景階梯塔（對目標圖）：後排偶爾一棟拔高、往上一層層收，最後一根細頂。
+        // 用自己的亂數（由 seed 導出），不動到其他建築的亂數序列。
+        const TR = rng(Math.floor(seed * 1e6) + ri * 101);
+        const tower = ri > 0 && bw > 10 && TR() < (ri === 1 ? 0.16 : 0.22);
+        if (tower) {
+          const H = Math.max(h, 70) * (1.35 + TR() * 0.6);
+          const n = 3 + Math.floor(TR() * 2);                    // 3–4 段收頂
+          let y = H * (0.42 + TR() * 0.12), sx = depth, sz = bw;
+          tiers[0].sy = y;
+          for (let k = 0; k < n; k++) {
+            sx *= 0.72 + TR() * 0.1; sz *= 0.72 + TR() * 0.1;
+            const last = k === n - 1;
+            const sy = last ? H - y : (H - y) * (0.35 + TR() * 0.15);
+            tiers.push({ x: cx, y, z: cz, sx, sy, sz });
+            y += sy;
+          }
+          if (TR() < 0.6) tiers.push({ x: cx, y, z: cz, sx: Math.max(sx * 0.35, 1.6), sy: H * (0.06 + TR() * 0.06), sz: Math.max(sz * 0.35, 1.6) });
+        } else if (split) {
           const k = r(0.6, 0.85);
           tiers.push({ x: cx + side.dir * depth * (1 - k) * 0.3, y: h1, z: cz, sx: depth * k, sy: h - h1, sz: bw * r(0.6, 0.9) });
           if (R() < 0.35) {
@@ -73,7 +90,7 @@ export function buildSegment(i) {
         for (const b of tiers) {
           boxes.push({ ...b, kind: 'body', style, seed });
           // 簷口：每一段頂上一片略寬的薄板（紙板疊出來的厚邊）
-          if (vis) boxes.push({ x: b.x, y: b.y + b.sy, z: b.z, sx: b.sx + 0.9, sy: 0.55, sz: b.sz + 0.9, kind: 'trim' });
+          if (vis || tower) boxes.push({ x: b.x, y: b.y + b.sy, z: b.z, sx: b.sx + 0.9, sy: 0.55, sz: b.sz + 0.9, kind: 'trim' });
         }
         const base = tiers[0];
         if (vis) {
