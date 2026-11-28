@@ -6,6 +6,7 @@ import { SEG, FAR_SEG, STREET, Strip, buildSegment, buildFarSegment } from './ci
 import { makePaperPlane } from './plane.js';
 import { makeCityMaterial, makeGroundMaterial, makePlaneMaterial, NIGHT, TRAVEL, CANYON } from './paper.js';
 import { makeMotionBlur } from './post.js';
+import { makeTrain } from './train.js';
 
 const Q = new URLSearchParams(location.search);
 const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
@@ -76,6 +77,7 @@ const colorOf = (b, c) => {
 near.colorOf = colorOf; far.colorOf = colorOf;
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 6000).rotateX(-Math.PI / 2), makeGroundMaterial(STREET));
 ground.position.z = -2500; ground.receiveShadow = true; scene.add(ground);
+const train = makeTrain(scene, NIGHT);                       // 紙摺單軌電車
 
 // 紙飛機：位置用畫面座標（0–1）＋離鏡頭距離
 const plane = makePaperPlane(makePlaneMaterial());
@@ -191,6 +193,7 @@ function step(now, dt) {
   if (!frozen) s += cur.speed * dt;
   TRAVEL.value = s;
   near.update(s); far.update(s);
+  train.update(frozen ? 0 : dt, s, clk, stateName, cur.speed);
   // ── 飛行：S 形穿梭＋上下穿梭＋在畫面裡前後漂、轉身、偶爾翻滾；鏡頭延遲跟拍 ──
   ph += dt * cur.ag;
   if (Q.has('t') && frozen) ph = t * cur.ag;
@@ -275,7 +278,7 @@ function step(now, dt) {
   plane.scale.setScalar(PLANE.s * (1 + 0.35 * wT));
   const fov = CAM.fov + 14 * wF;
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }                 // 大俯視時放大一點，才讀得到
-  camera.position.y = Math.max(camera.position.y, 30);
+  camera.position.y = Math.max(camera.position.y, 34);              // 紙電車車頂約 31 m
   draw();
 }
 function draw() {
@@ -293,7 +296,9 @@ window.theme = {
   requestState: () => stateName, setState: (n) => { stateName = n; },
   setSessions: (a) => { sessions = a || []; },
   // 測試：立刻找橋俯衝／立刻翻滾；flight 看目前飛行狀態
-  dive: () => { nextDive = clk; }, roll: () => { rollNext = clk; },
+  dive: () => { nextDive = clk; }, roll: () => { rollNext = clk; }, train: () => train.trigger(), get trainRun() { return train.run; },
+  // 測試：不靠 rAF 往前推 sec 秒（瀏覽器分頁在背景時 rAF 會停）
+  advance: (sec) => { for (let i = 0; i < sec * 30; i++) step(performance.now(), 1 / 30); },
   get flight() { return { clk, dive, nextDive, rollT, y: plane.position.y, d: plane.position.distanceTo(camera.position) }; },
   shot: async (name = 'shot.png') => {
     renderer.setPixelRatio(1); renderer.setSize(1920, 1080, false); camera.aspect = 16 / 9; camera.updateProjectionMatrix(); if (mb) mb.resize();
