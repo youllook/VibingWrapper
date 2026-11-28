@@ -121,6 +121,7 @@ export function walkMaterial() {                                     // 步道�
 
 // ── 門板：Codex 圖當顏色；載入後從圖算出法線（亮度當高度）和粗糙度，各款參數不同 ──
 export const LEAVES = ['shoji', 'plank', 'vault', 'stained', 'painted', 'red'];
+export const HANDLE = { shoji: -1, plank: 1, vault: 0, stained: 0, painted: 1, red: 1 };   // 貼圖上門把畫在哪一側（−1 左、1 右、0 置中／沒有）
 const KIND = {
   shoji:   { rough: 0.78, k: 0.2,  metal: 0,    ns: 1.0 },          // 格子窗：木格＋紙
   plank:   { rough: 0.72, k: 0.35, metal: 0,    ns: 2.2 },          // 舊木板：板縫、木紋
@@ -147,7 +148,7 @@ export function leafMaterial(n, texL = new THREE.TextureLoader()) {  // BoxGeome
   const face = new THREE.MeshStandardMaterial({ roughness: q.glass ? 0.4 : q.rough, metalness: q.metal });
   face.map = texL.load(`tex/leaf_${n}.webp`, (t) => {
     const m = deriveLeafMaps(t.image, q);
-    face.normalMap = m.normal; face.roughnessMap = m.rough; face.roughness = 1; face.normalScale.set(1, 1); face.needsUpdate = true;
+    face.normalMap = m.normal; face.roughnessMap = m.rough; face.roughness = 1; face.normalScale.set(1.8, 1.8); face.needsUpdate = true;
   });
   face.map.colorSpace = THREE.SRGBColorSpace; face.map.anisotropy = 4;
   const edge = new THREE.MeshStandardMaterial({ color: '#6b5340', roughness: 0.8 });

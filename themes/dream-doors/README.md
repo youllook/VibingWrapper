@@ -53,6 +53,10 @@
 | `post=0` | 關掉最後一道畫面處理（光暈、光束、調色；`post.js`） |
 | `sky=proc` | 雲海世界改回程式畫的天空＋雲海（預設用 Codex 全景 `world_clouds.webp`） |
 | `envmap=0` | 關掉世界全景環境貼圖 |
+| `layers=0` | 關掉 2.5D 分層，世界回到單張全景 |
+| `para=` | 分層視差的晃動幅度倍率，預設 1 |
+
+**2.5D 分層**：每個世界用拆景工具（skill `/scene-split`）拆成天空、遠景、中景、近景四層，每層附法線，再用 `docs/dream-doors/pack_layers.py` 打包成 `tex/layers_L0–L3.webp`、`tex/layers_n.webp`、`tex/layers.js`。天空 shader 由近到遠疊四層，近層隨鏡頭緩緩晃動錯開（26 秒一個來回），主光方向慢慢飄移，朝右的面會亮起金邊（白天暖金，入夜銀白）。
 | `look=` | 等你時的回頭角度（弧度），預設 −0.9 |
 
 測試介面 `window.theme`：`applyState`、`setSessions`、`setState`、`requestState`、`STATES`、`CONFIG`。分頁在背景時 rAF 不跑，可以用 `tick(秒)` 手動推進時間。
