@@ -1,0 +1,161 @@
+// 紙飛機穿城 · 程式城市（無限）
+// 城市切成每段 SEG 公尺的街廓；每段長相只由「全域段號」決定（同段號＝同長相）。
+// 座標：主街沿 −Z 往前，街心 x=0；段 i 涵蓋全域距離 [i*SEG, (i+1)*SEG)，段內 z 從 0 到 −SEG。
+import * as THREE from 'three';
+
+export const SEG = 60;          // 近城一段長度（m）
+export const FAR_SEG = 240;     // 遠景天際線一段長度
+export const STREET = 24;       // 街心到第一排建築線（m）
+
+// 固定亂數：同一個種子永遠同一串
+export function rng(seed) {
+  let s = (seed * 2654435761) >>> 0 || 1;
+  return () => { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+}
+
+// 兩側規則（對 n03a）：左側近街高樓貼鏡頭，右側第一排較矮、後排高
+const SIDES = [
+  { dir: -1, rows: [{ h: [32, 95], d: [16, 24] }, { h: [50, 135], d: [18, 26] }, { h: [45, 150], d: [18, 26] }] },
+  { dir: 1, rows: [{ h: [14, 32], d: [14, 22] }, { h: [20, 50], d: [16, 24] }, { h: [30, 95], d: [18, 26] }] },
+];
+const ROW_GAP = 8;               // 排與排之間的巷子
+
+// 高架單軌：全域距離 d 的函數（跨段連續）
+export function railX(d) { return 6 + 9 * Math.sin(d / 260) + 3 * Math.sin(d / 97 + 1.3); }
+export const RAIL_Y = 24;
+
+const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);  // 原點在底面中心
+
+// 一個段：回傳 [{x,y,z,sx,sy,sz,kind}] 盒子清單（段內座標）
+export function buildSegment(i) {
+  const R = rng(i * 7919 + 17);
+  const boxes = [];
+  const r = (a, b) => a + (b - a) * R();
+  const crossZ = -r(6, SEG - 20), CROSS = 13;     // 每段一條橫街（大樓端面才會露出來）
+  for (const side of SIDES) {
+    let x0 = STREET;
+    side.rows.forEach((row, ri) => {
+      const depth = r(row.d[0], row.d[1]);
+      // 沿街切地塊
+      let z = 0;
+      while (z > -SEG + 0.01) {
+        if (z <= crossZ && z > crossZ - CROSS) { z = crossZ - CROSS; continue; }
+        let w = Math.min(r(12, 26), z + SEG);
+        if (z > crossZ && z - w < crossZ) w = z - crossZ;
+        if (w < 3) { z -= w; continue; }
+        const gap = R() < 0.25 ? r(2, 5) : 0.6;      // 偶爾一條窄巷
+        const bw = Math.max(w - gap, 4);
+        let h = r(row.h[0], row.h[1]);
+        if (R() < 0.07) h *= 1.6;                    // 偶爾一棟地標
+        const set = ri === 0 && R() < 0.5 ? r(1, 7) : 0;          // 第一排偶爾退縮，立面才不會像一道牆
+        const cx = side.dir * (x0 + set + depth / 2), cz = z - bw / 2;
+        // 主體：可能分兩段退縮
+        const split = R() < 0.55;
+        const h1 = split ? h * r(0.45, 0.7) : h;
+        boxes.push({ x: cx, y: 0, z: cz, sx: depth, sy: h1, sz: bw, kind: 'body' });
+        if (split) {
+          const k = r(0.6, 0.85);
+          boxes.push({ x: cx + side.dir * depth * (1 - k) * 0.3, y: h1, z: cz, sx: depth * k, sy: h - h1, sz: bw * r(0.6, 0.9), kind: 'body' });
+          if (R() < 0.35) {
+            const t = r(0.35, 0.55);
+            boxes.push({ x: cx, y: h, z: cz, sx: depth * t, sy: h * r(0.12, 0.25), sz: bw * t, kind: 'body' });
+          }
+        }
+        // 屋頂機房、小盒子
+        const top = boxes[boxes.length - 1];
+        const roofY = top.y + top.sy;
+        const n = Math.floor(r(0, 3.5));
+        for (let k = 0; k < n; k++) {
+          const s = r(2, 5);
+          boxes.push({ x: top.x + r(-0.3, 0.3) * top.sx, y: roofY, z: top.z + r(-0.3, 0.3) * top.sz, sx: s, sy: r(1.5, 4), sz: s * r(0.8, 1.4), kind: 'roof' });
+        }
+        // 偶爾一根天線
+        if (R() < 0.12) boxes.push({ x: top.x, y: roofY, z: top.z, sx: 0.5, sy: r(10, 25), sz: 0.5, kind: 'roof' });
+        z -= w;
+      }
+      x0 += depth + ROW_GAP;
+    });
+  }
+  // 空橋：約三成的段有一座
+  if (R() < 0.6) {
+    const y = r(14, 38), z = -r(8, SEG - 8);
+    boxes.push({ x: 0, y, z, sx: STREET * 2, sy: 3.2, sz: 4.5, kind: 'bridge' });
+  }
+  // 高架單軌：每 3 m 一節軌道梁，每 30 m 一根柱
+  const d0 = i * SEG;
+  for (let s = 0; s < SEG; s += 3) {
+    const xa = railX(d0 + s), xb = railX(d0 + s + 3);
+    const len = Math.hypot(xb - xa, 3);
+    boxes.push({ x: (xa + xb) / 2, y: RAIL_Y, z: -s - 1.5, sx: 2.6, sy: 1.6, sz: len + 0.05, kind: 'rail', yaw: Math.atan2(xb - xa, 3) });
+    if (((d0 + s) % 30) < 3) boxes.push({ x: xa, y: 0, z: -s - 1.5, sx: 1.6, sy: RAIL_Y, sz: 1.6, kind: 'rail' });
+  }
+  return boxes;
+}
+
+// 遠景天際線：細高樓剪影，離街 70 m 以外
+export function buildFarSegment(i) {
+  const R = rng(i * 104729 + 3);
+  const r = (a, b) => a + (b - a) * R();
+  const boxes = [];
+  for (let k = 0; k < 90; k++) {
+    const dir = R() < 0.5 ? -1 : 1;
+    const x = dir * r(75, 650), z = -r(0, FAR_SEG);
+    const w = r(10, 26), h = r(60, 240) * (R() < 0.1 ? 1.5 : 1);
+    boxes.push({ x, y: 0, z, sx: w, sy: h, sz: w * r(0.7, 1.4), kind: 'far' });
+    if (R() < 0.4) boxes.push({ x, y: h, z, sx: w * 0.6, sy: h * r(0.1, 0.3), sz: w * 0.6, kind: 'far' });
+  }
+  return boxes;
+}
+
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+
+// 一個可重複使用的段槽：InstancedMesh 一顆，換段號時重填
+export class SegmentSlot {
+  constructor(material, cap, build, len) {
+    this.mesh = new THREE.InstancedMesh(unitBox, material, cap);
+    this.mesh.frustumCulled = false;
+    this.mesh.castShadow = this.mesh.receiveShadow = true;
+    this.build = build; this.len = len; this.index = null;
+    this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+  }
+  fill(i, colorOf) {
+    this.index = i;
+    const boxes = this.build(i);
+    const n = Math.min(boxes.length, this.mesh.instanceMatrix.count);
+    if (boxes.length > n) console.warn('段', i, '盒子超過容量', boxes.length);
+    const c = new THREE.Color();
+    for (let k = 0; k < n; k++) {
+      const b = boxes[k];
+      _q.setFromAxisAngle(_up, b.yaw || 0);
+      _m.compose(_p.set(b.x, b.y, b.z), _q, _s.set(b.sx, b.sy, b.sz));
+      this.mesh.setMatrixAt(k, _m);
+      this.mesh.setColorAt(k, colorOf(b, c));
+    }
+    this.mesh.count = n;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this.mesh.instanceColor.needsUpdate = true;
+  }
+  // 全域距離 s：段 i 的段內 z=0 對應世界 z = s − i*len（往 +Z 流過來）
+  place(s) { this.mesh.position.z = s - this.index * this.len; }
+}
+
+// 一組段槽：維持 [s − behind, s + ahead] 範圍內的段
+export class Strip {
+  constructor(scene, material, { cap, build, len, behind, ahead }) {
+    this.len = len; this.behind = behind;
+    this.count = Math.ceil((behind + ahead) / len) + 1;
+    this.slots = Array.from({ length: this.count }, () => new SegmentSlot(material, cap, build, len));
+    this.slots.forEach((sl) => scene.add(sl.mesh));
+    this.colorOf = (b, c) => c.set(0xffffff);
+  }
+  update(s) {
+    const first = Math.floor((s - this.behind) / this.len);
+    for (const sl of this.slots) {
+      // 每個槽固定負責 index ≡ 槽號 (mod count)
+      const k = this.slots.indexOf(sl);
+      const want = first + ((k - first) % this.count + this.count) % this.count;
+      if (sl.index !== want) sl.fill(want, this.colorOf);
+      sl.place(s);
+    }
+  }
+}

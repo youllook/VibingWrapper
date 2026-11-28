@@ -1,0 +1,11 @@
+{
+  "name": "紙飛機穿城",
+  "name_en": "Paper Plane City",
+  "order": 64,
+  "entry": "index.html",
+  "enabled": false,
+  "bundled": false,
+  "description": "一架藍色紙飛機穿過白紙做的城市，大樓、空橋、高架單軌一路往霧裡延伸，永遠飛不完。",
+  "description_en": "A blue paper plane glides through an endless city made of white paper: towers, skybridges and a monorail stretching into the haze.",
+  "tags": ["風格實驗", "簡約"]
+}
