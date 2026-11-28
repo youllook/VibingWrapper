@@ -53,16 +53,17 @@ export function makeGlass(renderer) {
   const U = {
     tScene: { value: rt.texture }, tBlur: { value: rA.texture }, tBlur2: { value: rC.texture }, tWipe: { value: wipeTex },
     uTime: { value: 0 }, uAspect: { value: 16 / 9 }, uRes: { value: size.clone() },
-    uRain: { value: 1 }, uFill: { value: 9 }, uSpeed: { value: 0 }, uExposure: { value: 0.8 },
+    uRain: { value: 1 }, uFill: { value: 9 }, uSpeed: { value: 0 }, uExposure: { value: 0.6 },
     uBloom: { value: 0.9 }, uLampFlash: { value: 0 }, uWipers: { value: WIPERS.map((w) => new THREE.Vector4(w.px, w.py, w.r0, w.r1)) },
     uWAng: { value: [0, 0] }, uWet: { value: 0 },
+    uDry0: { value: -1e9 }, uDry1: { value: -1e9 }, uRunK: { value: 1 },   // 沒雨的時段（隧道裡）：這段時間不會長新雨珠；uRunK 滑落水珠與水霧
   };
   const comp = new THREE.ShaderMaterial({
     uniforms: U, vertexShader: FS_QUAD, depthTest: false, depthWrite: false,
     fragmentShader: /* glsl */`
       varying vec2 vUv;
       uniform sampler2D tScene, tBlur, tBlur2, tWipe;
-      uniform float uTime, uAspect, uRain, uFill, uSpeed, uExposure, uBloom, uLampFlash, uWet;
+      uniform float uTime, uAspect, uRain, uFill, uSpeed, uExposure, uBloom, uLampFlash, uWet, uDry0, uDry1, uRunK;
       uniform vec2 uRes; uniform vec4 uWipers[2]; uniform float uWAng[2];
       float h21(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
       vec3 h32(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yzz) * p3.zyx); }
@@ -90,8 +91,12 @@ export function makeGlass(renderer) {
         if (h.z > density) return vec4(0.);
         vec2 c = (h.xy - 0.5) * 0.55;
         float rad = mix(0.1, 0.3, h21(id * 1.31 + seed) * h21(id * 0.71 - seed));
-        float born = h21(id * 2.17 + seed * 3.) * uFill;
-        float grow = smoothstep(born, born + 0.8, age);
+        // 沒有雨刷：每顆雨珠自己循環（落下→停一陣→滑走或乾掉），週期錯開
+        float per = uFill * (1.2 + 0.8 * h21(id * 0.37 + seed));
+        float t = mod(uTime + h21(id * 2.17 + seed * 3.) * per, per);   // 這顆落下多久了
+        float appear = uTime - t;
+        if (appear > uDry0 && appear < uDry1) return vec4(0.);         // 那時在隧道裡：沒有這顆
+        float grow = smoothstep(0., 0.8, t) * (1. - smoothstep(per * 0.7, per, t));
         rad *= mix(0.4, 1., grow);
         vec2 d = (f - c) / vec2(rad, rad * 1.08);
         float l = dot(d, d);
@@ -113,7 +118,7 @@ export function makeGlass(renderer) {
         vec2 d = vec2(fx - wob, dy) / vec2(0.16, 0.2);
         float l = dot(d, d);
         vec4 res = vec4(0.);
-        float alive = smoothstep(0.5, 3., age);
+        float alive = smoothstep(0.5, 3., age) * uRunK;
         if (l < 1.) res = vec4(d * 0.16 / scale, sqrt(1. - l), smoothstep(1., 0.65, l) * alive);
         // 水痕：水珠上方（剛滑過的地方）一串小點
         float trail = dy > 0. && dy < 2.4 ? 1. : 0.;
@@ -128,7 +133,7 @@ export function makeGlass(renderer) {
       vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0., 1.); }
       void main(){
         vec2 q = vec2(vUv.x * uAspect, vUv.y);
-        float age = wipeAge(q);
+        float age = 1e4;                                         // 沒有雨刷：玻璃從沒被刮過
         vec4 d1 = drops(q, 28., age, 1.3, 0.75 * uRain);
         vec4 d2 = drops(q, 55., age, 7.9, 0.65 * uRain);
         vec4 d3 = drops(q, 110., age, 3.3, 0.55 * uRain);
@@ -136,8 +141,7 @@ export function makeGlass(renderer) {
         vec4 d = d1;
         if (d2.w > d.w) d = d2; if (d3.w > d.w) d = d3; if (rr.w > d.w) d = rr;
         // 水膜：剛掃過的那半秒有一層被拖開的水，之後很快乾掉；其他地方是細霧
-        float smear = exp(-age * 2.2) * step(age, 2.);
-        float mist = clamp(0.25 + 0.5 * smoothstep(0., uFill, age), 0., 1.) * uRain * 0.6;
+        float mist = clamp(0.25 + 0.5 * smoothstep(0., uFill, age), 0., 1.) * uRain * 0.6 * uRunK;
         vec2 uv = vUv;
         // 雨珠像小凸透鏡：裡面是倒過來、縮小的景
         vec2 off = -d.xy * 7.5;
@@ -145,36 +149,21 @@ export function makeGlass(renderer) {
         vec3 sharp = texture2D(tScene, uv + off * d.w).rgb;
         vec3 soft = texture2D(tBlur, uv).rgb;
         vec3 col = mix(sharp, soft, mist * (1. - d.w) * 0.55);
-        // 拖開的水膜：沿掃動方向的細紋
-        float lines = sin(length(q - vec2(uWipers[1].x * uAspect, uWipers[1].y)) * 420.) * 0.5 + 0.5;
-        col = mix(col, soft * (0.9 + 0.3 * lines), smear * 0.7);
         // 雨珠的暗邊與高光（光從左上的燈來）
         float rim = smoothstep(0.55, 1.0, 1. - d.z) * d.w;
         col *= 1. - 0.45 * rim;
         vec3 n = normalize(vec3(d.xy * 60., d.z + 0.2));
         float spec = pow(max(dot(n, normalize(vec3(-0.5, 0.7, 0.6))), 0.), 24.) * d.w;
-        col += vec3(1., 0.62, 0.3) * spec * (0.6 + 2.5 * uLampFlash);
+        col += vec3(0.8, 0.95, 1.) * spec * (0.6 + 2.5 * uLampFlash);
         // 光暈：兩層模糊減掉門檻
         vec3 b1 = max(texture2D(tBlur, uv).rgb - 0.8, 0.), b2 = max(texture2D(tBlur2, uv).rgb - 0.5, 0.);
-        col += (b1 * 0.35 + b2 * 0.6) * uBloom;
+        col += (b1 * 0.35 + b2 * 0.22) * uBloom;   // 大範圍的光暈壓低：太強會把暗部整片墊亮
         col = aces(col * uExposure);
         // 暗角＋一點顆粒
         vec2 vc = vUv - vec2(0.45, 0.5);
         col *= 1. - 0.55 * dot(vc, vc) * 1.6;
         col += (h21(gl_FragCoord.xy + fract(uTime) * 100.) - 0.5) * 0.012;
         col = pow(col, vec3(1. / 2.2));
-        // 雨刷本體：細長的黑色刷片＋上緣一點反光
-        for (int i = 0; i < 2; i++) {
-          vec2 pv = vec2(uWipers[i].x * uAspect, uWipers[i].y);
-          float a = uWAng[i];
-          vec2 dir = vec2(cos(a), sin(a)), nrm = vec2(-dir.y, dir.x);
-          vec2 rel = q - pv; float along = dot(rel, dir), across = dot(rel, nrm);
-          float blade = step(uWipers[i].z * 0.6, along) * step(along, uWipers[i].w) * smoothstep(0.0075, 0.0045, abs(across + 0.002));
-          float arm = step(0., along) * step(along, uWipers[i].w * 0.92) * smoothstep(0.0045, 0.0025, abs(across - 0.009));
-          float hi = smoothstep(0.003, 0.0, abs(across - 0.0045)) * step(uWipers[i].z, along) * step(along, uWipers[i].w);
-          col = mix(col, vec3(0.012, 0.01, 0.009), clamp(blade + arm, 0., 1.));
-          col += vec3(0.5, 0.3, 0.14) * hi * (0.15 + 0.6 * uLampFlash);
-        }
         gl_FragColor = vec4(col, 1.);
       }`,
   });

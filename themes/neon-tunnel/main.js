@@ -73,7 +73,7 @@ setInterval(poll, 1000); poll();
 // ── 隧道段落：in（在隧道裡，出口一直在前方 EXIT_D）→ exiting（出口固定，開過去）→ out（露天）→ 進下一條 ──
 const road = { off: 0, sIn: -1e5, sOut: EXIT_D, mode: 'in' };
 let speed = STATES[stateName].speed, prevState = '';
-const cur = { rain: 1, lamp: 1, sparse: 0, day: 0 };
+const cur = { rain: 1, lamp: 1, sparse: 0, day: 0, runK: 1, head: 1 };
 function updateRoad(dt) {
   road.off += speed * dt;
   if (road.mode === 'in') {
@@ -93,15 +93,17 @@ function updateRoad(dt) {
 }
 
 // 雨刷：每支照「停→上掃→下掃→停」循環；間歇時間跟著狀態
-const wip = { phase: 0, waitLeft: 0.5 };
+// 隧道裡沒雨：進隧道後再刮一次把玻璃刮乾淨，之後雨刷停；出隧道恢復
+const wip = { phase: 0, waitLeft: 0.5, inTunnel: false, last: 0 };
 function updateWipers(dt, now) {
   const st = STATES[stateName];
+  const wipeGap = wip.inTunnel ? (wip.last > 0 ? 0 : -1) : st.wipe;
   let t = 0;                                       // 0 停放 → 1 最高
   if (wip.phase > 0) {
     wip.phase += dt / (2 * st.stroke);
-    if (wip.phase >= 1) { wip.phase = 0; wip.waitLeft = st.wipe; }
+    if (wip.phase >= 1) { wip.phase = 0; wip.waitLeft = st.wipe; if (wip.inTunnel && wip.last > 0) wip.last--; }
     else t = Math.sin(Math.PI * wip.phase);
-  } else if (st.wipe >= 0) {
+  } else if (wipeGap >= 0) {
     wip.waitLeft -= dt;
     if (wip.waitLeft <= 0) wip.phase = 1e-4;
   }
@@ -121,14 +123,23 @@ function step(dt) {
   cur.day += (day - cur.day) * k;
   if (!FREEZE) updateRoad(dt);
   clock += dt;
-  updateWipers(FREEZE ? 0 : dt, clock);
+  // 雨刷已撤掉（用戶 2026-11-28）：updateWipers 不再呼叫，wip 只拿來記是否在隧道裡
   prevState = stateName;
 
   U.uOff.value = road.off; U.uSIn.value = road.sIn; U.uSOut.value = road.sOut; U.uTime.value = clock;
+  cur.head += ((stateName === 'absent' ? 0 : 1) - cur.head) * k; U.uHead.value = cur.head;
   U.uLampK.value = cur.lamp; U.uSparse.value = cur.sparse; U.uDay.value = cur.day; U.uRainK.value = cur.rain;
   // 彎道：很慢地左右飄
   U.uBend.value = 0.00011 * Math.sin(clock / 47) - 0.00006; U.uHill.value = 0.00003 * Math.sin(clock / 61 + 1);
   const outside = !(road.off >= road.sIn && road.off <= road.sOut);
+  if (!outside && !wip.inTunnel) {                 // 進隧道：從這刻起玻璃上不再長新雨珠，1 秒後刮最後一次
+    wip.inTunnel = true; wip.last = 1; wip.waitLeft = Math.min(wip.waitLeft, 1.0);
+    glass.U.uDry0.value = clock; glass.U.uDry1.value = 1e9;
+  } else if (outside && wip.inTunnel) {            // 出隧道：雨又開始落
+    wip.inTunnel = false; glass.U.uDry1.value = clock; wip.waitLeft = Math.min(wip.waitLeft, 2.5);
+  }
+  cur.runK += ((outside ? 1 : 0) - cur.runK) * (1 - Math.exp(-dt / 1.2));
+  glass.U.uRunK.value = cur.runK;
   // 頭頂燈掠過：離最近一盞燈越近，打進車內的橘光越強
   const P = LAMP_A.P, rel = ((road.off - LAMP_A.ph) % P + P) % P;                   // 剛經過的那盞在身後 rel 公尺
   const ahead = P - rel;
@@ -138,7 +149,7 @@ function step(dt) {
   glass.U.uFill.value = outside ? 3.5 : 9 / cur.rain;
   const blink = (Math.floor(clock / 0.42) % 2) === 0 ? 1 : 0;
   cabin.U.uBlinkL.value = st.blink ? blink : 0; cabin.U.uBlinkR.value = st.blink === 'H' ? blink : 0;
-  cabin.U.uAmb.value.setRGB(0.05, 0.03, 0.016).multiplyScalar(outside ? 0.3 : 0.4 + 0.6 * cur.lamp);
+  cabin.U.uAmb.value.setRGB(0.03, 0.036, 0.04).multiplyScalar(outside ? 0.3 : 0.4 + 0.6 * cur.lamp);
   if (outside) cabin.U.uAmb.value.add(new THREE.Color(0.012, 0.016, 0.03));
 }
 

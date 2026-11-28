@@ -4,6 +4,7 @@
 // 隧道只存在於 s ∈ [uSIn, uSOut]；出了這段就是露天（路燈、城市、天空）。
 // 所有材質輸出線性 HDR，最後由 glass.js 做色調映射。
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // ── 斷面（公尺）：左車道中心在 x＝0（鏡頭），中間虛線 x＝1.8，右車道到 5.4 ──
 export const T = {
@@ -12,8 +13,11 @@ export const T = {
   curbL: -2.15, curbR: 5.55,           // 步道邊緣
   eye: 1.22,
 };
-export const LAMP_A = { x: T.xc + T.r * Math.cos(2.62), y: T.yc + T.r * Math.sin(2.62), P: 6, ph: 0 };   // 拱頂左上的燈條
-export const LAMP_B = { x: T.wr - 0.06, y: 2.25, P: 6, ph: 3 };                                          // 右牆中段的小燈
+// 頂燈：拱圈左上、右上各一排，左右對稱、同一個間距；燈具用支架吊在拱圈下方 LAMP_DROP 公尺
+export const LAMP_ANG = 2.62, LAMP_DROP = 0.3;
+const lampAt = (ang) => ({ x: T.xc + (T.r - LAMP_DROP) * Math.cos(ang), y: T.yc + (T.r - LAMP_DROP) * Math.sin(ang) });
+export const LAMP_A = { ...lampAt(LAMP_ANG), P: 12, ph: 0 };              // 左上
+export const LAMP_B = { ...lampAt(Math.PI - LAMP_ANG), P: 12, ph: 0 };    // 右上（鏡像）
 export const POLE = { xl: -4.6, xr: 8.6, y: 8.5, P: 32, ph: 0 };                                          // 露天路段的路燈
 
 export function makeUniforms() {
@@ -23,17 +27,19 @@ export function makeUniforms() {
     uLampK: { value: 1 }, uSparse: { value: 0 },
     uDay: { value: 0 },                                      // 出口外：0 夜、1 白天
     uRainK: { value: 1 },
-    uLampCol: { value: new THREE.Color(1.0, 0.52, 0.17) },
-    uHaze: { value: new THREE.Color(0.075, 0.036, 0.012) },
+    uLampCol: { value: new THREE.Color(0.8, 0.96, 1.0) },          // 冷白偏青（LED／螢光燈管）
+    uHaze: { value: new THREE.Color(0.012, 0.016, 0.018) },
     uOutHaze: { value: new THREE.Color(0.05, 0.07, 0.12) },
     uExitCol: { value: new THREE.Color(0.9, 1.0, 1.25) },
     uHazard: { value: 0 },
+    uHead: { value: 1 },   // 自己車頭燈（熄火＝0）
+    uReflK: { value: new URLSearchParams(location.search).has('refl') ? parseFloat(new URLSearchParams(location.search).get('refl')) : 0.4 },   // 濕路面倒影整體強度（?refl= 可試）
   };
 }
 
 // 所有世界材質共用的 GLSL：彎道、雜湊、燈列照明與倒影
 const COMMON = /* glsl */`
-uniform float uOff, uSIn, uSOut, uBend, uHill, uTime, uLampK, uSparse, uDay, uRainK, uHazard;
+uniform float uOff, uSIn, uSOut, uBend, uHill, uTime, uLampK, uSparse, uDay, uRainK, uHazard, uReflK, uHead;
 uniform vec3 uLampCol, uHaze, uOutHaze, uExitCol;
 const vec3 C_ARCH = vec3(${T.xc.toFixed(3)}, ${T.yc.toFixed(3)}, ${T.r.toFixed(3)});
 const vec4 LA = vec4(${LAMP_A.x.toFixed(3)}, ${LAMP_A.y.toFixed(3)}, ${LAMP_A.P.toFixed(1)}, ${LAMP_A.ph.toFixed(1)});
@@ -63,6 +69,21 @@ vec3 rowLight(vec3 p, vec3 n, vec2 L, float P, float ph, float k, bool tunnel){
     vec3 d = vec3(L.x, L.y, uOff - si) - p;
     float d2 = dot(d, d), w = 1. - smoothstep(6., 12., abs(si - s));
     acc += vec3(max(dot(n, d * inversesqrt(d2)), 0.) * w / (1. + d2 * k)) * (tunnel ? lampOn(si) : 1.);
+  }
+  return acc;
+}
+// 同上，但燈有朝向（隧道燈罩只往下、往路面照，拱頂照不到）：emit＝燈照的方向
+vec3 rowSpot(vec3 p, vec3 n, vec2 L, float P, float ph, float k, vec3 emit){
+  float s = uOff - p.z, i0 = floor((s - ph) / P);
+  vec3 acc = vec3(0.);
+  for (int j = -2; j <= 3; j++) {
+    float si = (i0 + float(j)) * P + ph;
+    if (!inTun(si)) continue;
+    vec3 d = vec3(L.x, L.y, uOff - si) - p;
+    float d2 = dot(d, d), w = 1. - smoothstep(P, P * 2., abs(si - s));
+    vec3 l = d * inversesqrt(d2);
+    float cone = smoothstep(0.1, 0.75, dot(-l, emit));
+    acc += vec3(max(dot(n, l), 0.) * cone * w / (1. + d2 * k)) * lampOn(si);
   }
   return acc;
 }
@@ -157,17 +178,17 @@ void main(){
   if (vPart > 1.5 && vPart < 2.5) n = normalize(n + vec3(0., 0., (rib < 0.5 ? -1. : 1.) * lip * 0.9));
   // 底色：拱頂暗灰混凝土、牆下段淺一點的面板、步道深色
   float dirt = fbm(vec2(s * 0.35, u * 1.3)), streak = fbm(vec2(s * 2.1, u * 0.18));
-  vec3 alb = vec3(0.23, 0.205, 0.18) * (0.65 + 0.55 * dirt) * (0.85 + 0.3 * streak);
+  vec3 alb = vec3(0.2, 0.21, 0.205) * (0.65 + 0.55 * dirt) * (0.85 + 0.3 * streak);
   if (vPart > 0.5 && vPart < 1.5) { float panel = step(0.02, fract(s / 2.4)) * step(0.03, fract(p.y / 0.75));
-    alb = vec3(0.25, 0.22, 0.19) * (0.75 + 0.35 * dirt) * mix(0.55, 1., panel); }
-  if (vPart < 0.5) alb = vec3(0.12, 0.11, 0.10) * (0.7 + 0.5 * dirt);
+    alb = vec3(0.22, 0.23, 0.225) * (0.75 + 0.35 * dirt) * mix(0.55, 1., panel); }
+  if (vPart < 0.5) alb = vec3(0.1, 0.105, 0.105) * (0.7 + 0.5 * dirt);
   if (vPart > 2.5) alb = vec3(0.42, 0.42, 0.40) * (0.8 + 0.3 * dirt);   // 護欄鋼板
   alb *= 1. - 0.75 * groove;
   vec3 col = vec3(0.);
   if (inside) {
-    col += alb * uLampCol * 2.4 * rowLight(p, n, LA.xy, LA.z, LA.w, 0.09, true);
-    col += alb * uLampCol * 0.7 * rowLight(p, n, LB.xy, LB.z, LB.w, 0.6, true);
-    col += alb * uLampCol * 0.02 * uLampK;                                    // 遠處燈的總和
+    col += alb * uLampCol * 3.2 * rowSpot(p, n, LA.xy, LA.z, LA.w, 0.32, normalize(vec3(0.35, -0.94, 0.)));
+    col += alb * uLampCol * 3.2 * rowSpot(p, n, LB.xy, LB.z, LB.w, 0.32, normalize(vec3(-0.35, -0.94, 0.)));
+    col += alb * uLampCol * 0.008 * uLampK;                                   // 遠處燈的總和（很弱：真的隧道拱頂是暗的）
     float toExit = uSOut - s;                                                   // 出口透進來的冷光
     col += alb * uExitCol * 0.5 * exp(-toExit / 18.) * max(0.2, n.z + 0.5);
   } else {
@@ -177,7 +198,7 @@ void main(){
   // 霧：隧道內是暖色煙霧（燈越亮越濃），露天是城市夜霧
   float dist = length(p - cameraPosition);
   vec3 haze = inside ? uHaze * (0.25 + 0.75 * uLampK) : mix(uOutHaze, vec3(0.42, 0.45, 0.5), uDay);
-  col = mix(col, haze, 1. - exp(-dist * (inside ? 0.014 : 0.006)));
+  col = mix(col, haze, 1. - exp(-dist * (inside ? 0.009 : 0.006)));
   gl_FragColor = vec4(col, 1.);
 }`;
 
@@ -190,29 +211,70 @@ void main(){
   if (!inside && (p.x < -3.0 || p.x > 6.6)) discard;            // 露天是高架橋面，兩側外面是夜裡的城市
   // 柏油＋標線：中間虛線 4 m 實、8 m 空；兩側實線
   float grain = fbm(vec2(p.x * 1.7, s * 1.7)), pat = fbm(vec2(p.x * 0.21, s * 0.07));
-  vec3 alb = vec3(0.055, 0.052, 0.05) * (0.7 + 0.6 * grain);
+  vec2 q = vec2(p.x, s);
+  float dist = length(p - cameraPosition);
+  // ── 柏油：骨材石子（近處才有，遠了會閃）、斑駁、補丁、裂縫、接縫、輪跡 ──
+  // 顆粒：每層依「一個像素蓋住多少路面」淡出（近處看得到細粒、遠處不閃），沿路方向的透視壓縮自動處理
+  vec2 fw = fwidth(q);
+  #define FADE(fx, fy) (1. - smoothstep(0.8, 1.8, max(fw.x * (fx), fw.y * (fy))))
+  float f1 = FADE(40., 18.), f2 = FADE(110., 40.), f3 = FADE(16., 8.), f4 = FADE(26., 6.);
+  float agg = vn(q * vec2(40., 18.)), agg2 = vn(q * vec2(110., 40.) + 7.3), fine = vn(q * vec2(16., 8.) + 1.7), grit = vn(q * vec2(26., 6.) + 4.1);   // 橫向密、沿路疏：透視壓扁後看起來是圓的顆粒
+  float aggF = f1, midF = f4;
+  float stone = smoothstep(0.72, 0.88, agg) * f1;                            // 露出的淺色石子
+  float pit = smoothstep(0.3, 0.1, agg2) * f2;                               // 孔隙
+  float mott = fbm(q * vec2(2.2, 1.4));                                      // 深淺斑：縮小、對比降低
+  float cell = floor(s / 23.), sl = s - cell * 23.;                          // 修補過的方塊（新柏油，比較黑）
+  float hc = h11(cell * 3.17 + 0.7);
+  float pcx = mix(-1.2, 4.6, h11(cell * 5.3 + 2.1)), pw = 1.0 + 1.8 * h11(cell * 1.9), pl = 2.5 + 6. * hc;
+  float patchM = step(0.5, hc) * (1. - smoothstep(pw * 0.5 - 0.03, pw * 0.5, abs(p.x - pcx))) * (1. - smoothstep(pl * 0.5 - 0.03, pl * 0.5, abs(sl - 11.5)));
+  float cv = fbm(q * vec2(0.9, 0.3) + 11.);                                  // 蜿蜒的細裂縫，只出現在部分路段
+  float crack = (1. - smoothstep(0.004, 0.014, abs(cv - 0.5))) * smoothstep(0.55, 0.7, vn(q * vec2(0.4, 0.06) + 3.)) * (1. - patchM);
+  float seam = 1. - smoothstep(0.05, 0.09, abs(p.x - 2.02));               // 中線旁的施工接縫（灌了瀝青膠）
+  float lc = p.x < 1.8 ? 0.0 : 3.59;                                         // 兩條車道中心；每道兩條輪跡
+  float track = exp(-pow((abs(p.x - lc) - 0.82) / 0.32, 2.));
+  vec3 alb = vec3(0.03, 0.032, 0.035) * (0.78 + 0.4 * mott) * (0.88 + 0.24 * grain);   // 舊柏油：偏冷的深灰
+  alb *= (1. + (agg2 - 0.5) * 0.9 * f2) * (1. + (agg - 0.5) * 0.8 * f1) * (1. + (fine - 0.5) * 0.7 * f3) * (1. + (grit - 0.5) * 0.6 * f4);
+  alb *= 1. - 0.45 * pit;
+  alb += vec3(0.018, 0.019, 0.02) * stone;
+  alb *= mix(1., 0.86, patchM);
+  alb *= 1. - 0.25 * max(crack, seam * 0.8);
+  alb *= 1. - 0.18 * track;
+  alb = min(alb, vec3(0.03, 0.032, 0.035) * 1.55);                           // 最亮的顆粒也只到淺灰，不能發白                                                  // 輪跡被磨得比較黑、比較平
   float lineW = 0.075;
   float dash = step(abs(p.x - 1.8), lineW) * step(fract(s / 12.), 0.34);
   float edge = step(abs(p.x + 1.8), lineW) + step(abs(p.x - 5.38), lineW);
   float mark = clamp(dash + edge, 0., 1.);
-  alb = mix(alb, vec3(0.62, 0.6, 0.55), mark * 0.9);
-  // 濕：大部分是一層水膜，坑窪處有積水（更像鏡面）
-  float puddle = smoothstep(0.52, 0.68, pat);
-  float rough = mix(0.55, 0.12, puddle) * (1. - 0.4 * mark);
+  alb = mix(alb, vec3(0.3, 0.29, 0.27) * (0.75 + 0.25 * agg) * (1. - 0.3 * pit), mark * 0.85 * (1. - 0.35 * smoothstep(0.55, 0.8, mott)));   // 標線也磨損
+  // 濕：大部分只是濕柏油（倒影糊成一條條），零星小水窪才比較像鏡面
+  float puddle = max(smoothstep(0.64, 0.76, pat), track * smoothstep(0.45, 0.62, pat) * 0.8);   // 水積在輪跡裡
+  puddle *= 1. - 0.6 * stone;
+  // 隧道裡有頂，路面是乾的：只有靠近洞口那幾十公尺被雨飄進來、被車輪帶進來，還是濕的（輪跡最晚乾）
+  float portalD = inside ? min(s - uSIn, uSOut - s) : 0.;
+  float wetIn = inside ? exp(-portalD / 35.) : 1.;
+  float tyre = inside ? track * exp(-portalD / 90.) * 0.5 : 0.;
+  puddle *= wetIn * wetIn;
+  float rough = mix(0.5, 0.2, puddle) * (1. - 0.3 * mark) + 0.25 * (patchM + crack) + 0.35 * (1. - wetIn);
   vec3 v = normalize(p - cameraPosition);
   // 雨打在水面上的細碎漣漪：法線抖一點
   vec2 rip = vec2(vn(vec2(p.x * 3., s * 2.) + uTime * 2.), vn(vec2(s * 2., p.x * 3.) - uTime * 2.)) - 0.5;
-  vec3 n = normalize(vec3(rip.x * 0.025 * uRainK, 1., rip.y * 0.025 * uRainK));
+  vec2 bump = ((vec2(agg, agg2) - 0.5) * 0.15 * f1 + (vec2(grit, fine) - 0.5) * 0.08 * f4) * (1. - puddle);        // 石子把水膜頂得凹凸，倒影碎掉
+  vec3 n = normalize(vec3(rip.x * 0.01 * uRainK + bump.x, 1., rip.y * 0.01 * uRainK + bump.y));
   vec3 r = reflect(v, n);
   float fres = 0.04 + 0.96 * pow(1. - max(-v.y, 0.), 5.);
-  float wet = mix(0.45, 1., puddle);
+  // 中距離也看得到的粗糙：柏油表面高低不平，水膜時有時無，倒影碎成一點一點的條紋（沿路方向拉長，透視壓扁後才像顆粒）
+  float farK = 1. - smoothstep(18., 70., dist);
+  float br = vn(q * vec2(5.5, 1.6)) * 0.55 + vn(q * vec2(17., 4.2) + 2.3) * 0.45 * farK + (0.5 - 0.5 * farK) * 0.45;
+  float breakK = smoothstep(0.3, 0.72, br);
+  float wet = mix(0.3, 0.75, puddle) * (1. - 0.5 * stone) * (1. - 0.3 * crack);
+  wet *= mix(mix(0.15, 1.2, breakK), 1., puddle);
+  wet *= max(max(wetIn, tyre), 0.1);                                         // 乾柏油只剩斜看時一點點反光
   vec3 col = vec3(0.), refl = vec3(0.);
   if (inside) {
-    col += alb * uLampCol * 2.4 * rowLight(p, n, LA.xy, LA.z, LA.w, 0.09, true);
-    col += alb * uLampCol * 0.7 * rowLight(p, n, LB.xy, LB.z, LB.w, 0.6, true);
-    col += alb * uLampCol * 0.02 * uLampK;
-    refl += uLampCol * 9. * reflRow(p, r, LA.xy, LA.z, LA.w, 0.8, rough, true);
-    refl += uLampCol * 3.5 * reflRow(p, r, LB.xy, LB.z, LB.w, 0.25, rough, true);
+    col += alb * uLampCol * 9. * rowSpot(p, n, LA.xy, LA.z, LA.w, 0.12, normalize(vec3(0.5, -0.87, 0.)));   // 燈罩朝路面打：路面受光比牆強
+    col += alb * uLampCol * 9. * rowSpot(p, n, LB.xy, LB.z, LB.w, 0.12, normalize(vec3(-0.5, -0.87, 0.)));
+    col += alb * uLampCol * 0.008 * uLampK;
+    refl += uLampCol * 2.6 * reflRow(p, r, LA.xy, LA.z, LA.w, 0.8, rough, true);
+    refl += uLampCol * 2.6 * reflRow(p, r, LB.xy, LB.z, LB.w, 0.8, rough, true);
     // 隧道內左右護欄上的反光片（隧道燈照亮）
     refl += uLampCol * 1.2 * reflRow(p, r, vec2(${(T.curbR + 0.05).toFixed(2)}, 0.6), 4., 2., 0.06, rough, true);
     // 出口的白光倒影
@@ -220,19 +282,25 @@ void main(){
     if (r.z < -1e-3) { float t = (zE - p.z) / r.z; vec3 h = p + r * t;
       float d = length((h.xy - C_ARCH.xy) / vec2(1., 1.)) / C_ARCH.z;
       float inPortal = (1. - smoothstep(0.75, 1.05 + rough * 0.8, d)) * step(0., h.y + rough * t * 0.4);
-      refl += uExitCol * 1.6 * inPortal * exp(-(uSOut - s) / 260.); }
-    refl += uHaze * 1.5;
+      refl += uExitCol * 0.45 * inPortal * exp(-(uSOut - s) / 260.); }
+    refl += uHaze * 0.35;
   } else {
     vec3 c2 = vec3(0.75, 0.85, 1.0);
     col += alb * c2 * 3.0 * (rowLight(p, n, vec2(PL.x, PL.z), PL.w, 0., 0.02, false) + rowLight(p, n, vec2(PL.y, PL.z), PL.w, 16., 0.02, false));
-    refl += c2 * 6. * (reflRow(p, r, vec2(PL.x, PL.z), PL.w, 0., 0.35, rough, false) + reflRow(p, r, vec2(PL.y, PL.z), PL.w, 16., 0.35, rough, false));
+    refl += c2 * 2.5 * (reflRow(p, r, vec2(PL.x, PL.z), PL.w, 0., 0.35, rough, false) + reflRow(p, r, vec2(PL.y, PL.z), PL.w, 16., 0.35, rough, false));
     col += alb * mix(vec3(0.02, 0.025, 0.04), vec3(0.35, 0.38, 0.42), uDay);
     refl += mix(vec3(0.05, 0.07, 0.12), vec3(0.5, 0.53, 0.58), uDay) * smoothstep(-0.05, 0.2, r.y);   // 天空
   }
-  col += refl * fres * wet * (1. - 0.6 * mark);
-  float dist = length(p - cameraPosition);
+  // 自己的車頭燈：車前路面一片柔和的亮區（近處窄、越遠越寬越淡，沒有清楚的邊）
+  float dz = -p.z;
+  float hw = 0.9 + 0.075 * dz;
+  float head = exp(-pow(p.x / hw, 2.) * 1.6) * smoothstep(2.5, 10., dz) * exp(-dz / 16.) * (1. - smoothstep(35., 55., dz)) * uHead;
+  vec3 headCol = vec3(1.0, 0.97, 0.9);
+  col += alb * headCol * 9. * head;
+  refl += headCol * 0.5 * head;
+  col += refl * fres * wet * (1. - 0.6 * mark) * uReflK;
   vec3 haze = inside ? uHaze * (0.25 + 0.75 * uLampK) : mix(uOutHaze, vec3(0.42, 0.45, 0.5), uDay);
-  col = mix(col, haze, 1. - exp(-dist * (inside ? 0.014 : 0.006)));
+  col = mix(col, haze, 1. - exp(-dist * (inside ? 0.009 : 0.006)));
   gl_FragColor = vec4(col, 1.);
 }`;
 
@@ -278,13 +346,19 @@ export function buildWorld(scene, U) {
     uRow: { value: new THREE.Vector4(row.P, row.ph, 2, 0) }, uTunnel: { value: tunnel ? 1 : 0 },
     uEmit: { value: emit }, uBody: { value: body },
   }));
-  // A：拱頂左上的長燈條（順著拱圈的切面擺）
-  const ga = new THREE.BoxGeometry(0.5, 0.1, 2.0); ga.rotateZ(2.62 - Math.PI / 2); ga.translate(LAMP_A.x + 0.04, LAMP_A.y - 0.04, 0);
-  const emitA = new THREE.Color(1.0, 0.72, 0.42).multiplyScalar(7);
-  lampRow(ga, LAMP_A, 150, emitA, new THREE.Color(0, 0, 0), true);
-  // B：右牆的小方燈
-  const gb = new THREE.BoxGeometry(0.08, 0.22, 0.42); gb.translate(LAMP_B.x, LAMP_B.y, 0);
-  lampRow(gb, LAMP_B, 150, new THREE.Color(1.0, 0.6, 0.25).multiplyScalar(6), new THREE.Color(0, 0, 0), true);
+  // 頂燈：左右對稱兩排。每盞＝發光面板＋暗色燈殼＋前後兩支吊架（從拱圈往下吊 LAMP_DROP）
+  const emitL = new THREE.Color(0.85, 1.0, 1.0).multiplyScalar(4.);
+  const bodyC = new THREE.Color(0.018, 0.015, 0.012);
+  for (const [ang, row] of [[LAMP_ANG, LAMP_A], [Math.PI - LAMP_ANG, LAMP_B]]) {
+    const tilt = ang - Math.PI / 2, ux = -Math.cos(ang), uy = -Math.sin(ang);      // (ux, uy)：從拱圈往隧道中心的方向
+    const face = new THREE.BoxGeometry(0.42, 0.04, 1.7); face.rotateZ(tilt); face.translate(row.x + ux * 0.04, row.y + uy * 0.04, 0);
+    lampRow(face, row, 150, emitL, new THREE.Color(0, 0, 0), true);
+    const shell = new THREE.BoxGeometry(0.52, 0.12, 1.9); shell.rotateZ(tilt); shell.translate(row.x - ux * 0.04, row.y - uy * 0.04, 0);
+    const arms = [-0.7, 0.7].map((z) => {
+      const g = new THREE.BoxGeometry(0.05, LAMP_DROP, 0.05); g.rotateZ(tilt); g.translate(row.x - ux * LAMP_DROP * 0.5, row.y - uy * LAMP_DROP * 0.5, z); return g;
+    });
+    lampRow(mergeGeometries([shell, ...arms]), row, 150, bodyC, bodyC, true);
+  }
   // 反光片（右側護欄）
   const gr = new THREE.BoxGeometry(0.03, 0.07, 0.14); gr.translate(T.curbR + 0.05, 0.6, 0);
   lampRow(gr, { P: 4, ph: 2 }, 220, new THREE.Color(1.0, 0.5, 0.15).multiplyScalar(2.2), new THREE.Color(0, 0, 0), true);
