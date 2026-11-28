@@ -8,6 +8,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { U, P, roadC, roadC1, roadC2, roadE, roadE1, groundY, makeNoise } from './common.js';
 import { makeTerrain, makeGrass, makeProps } from './terrain.js';
 import { makeRider } from './rider.js';
+import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 import { makeSky, makeLandscape, makeCloudPass } from './sky.js';
 import { makeParticles, CORRIDOR, SIDE } from './particles.js';
 import { applyLens, makeComposite } from './lens.js';
@@ -61,6 +62,9 @@ const terrain = makeTerrain(); scene.add(terrain);
 const grass = makeGrass(SMALL); grass.forEach(g => scene.add(g));
 const props = makeProps(); props.forEach(p => scene.add(p));
 const rider = makeRider(); scene.add(rider.root);
+// 真機車：載到了就換上去；載不到或 ?bike=box 就用積木版
+if (q.get('rider') !== 'box') new GLTFLoader().load('models/rider.glb', g => { if (rider.attachRider(g.scene)) window.__rider = true; else console.warn('rider.glb: rig not usable'); }, undefined, e => console.warn('rider model not loaded', e));
+if (q.get('bike') !== 'box') new GLTFLoader().load('models/bike.glb', g => { if (rider.attachBike(g.scene)) window.__bike = true; else console.warn('bike.glb: missing body/wheelF/wheelR'); }, undefined, e => console.warn('bike model not loaded', e));
 const particles = makeParticles(SMALL ? 425 : 920); scene.add(particles);
 const sunLight = new THREE.DirectionalLight('#fff', 1), hemi = new THREE.HemisphereLight('#fff', '#fff', 1), fill = new THREE.DirectionalLight('#fff', 1);
 scene.add(sunLight, sunLight.target, hemi, fill); fill.position.set(-2, 3, 8);
