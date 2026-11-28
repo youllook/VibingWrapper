@@ -1,4 +1,4 @@
-// 夢境之門 · 步驟 5 燈光與狀態（逆光影子、步道光斑、雲頂金邊、消失點白光、六種狀態）
+// 夢境之門 · C 版：門平常關著，Claude 每做一步就開一扇門；開著的門通往下一個世界，穿過去四周就換成那個世界
 // 座標：步道沿 −Z 往遠處，x＝0 是步道（門框）中線，y＝0 是步道面。鏡頭與女孩固定，門框往 +Z 移、過了鏡頭回收到最遠處。
 // 網址參數：?freeze=1（停住、門照目標圖擺）&ids=1（分層遮罩）&ref=0.5（疊目標圖）；擺景參數見 P。
 import * as THREE from 'three';
@@ -12,12 +12,10 @@ const IDS = Q.has('ids'), FREEZE = Q.has('freeze');
 const P = {
   fov: num('fov', 50), camX: num('camx', 0.64), camH: num('camh', 1.52), yaw: num('yaw', 5.5), pitch: num('pitch', -0.2),
   ow: num('ow', 3.25), ph: num('ph', 3.2), post: num('post', 0.3), beam: num('beam', 0.36), over: num('over', 0.35),
-  z1: num('z1', 6.05), sp: num('sp', 5.2), n: 18,
+  z1: num('z1', 6.05), sp: num('sp', 10.4), n: 18,
   open: num('open', 80),                                    // 第一扇門的開門角度（往遠處開）
   wl: num('wl', -2.15), wr: num('wr', 2.15), nearR: num('nearr', 6.6), nearZ: num('nearz', 2.2), // 步道兩緣；近處右側平台
   gx: num('gx', -0.79), gz: num('gz', 4.78), gh: num('gh', 1.5),
-  nz: num('nz', 1.0), nl: num('nl', -0.51), nr: num('nr', 0.832), nw: num('nw', 1.0), // 近景滑門：深度、左右內緣（相對鏡頭）
-  sx: num('sx', -1.55), sy: num('sy', 2.35), sz: num('sz', 2.6), ss: num('ss', 1.9),  // 櫻花枝貼片
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: !IDS, preserveDrawingBuffer: Q.has('shot') });
@@ -124,13 +122,40 @@ const halos = IDS ? null : new THREE.InstancedMesh(new THREE.PlaneGeometry(1.1, 
   }` }), LAMP_N * 2);
 if (lamps) { lamps.frustumCulled = halos.frustumCulled = false; lamps.visible = halos.visible = false; scene.add(lamps, halos); }
 
+// ── 世界：0＝雲海（程式畫），1–5＝Codex 全景（拼成一張圖集，一列一張）──
+const WORLDS = [ // 全景地平線在圖中的高度（由上往下比例）、門口灑出的光色
+  { n: 'coast', hor: 0.5, c: '#bfe6ff' }, { n: 'lantern', hor: 0.55, c: '#ffae5c' }, { n: 'moonlake', hor: 0.45, c: '#7d98ff' },
+  { n: 'snow', hor: 0.46, c: '#e6eeff' }, { n: 'wheat', hor: 0.53, c: '#ffc46a' },
+];
+const WORLD_C = ['#ffe8cc', ...WORLDS.map((w) => w.c)].map((c) => new THREE.Color(c));
+const ATLAS = IDS ? null : (() => {
+  const W = 2048, H = 878, c = document.createElement('canvas'); c.width = W; c.height = H * WORLDS.length;
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.NoColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; // 天空 shader 直接輸出 sRGB
+  WORLDS.forEach((w, r) => { const im = new Image(); im.onload = () => { c.getContext('2d').drawImage(im, 0, r * H, W, H); t.needsUpdate = true; }; im.src = `tex/world_${w.n}.webp`; });
+  return t;
+})();
+// 每個世界的光：太陽色、太陽強度倍率、天光、地面反光、天光強度、霧色、nn＝本身就是夜景（不再套夜色）
+const PAL = [
+  { sun: '#ffd49a', k: 1,    sky: '#e6def4', gnd: '#d6bea4', h: 1.75, fog: '#efe6e2', nn: 0 }, // 雲海
+  { sun: '#fff0d8', k: 1,    sky: '#d8ecff', gnd: '#c8d4dc', h: 1.8,  fog: '#d4e8f4', nn: 0 }, // 燈塔海岸
+  { sun: '#ffaa66', k: 0.45, sky: '#6a5a8a', gnd: '#5a4030', h: 1.1,  fog: '#3a2a40', nn: 1 }, // 燈籠街
+  { sun: '#a8baff', k: 0.4,  sky: '#4c5c8c', gnd: '#2c3040', h: 1.0,  fog: '#1e2850', nn: 1 }, // 月夜湖
+  { sun: '#fff4ea', k: 0.95, sky: '#e6eeff', gnd: '#e0e6f0', h: 1.9,  fog: '#e4ecf6', nn: 0 }, // 雪地
+  { sun: '#ffb860', k: 1.1,  sky: '#ffe2bc', gnd: '#d8b080', h: 1.7,  fog: '#f4d6a8', nn: 0 }, // 麥田
+].map((q) => ({ ...q, sun: new THREE.Color(q.sun), sky: new THREE.Color(q.sky), gnd: new THREE.Color(q.gnd), fog: new THREE.Color(q.fog) }));
+const ENV = { cur: 0, next: 0, blend: 0 };                         // 鏡頭所在的世界、前方下一個世界、光線過渡比例
+
 // ── 天空＋雲海：一顆跟著鏡頭的球，shader 算漸層天空、高空薄雲、腳下雲海（雲海用世界座標捲動，跟步道同速）──
 const SUN = new THREE.Vector3(0.14, 0.06, -1).normalize();            // 天空裡的太陽：走道盡頭偏右、貼著地平線
-const skyU = { uT: { value: 0 }, uScroll: { value: 0 }, uSun: { value: SUN }, uNight: { value: 0 }, uGold: { value: 0 } };
+const skyU = { uT: { value: 0 }, uScroll: { value: 0 }, uSun: { value: SUN }, uNight: { value: 0 }, uGold: { value: 0 },
+  uAtlas: { value: ATLAS }, uEnv0: { value: 0 }, uCam: { value: camera.position }, uDN: { value: 0 },
+  uDZ: { value: new Float32Array(8) }, uDW: { value: new Float32Array(8).fill(-1) },
+  uHor: { value: WORLDS.map((w) => w.hor) }, uNN: { value: PAL.map((q) => q.nn) } };
 if (!IDS) {
   const m = new THREE.ShaderMaterial({ uniforms: skyU, side: THREE.BackSide, depthWrite: false,
     vertexShader: `varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
     fragmentShader: `varying vec3 vDir; uniform float uT, uScroll, uNight, uGold; uniform vec3 uSun;
+      uniform sampler2D uAtlas; uniform float uEnv0, uDN; uniform vec3 uCam; uniform float uDZ[8]; uniform float uDW[8]; uniform float uHor[5]; uniform float uNN[6];
       float h(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
       float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
         return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+1.), f.x), f.y); }
@@ -141,8 +166,8 @@ if (!IDS) {
         float b = fbm4(q * .45) * .75 + fbm4(q * 1.3) * .4;
         return smoothstep(.42, 1.0, b);
       }
-      void main(){
-        vec3 d = normalize(vDir); float sd = max(dot(d, uSun), 0.);
+      vec3 cloudWorld(vec3 d){                                      // 世界 0：天空＋雲海
+        float sd = max(dot(d, uSun), 0.);
         vec3 zen = mix(vec3(.26,.50,.90), vec3(.03,.06,.17), uNight);
         vec3 hor = mix(mix(vec3(1.,.89,.80), vec3(1.,.76,.52), uGold), vec3(.15,.18,.33), uNight);
         vec3 col = mix(hor, zen, pow(clamp(d.y,0.,1.), .5));
@@ -182,6 +207,30 @@ if (!IDS) {
           cc = mix(cc, hor * vec3(1.,.98,.97), fog);
           col = mix(col, cc, smoothstep(.02, -.002, d.y));
         }
+        return col;
+      }
+      vec3 pano(int r, vec3 d){                                     // 世界 1–5：全景（水平約 126°、垂直約 54°）
+        float az = atan(d.x, -d.z), el = asin(clamp(d.y, -1., 1.));
+        float vl = clamp(1. - (uHor[r] - el / .943), .004, .996), u = clamp(.5 + az / 2.2, .002, .998);
+        return texture2D(uAtlas, vec2(u, (float(4 - r) + vl) / 5.)).rgb;
+      }
+      void main(){
+        vec3 d = normalize(vDir);
+        // 這條視線依序穿過哪幾扇開著的門洞：看到的是最後一扇門後的世界（門一扇套一扇，世界也一層套一層）
+        float w = uEnv0;
+        if (d.z < -1e-3) for (int i = 0; i < 8; i++) {
+          if (float(i) >= uDN) break;
+          vec3 q = uCam + d * ((uDZ[i] - uCam.z) / d.z);
+          if (abs(q.x) > ${(P.ow / 2).toFixed(3)} || q.y < 0. || q.y > ${P.ph.toFixed(3)} || uDW[i] < -.5) break;
+          w = uDW[i];
+        }
+        vec3 col;
+        if (w < .5) col = cloudWorld(d);
+        else {
+          int r = int(w + .5) - 1; col = pano(r, d);
+          col = mix(col, col * vec3(.30,.36,.60) + vec3(.01,.015,.04), uNight * (1. - uNN[r + 1]));
+          col = mix(col, col * vec3(1.1,.94,.78), uGold * .5);
+        }
         gl_FragColor = vec4(col, 1.);
       }` });
   const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 48, 24), m); sky.position.copy(camera.position); sky.renderOrder = -1; scene.add(sky);
@@ -211,40 +260,19 @@ const leafMats = LEAVES.map((n) => {
   return [edge, edge, edge, edge, face, face];                   // BoxGeometry 的六面：±x ±y ±z
 });
 const leafG = new THREE.BoxGeometry(P.ow / 2, P.ph - 0.05, 0.07);
-// 門後世界：半邊門洞後面 PD 公尺放一片入口面，shader 用「鏡頭→該點」的方向讀全景（有視差）；地上加該世界顏色的光斑
-const WORLDS = [ // 全景地平線在圖中的高度（由上往下比例）、地上光色
-  { n: 'coast', hor: 0.5, c: '#bfe6ff' }, { n: 'lantern', hor: 0.55, c: '#ffae5c' }, { n: 'moonlake', hor: 0.45, c: '#7d98ff' },
-  { n: 'snow', hor: 0.46, c: '#e6eeff' }, { n: 'wheat', hor: 0.53, c: '#ffc46a' },
-];
-const worldTex = WORLDS.map((w) => { if (IDS) return null; const t = texL.load(`tex/world_${w.n}.webp`); t.colorSpace = THREE.SRGBColorSpace; return t; });
-const PD = 1.8;                                                    // 入口面在門框後幾公尺（開著的門板在它前面）
-function portalMat() {
-  if (IDS) return M.portal;
-  return new THREE.ShaderMaterial({ transparent: true,
-    uniforms: { map: { value: null }, cam: { value: camera.position }, hor: { value: 0.5 }, shift: { value: 0 }, op: { value: 1 } },
-    vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
-    fragmentShader: `uniform sampler2D map; uniform vec3 cam; uniform float hor, shift, op; varying vec3 vW;
-      void main(){
-        vec3 d = normalize(vW - cam);
-        float az = atan(d.x, -d.z), el = asin(clamp(d.y, -1., 1.));
-        vec2 uv = vec2(.5 + shift + az * 2.4 / 2.2, 1. - (hor - el * 2.4 / .943));
-        gl_FragColor = vec4(texture2D(map, clamp(uv, .002, .998)).rgb * 1.05, op);
-        #include <colorspace_fragment>
-      }` });
-}
-function glowMat() {
+function glowMat() {                                               // 開著的門往鏡頭這邊灑出那個世界的光
   return new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     uniforms: { color: { value: new THREE.Color() }, op: { value: 1 } },
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
     fragmentShader: `uniform vec3 color; uniform float op; varying vec2 vUv;
-      void main(){ float a = pow(vUv.y, 1.6) * smoothstep(1., .94, vUv.y) * smoothstep(0., .3, vUv.x) * smoothstep(1., .7, vUv.x);
-        gl_FragColor = vec4(color * a * op * 1.1, 1.);
+      void main(){ float a = pow(vUv.y, 2.2) * smoothstep(0., .25, vUv.x) * smoothstep(1., .75, vUv.x);
+        gl_FragColor = vec4(color * a * op * .9, 1.);
         #include <colorspace_fragment>
       }` });
 }
-const glowG = new THREE.PlaneGeometry(P.ow / 2, PD + 2.2).rotateX(-Math.PI / 2);
+const glowG = new THREE.PlaneGeometry(P.ow, 3.2).rotateX(-Math.PI / 2); // uv.y＝1 在門那一側
 const litG = new THREE.PlaneGeometry(P.ow, P.ph);
-function litMat() {
+function litMat() {                                                  // 門縫光（關著）／開門瞬間湧出的光
   return new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     uniforms: { op: { value: 0 }, seam: { value: 0 } },
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
@@ -256,8 +284,8 @@ function litMat() {
         #include <colorspace_fragment>
       }` });
 }
-// 狀態給門的參數：思考亮度、等你、夜、多遠開始開門、時鐘、等你時停在哪扇門前、上次穿過門的時間
-const AT = { think: 0, wait: 0, night: 0, openFar: 14, clock: 0, waitDoor: -1, lastPass: -99 };
+// 給門用的狀態：夜、時鐘、她面前那扇關著的門（第幾扇）與門縫光亮度、等你
+const AT = { night: 0, clock: 0, gate: -1, gateGlow: 0, wait: 0 };
 function makeDoor() {
   const g = new THREE.Group(), half = P.ow / 2;
   const box = new THREE.Group();                                  // 模型載入前的方塊門框
@@ -270,14 +298,13 @@ function makeDoor() {
     const m = new THREE.Mesh(leafG, M.leaf); m.position.set(-s * P.ow / 4, (P.ph - 0.05) / 2, 0); m.castShadow = true; pivot.add(m); g.add(pivot);
     pivot.userData.s = s; pivot.userData.mesh = m; return pivot;
   });
-  const portal = new THREE.Mesh(new THREE.PlaneGeometry(P.ow / 2 + 0.3, P.ph + 0.3), portalMat()); portal.position.set(0, (P.ph + 0.3) / 2 - 0.05, -PD);
-  portal.visible = false; g.add(portal); g.userData.portal = portal;
-  if (!IDS) { const gl = new THREE.Mesh(glowG, glowMat()); gl.position.set(0, 0.012, (2.2 - PD) / 2); gl.visible = false; g.add(gl); g.userData.glow = gl; }
+  if (!IDS) { const gl = new THREE.Mesh(glowG, glowMat()); gl.position.set(0, 0.012, 1.6); gl.visible = false; g.add(gl); g.userData.glow = gl; }
   if (!IDS) { const lit = new THREE.Mesh(litG, litMat()); lit.position.set(0, P.ph / 2, 0.06); lit.visible = false; lit.renderOrder = 3; g.add(lit); g.userData.lit = lit; }
+  g.userData.opened = false; g.userData.open = 0; g.userData.world = -1;
   return g;
 }
-function setOpen(door, deg) {
-  for (const p of door.userData.leaves) p.rotation.y = -p.userData.s * THREE.MathUtils.degToRad(deg); // 往 −Z（遠處）開
+function setOpen(door, deg) {                                       // 門板永遠掛在門柱上，往遠處（−Z）開；全開約 115°，翻過門框外
+  for (const p of door.userData.leaves) p.rotation.y = -p.userData.s * THREE.MathUtils.degToRad(deg);
 }
 // 門框模型：量出兩根門柱的內緣距離，x 方向縮放到開口＝P.ow、高度＝FRAME_H
 const frameModels = [];
@@ -294,56 +321,63 @@ function fitFrame(root) {
 }
 const doors = [];
 for (let i = 0; i < P.n; i++) { const d = makeDoor(); doors.push(d); scene.add(d); }
+const GATE_Z = -P.gz - 1.4;                                          // 關著的門會停在她面前 1.4 m
 // 第 i 扇門在第 k 輪的長相（freeze 時第 0、1 扇照目標圖：木框＋格子窗／櫻花木門、鐵框＋保險庫門）
 function styleOf(i, k) {
-  if (FREEZE && i === 0) return { frame: 0, l: 0, r: 1, world: -1 };
-  if (FREEZE && i === 1) return { frame: 1, l: 2, r: 2, world: 0, side: -1, shift: 0.05 };
-  if (FREEZE && i === 3) return { frame: 1, l: 3, r: 4, world: 2, side: 1, shift: -0.08 };
-  const hasWorld = rnd(i, k + 21) < 0.5;                           // 約一半的門有一側通往別的世界
-  return { frame: rnd(i, k + 5) < 0.6 ? 0 : 1, l: Math.floor(rnd(i, k + 9) * 6), r: Math.floor(rnd(i, k + 13) * 6),
-    world: hasWorld ? (AT.night > 0.5 ? 1 + Math.floor(rnd(i, k + 27) * 2) : Math.floor(rnd(i, k + 27) * WORLDS.length)) : -1, side: rnd(i, k + 31) < 0.5 ? -1 : 1, shift: (rnd(i, k + 35) - 0.5) * 0.3 };
+  if (FREEZE && i === 0) return { frame: 0, l: 0, r: 1 };
+  if (FREEZE && i === 1) return { frame: 1, l: 2, r: 2 };
+  return { frame: rnd(i, k + 5) < 0.6 ? 0 : 1, l: Math.floor(rnd(i, k + 9) * 6), r: Math.floor(rnd(i, k + 13) * 6) };
 }
-function dress(d, st) {
+function openDoor(d, w) {
+  d.userData.opened = true; d.userData.world = w;
+  if (d.userData.glow) d.userData.glow.material.uniforms.color.value.copy(WORLD_C[w]);
+}
+function dress(d, st) {                                              // 回收到最遠處：換長相、關上、還沒決定通往哪裡
   if (frameModels.length && d.userData.frameType !== st.frame) {
     d.remove(d.userData.frame); d.userData.frame = frameModels[st.frame].clone(); d.add(d.userData.frame); d.userData.frameType = st.frame;
   }
   const [L, R] = d.userData.leaves; L.userData.mesh.material = leafMats[st.l]; R.userData.mesh.material = leafMats[st.r];
-  const po = d.userData.portal, gl = d.userData.glow; d.userData.world = st.world;
-  po.visible = st.world >= 0; if (gl) gl.visible = st.world >= 0;
-  if (st.world >= 0) {
-    po.position.x = st.side * (P.ow / 4 + 0.08); if (gl) gl.position.x = st.side * P.ow / 4;
-    if (!IDS) { const u = po.material.uniforms; u.map.value = worldTex[st.world]; u.hor.value = WORLDS[st.world].hor; u.shift.value = st.shift; gl.material.uniforms.color.value.set(WORLDS[st.world].c); }
-  }
+  d.userData.opened = false; d.userData.open = 0; d.userData.world = -1;
 }
-function layoutDoors(offset) {
+const _ah = [];
+function layoutDoors(offset, dt = 0) {
   doors.forEach((d, i) => {
     const L = P.sp * P.n, raw = -(P.z1 + i * P.sp) + offset;      // 過了鏡頭後方 2 m 就回收到最遠處
     d.position.z = (((raw - 2) % L) + L) % L - L + 2;
-    d.visible = d.position.z < -1.2;                                 // 貼到鏡頭的那扇交給近景滑門演
-    const k = Math.floor((raw - 2) / L);                            // 第幾輪（回收時換門的長相與開法）
-    if (d.userData.k !== k || d.userData.frameType === undefined && frameModels.length) { dress(d, styleOf(i, k)); d.userData.k = k; }
-    const w = d.userData.world >= 0, base = w ? 70 + 15 * rnd(i, k) : 25 + 60 * rnd(i, k);
-    const near = 1 - THREE.MathUtils.smoothstep(-d.position.z, 8.5, AT.openFar); // 她走近時門整個打開（執行時提早整排彈開）
-    let ang = i === 0 && FREEZE ? P.open : base + (84 + 4 * rnd(i, k + 1) - base) * near;
-    if (i === AT.waitDoor) ang = THREE.MathUtils.lerp(ang, 0, AT.wait);           // 等你：她面前那扇門關著
-    setOpen(d, ang);
-    if (SHADOW) for (const p of d.userData.leaves) p.userData.mesh.castShadow = -d.position.z < 9; // 遠處半開的門板不投影（不然整條走道都在影子裡）
-    const lit = d.userData.lit, dz = -d.position.z;
-    if (lit) {                                                       // 思考：遠處的門由近到遠一扇扇亮起
-      const ph = ((AT.clock * 0.3 - dz / 30) % 1 + 1) % 1, q = Math.min(ph, 1 - ph);
-      const th = AT.think * Math.exp(-q * q * 45) * THREE.MathUtils.smoothstep(dz, 8, 14), wt = i === AT.waitDoor ? AT.wait : 0;
-      lit.material.uniforms.op.value = th * 0.9 + wt * 0.8; lit.material.uniforms.seam.value = wt; lit.visible = th + wt > 0.01;
+    d.visible = d.position.z < 1.5;                                  // 門框從她和鏡頭頭上、兩側掠過
+    const k = Math.floor((raw - 2) / L);
+    if (d.userData.k !== k || d.userData.frameType === undefined && frameModels.length) {
+      const was = d.userData.k; dress(d, styleOf(i, k)); d.userData.k = k;
+      if (FREEZE && i <= 1) { openDoor(d, i); d.userData.open = 1; }          // freeze：第 0 扇開著（還是雲海），第 1 扇通往燈塔海岸
+      else if (was == null && d.position.z > GATE_Z + 0.3) { openDoor(d, ENV.cur); d.userData.open = 1; } // 開場時她身後的門本來就開著
     }
-    const pz = d.userData.pz;                                       // 剛穿過一扇門 → 近景滑門滑開一次
-    if (pz !== undefined && pz < -1.2 && d.position.z >= -1.2 && d.position.z - pz < 1) AT.lastPass = AT.clock;
-    d.userData.pz = d.position.z;
-    const slide = FREEZE ? 0 : 1 - THREE.MathUtils.smoothstep(-d.position.z, 1.2, 4.5); // 快過鏡頭時門板往兩側滑出畫面
-    for (const p of d.userData.leaves) p.position.x = p.userData.s * (P.ow / 2 + slide * 1.8);
-    if (w && !IDS) {                                                // 門走近時門後世界淡掉（夢醒），人永遠穿過的是步道
-      const op = THREE.MathUtils.smoothstep(-d.position.z, 7.5, 12); d.userData.portal.material.uniforms.op.value = op;
-      d.userData.glow.material.uniforms.op.value = op; d.userData.portal.visible = op > 0.01;
+    const u = d.userData;
+    if (!FREEZE) u.open = THREE.MathUtils.clamp(u.open + (u.opened ? 1 : -1) * dt / 1.1, 0, 1);
+    const e = u.open * u.open * (3 - 2 * u.open);
+    setOpen(d, e * (FREEZE ? P.open : 112 + 6 * rnd(i, k + 1)));
+    if (SHADOW) for (const p of u.leaves) p.userData.mesh.castShadow = -d.position.z < 9; // 遠處的門板不投影（不然整條走道都在影子裡）
+    if (u.lit) {
+      const opening = u.opened && u.open > 0 && u.open < 1 ? Math.sin(Math.PI * u.open) : 0; // 開門那一下湧出光
+      const seam = i === AT.gate && !u.opened ? AT.gateGlow : 0;                              // 關著的門：門縫光
+      u.lit.material.uniforms.op.value = opening * 0.35 + seam; u.lit.material.uniforms.seam.value = opening > seam ? 0 : 1;
+      u.lit.visible = opening + seam > 0.01;
     }
+    if (u.glow) { const op = e * (u.world !== ENV.cur ? 1 : 0.3); u.glow.material.uniforms.op.value = op; u.glow.visible = op > 0.01; }
+    const pz = u.pz;                                                 // 門過了鏡頭：鏡頭也進到那個世界
+    if (pz !== undefined && pz < 0 && d.position.z >= 0 && d.position.z - pz < 1) {
+      if (u.opened && u.world >= 0) ENV.cur = u.world;
+    }
+    u.pz = d.position.z;
   });
+  // 天空 shader：鏡頭前方的門由近到遠，開著的門通往哪個世界
+  _ah.length = 0; for (const d of doors) if (d.position.z < -0.02) _ah.push(d);
+  _ah.sort((a, b) => b.position.z - a.position.z);
+  const n = Math.min(8, _ah.length); skyU.uDN.value = n;
+  for (let j = 0; j < n; j++) { const u = _ah[j].userData; skyU.uDZ.value[j] = _ah[j].position.z; skyU.uDW.value[j] = u.opened && u.world >= 0 ? u.world : -1; }
+  skyU.uEnv0.value = ENV.cur;
+  // 光線：前方第一扇通往別的世界、開著的門越近，燈光越接近那個世界
+  const nx = _ah.find((d) => d.userData.opened && d.userData.world >= 0 && d.userData.world !== ENV.cur);
+  ENV.next = nx ? nx.userData.world : ENV.cur; ENV.blend = nx ? THREE.MathUtils.smoothstep(nx.position.z, -9, 0) : 0;
 }
 const loader = new GLTFLoader();
 const ready = Promise.all(['frame_wood', 'frame_iron'].map((n) => loader.loadAsync(`models/${n}.glb`))).then((gl) => {
@@ -363,31 +397,6 @@ const girlReady = loader.loadAsync('models/girl.glb').then((g) => {
   mixer = new THREE.AnimationMixer(root); act = mixer.clipAction(g.animations[0]); act.play();
   if (FREEZE) mixer.setTime(num('gt', 0.6));
 });
-
-// ── 近景：剛穿過的那扇門的滑門（往兩側滑開，貼著鏡頭）＋櫻花枝 ──
-const NEAR = {};
-{
-  const H = 6;
-  let nearM = M.near;
-  if (!IDS) {                                                       // 格子窗門板貼圖先在 canvas 糊掉（離鏡頭 1 m、在動）
-    const c = document.createElement('canvas'); c.width = 256; c.height = 614; const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace; t.wrapT = THREE.RepeatWrapping; t.repeat.set(1, H / (P.nw / (512 / 1228))); t.offset.y = 0.5;   // 視線高度落在上半的格子窗
-    const im = new Image(); im.onload = () => { const g = c.getContext('2d'); g.filter = 'blur(3.5px) brightness(0.95) saturate(1.15)'; g.drawImage(im, -24, -24, 304, 662); t.needsUpdate = true; };
-    im.src = 'tex/leaf_shoji.webp';
-    const face = new THREE.MeshLambertMaterial({ map: t, emissiveMap: t, emissive: '#ffc890', emissiveIntensity: 0.45 }), edge = new THREE.MeshLambertMaterial({ color: '#4a3424' });
-    nearM = [edge, edge, edge, edge, face, face]; NEAR.face = face;
-  }
-  const l = new THREE.Mesh(new THREE.BoxGeometry(P.nw, H, 0.06), nearM); l.position.set(P.camX + P.nl * P.nz - P.nw / 2, P.camH, -P.nz);
-  const r = new THREE.Mesh(new THREE.BoxGeometry(P.nw, H, 0.06), nearM); r.position.set(P.camX + P.nr * P.nz + P.nw / 2, P.camH, -P.nz);
-  scene.add(l, r); NEAR.l = l; NEAR.r = r; NEAR.lx = l.position.x; NEAR.rx = r.position.x;
-  const tex = new THREE.TextureLoader().load('tex/sakura_branch.webp');
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const sm = IDS ? new THREE.MeshBasicMaterial({ color: ID.near, alphaMap: tex, alphaTest: 0.5 }) : new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.05, fog: false });
-  if (IDS) { tex.colorSpace = THREE.NoColorSpace; } // alphaMap 讀綠色通道 → 用 onBeforeCompile 換成讀 alpha
-  if (IDS) sm.onBeforeCompile = (s) => { s.fragmentShader = s.fragmentShader.replace('#include <alphamap_fragment>', 'diffuseColor.a *= texture2D( alphaMap, vAlphaMapUv ).a;'); };
-  const br = new THREE.Mesh(new THREE.PlaneGeometry(P.ss * 2, P.ss), sm);
-  br.position.set(P.camX + P.sx, P.camH + P.sy - 1.52, -P.sz); scene.add(br); NEAR.br = br; NEAR.by = br.position.y;
-}
 
 // ── 花瓣：地上一層（跟步道一起後退）＋空中飄落；分層遮罩模式不畫 ──
 const PET_G = 220, PET_A = 140, petals = [];
@@ -432,14 +441,14 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // ── 狀態 → 氛圍目標值（每秒讀 state.json；?state= 可固定一種）──
-// speed m/s、sun 陽光、gold 天色轉金、glow 消失點白光、think 遠門亮起、petals 空中花瓣數、openFar 幾公尺外開始開門、night 夜
+// speed m/s（走到關著的門前會自己停）、sun 陽光、gold 天色轉金、glow 消失點白光、petals 空中花瓣數、night 夜
 const STATES = {
-  idle:      { speed: 1.3, sun: 2.8, gold: 0,    glow: 1.0, think: 0, petals: 40,  openFar: 14, night: 0 },
-  thinking:  { speed: 1.0, sun: 2.2, gold: 0,    glow: 0.8, think: 1, petals: 30,  openFar: 14, night: 0 },
-  working:   { speed: 2.6, sun: 2.9, gold: 0,    glow: 1.3, think: 0, petals: 140, openFar: 26, night: 0 },
-  finishing: { speed: 0.8, sun: 2.9, gold: 1,    glow: 1.6, think: 0, petals: 60,  openFar: 14, night: 0 },
-  waiting:   { speed: 0,   sun: 2.4, gold: 0.25, glow: 1.0, think: 0, petals: 25,  openFar: 14, night: 0 },
-  absent:    { speed: 0.9, sun: 0.5, gold: 0,    glow: 0.3, think: 0, petals: 20,  openFar: 14, night: 1 },
+  idle:      { speed: 1.3, sun: 2.8, gold: 0,    glow: 1.0, petals: 40,  night: 0 },
+  thinking:  { speed: 1.0, sun: 2.2, gold: 0,    glow: 0.8, petals: 30,  night: 0 },
+  working:   { speed: 2.6, sun: 2.9, gold: 0,    glow: 1.3, petals: 140, night: 0 },
+  finishing: { speed: 0.8, sun: 2.9, gold: 1,    glow: 1.6, petals: 60,  night: 0 },
+  waiting:   { speed: 1.0, sun: 2.4, gold: 0.25, glow: 1.0, petals: 25,  night: 0 },
+  absent:    { speed: 0.9, sun: 0.5, gold: 0,    glow: 0.3, petals: 20,  night: 1 },
 };
 const SKY2STATE = { clear: 'idle', overcast: 'thinking', storm: 'working', clearing: 'finishing', waiting: 'waiting' };
 // 時鐘：19–6 點是夜（18–19、6–7 點漸變；?day=1／?night=1 固定；freeze 固定白天）
@@ -457,41 +466,68 @@ async function poll() {
   catch { /* 開發時沒有 bridge：維持目前狀態 */ }
 }
 setInterval(poll, 1000); poll();
+// events.json：每一次工具呼叫（PreToolUse）＝開一扇門
+let pending = 0, lastTool = -1e9, lastEvT = null;
+async function pollEvents() {
+  if (!CONFIG.polling) return;
+  try {
+    const j = await (await fetch('events.json', { cache: 'no-store' })).json(), rec = j.recent || [];
+    if (lastEvT === null) { lastEvT = rec.length ? rec[rec.length - 1].t : 0; return; }   // 第一次只記位置，不補開舊的
+    for (const e of rec) if (e.t > lastEvT) { if (e.kind === 'tool' && e.event !== 'PostToolUse') { pending++; lastTool = AT.clock; } lastEvT = e.t; }
+  } catch { /* 沒有 bridge：執行時改用計時開門 */ }
+}
+setInterval(pollEvents, 1000);
 
-const C = { sunDay: new THREE.Color('#ffd49a'), sunGold: new THREE.Color('#ffa055'), sunNight: new THREE.Color('#9fb2ff'),
-  skyDay: new THREE.Color('#e6def4'), skyNight: new THREE.Color('#3e4c78'), gndDay: new THREE.Color('#d6bea4'), gndNight: new THREE.Color('#2b2a36'),
-  fogDay: new THREE.Color('#efe6e2'), fogGold: new THREE.Color('#f4d6b4'), fogNight: new THREE.Color('#1c2340') };
+const C = { sunGold: new THREE.Color('#ffa055'), sunNight: new THREE.Color('#9fb2ff'),
+  skyNight: new THREE.Color('#3e4c78'), gndNight: new THREE.Color('#2b2a36'), fogGold: new THREE.Color('#f4d6b4'), fogNight: new THREE.Color('#1c2340') };
+const _c = new THREE.Color(), lerp = THREE.MathUtils.lerp;
 const cur = { ...STATES.idle };
-let nightWorlds = false;
 function applyAtmos(dt) {
   const tgt = STATES[stateName] || STATES.idle;
   const h = clockHours(), clockNight = (h >= 19 || h < 6) ? 1 : h >= 18 ? h - 18 : h < 7 ? 7 - h : 0;
   const k = 1 - Math.exp(-dt / 2.5);
-  for (const key of ['sun', 'gold', 'glow', 'think', 'petals', 'openFar']) cur[key] += (tgt[key] - cur[key]) * k;
+  for (const key of ['sun', 'gold', 'glow', 'petals']) cur[key] += (tgt[key] - cur[key]) * k;
   cur.night += (Math.max(tgt.night, clockNight) - cur.night) * k;
-  const n = cur.night, g = cur.gold * (1 - n);
-  AT.night = n; AT.think = cur.think; AT.openFar = cur.openFar;
-  if ((n > 0.5) !== nightWorlds) {                                   // 入夜／天亮：遠處的門重新抽門後世界（近的等回收再換，不會當面跳）
-    nightWorlds = n > 0.5; doors.forEach((d) => { if (-d.position.z > 12) d.userData.k = null; });
-  }
-  sun.intensity = THREE.MathUtils.lerp(cur.sun, 0.9, n);
-  sun.color.lerpColors(C.sunDay, C.sunGold, g).lerp(C.sunNight, n);
-  hemi.intensity = THREE.MathUtils.lerp(1.75, 0.9, n); hemi.color.lerpColors(C.skyDay, C.skyNight, n); hemi.groundColor.lerpColors(C.gndDay, C.gndNight, n);
-  if (scene.fog) scene.fog.color.lerpColors(C.fogDay, C.fogGold, g).lerp(C.fogNight, n);
+  const n = cur.night, g = cur.gold * (1 - n), pa = PAL[ENV.cur], pb = PAL[ENV.next], b = ENV.blend;
+  const nEff = n * (1 - lerp(pa.nn, pb.nn, b));                     // 燈籠街、月夜湖本身就是夜景
+  AT.night = n;
+  sun.intensity = lerp(cur.sun * lerp(pa.k, pb.k, b), 0.9, nEff);
+  sun.color.lerpColors(pa.sun, pb.sun, b).lerp(C.sunGold, g * 0.7).lerp(C.sunNight, nEff);
+  hemi.intensity = lerp(lerp(pa.h, pb.h, b), 0.9, nEff);
+  hemi.color.lerpColors(pa.sky, pb.sky, b).lerp(C.skyNight, nEff); hemi.groundColor.lerpColors(pa.gnd, pb.gnd, b).lerp(C.gndNight, nEff);
+  if (scene.fog) scene.fog.color.lerpColors(pa.fog, pb.fog, b).lerp(C.fogGold, g).lerp(C.fogNight, nEff);
   skyU.uNight.value = n; skyU.uGold.value = g; walkU.uNight.value = n;
   vpU.op.value = cur.glow * (1 - 0.85 * n);
   if (petalMesh) petalMesh.count = PET_G + Math.round(cur.petals);
   if (lamps) lamps.visible = halos.visible = n > 0.02;
-  if (NEAR.br) NEAR.br.material.color.setRGB(1 - 0.6 * n, 1 - 0.58 * n, 1 - 0.45 * n);   // 櫻花枝（不受光的貼片）夜裡壓暗偏藍
-  if (NEAR.face) NEAR.face.emissiveIntensity = 0.45 - 0.15 * n;
 }
 
-// 等你：挑前方一扇門，讓它剛好停在她面前 1.4 m（門關上、門縫透光，她回頭看）
-const WAIT_Z = -P.gz - 1.4;
-function stopAhead() {
-  let best = { d: Infinity, i: -1 };
-  doors.forEach((d, i) => { const dd = WAIT_Z - d.position.z; if (dd >= 2.2 && dd < best.d) best = { d: dd, i }; });
-  return best;
+// 她面前那扇還沒開（或還沒開夠）的門
+function gateDoor() {
+  let g = null;
+  for (const d of doors) if (d.position.z < GATE_Z + 0.3 && !(d.userData.opened && d.userData.open > 0.35) && (!g || d.position.z > g.position.z)) g = d;
+  return g;
+}
+function pickWorld(prev) {
+  if (stateName === 'finishing') return prev === 5 ? 0 : 5;                  // 收尾：走進金色麥田
+  if (stateName !== 'working') return prev;                                  // 換世界只在 Claude 做事時；待命時在同一個夢裡閒逛
+  const pool = (AT.night > 0.5 ? [0, 2, 3] : [0, 1, 2, 3, 4, 5]).filter((w) => w !== prev);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+function openNext() {                                                // 打開前方最近一扇關著的門（前方最多 3 扇開著等她）
+  let t = null, ahead = 0;
+  for (const d of doors) {
+    if (d.position.z >= GATE_Z + 0.3) continue;
+    if (d.userData.opened) ahead++; else if (d.position.z > -60 && (!t || d.position.z > t.position.z)) t = d;
+  }
+  if (!t || ahead >= 3) return false;
+  let prev = null;                                                   // 上一扇開著的門通往哪裡（新世界不重複）
+  for (const d of doors) if (d.userData.opened && d.position.z > t.position.z && d.position.z < 0 && (!prev || d.position.z < prev.position.z)) prev = d;
+  openDoor(t, pickWorld(prev ? prev.userData.world : ENV.cur));
+  return true;
+}
+function holdDoors() {                                               // 思考／等你／不在：前方還遠的門關回去，她會停在下一扇門前
+  for (const d of doors) if (d.userData.opened && d.position.z < GATE_Z - 2.2) d.userData.opened = false;
 }
 // 走路動作裡兩腳併攏的時間點（秒），停下時把動作走到最近的一個
 const PASS = [0.015, 0.627, 1.19, 1.79];                         // 這段 walk 是 2.33 秒兩個循環（四步）
@@ -500,7 +536,7 @@ function toPass(t, dur) {
   return Math.max(0, m);
 }
 
-let offset = 0, last = performance.now(), lastDraw = 0, paused = false, speed = STATES.idle.speed, waitOff = null, look = 0, turned = 0;
+let offset = 0, last = performance.now(), lastDraw = 0, paused = false, speed = STATES.idle.speed, look = 0, turned = 0, autoT = 0, stopT = 0;
 const LOOK = num('look', -0.9);                                      // 回頭角度（弧度，頭；脖子再加 45%）
 const SPEED_MUL = num('speed', 1.3) / 1.3;
 window.wpPause = (on) => { paused = !!on; };
@@ -508,38 +544,39 @@ document.addEventListener('visibilitychange', () => { last = performance.now(); 
 function step(dt, t) {
   if (!IDS && !FREEZE) applyAtmos(dt);
   AT.clock = FREEZE ? 0 : t;
-  let dOff = 0;
+  const st = stateName;
+  let dOff = 0, rem = Infinity;
   if (!FREEZE) {
-    if (stateName === 'waiting') {
-      if (waitOff === null) { const b = stopAhead(); waitOff = offset + b.d; AT.waitDoor = b.i; }
-      dOff = Math.max(0, Math.min(speed * dt, (waitOff - offset) * (1 - Math.exp(-dt / 1.1))));
-      speed = dt > 0 ? dOff / dt : speed;
-    } else {
-      waitOff = null;
-      speed += ((STATES[stateName] || STATES.idle).speed * SPEED_MUL - speed) * (1 - Math.exp(-dt / 1.5)); dOff = speed * dt;
-    }
+    if (st === 'thinking' || st === 'waiting' || st === 'absent') { pending = 0; holdDoors(); }
+    if (st === 'working') {                                          // 執行：每次工具呼叫開一扇；沒有事件時每 2.4 秒開一扇
+      autoT += dt; if (AT.clock - lastTool > 3.5 && autoT > 2.4) { pending++; autoT = 0; }
+    } else autoT = 0;
+    let g = gateDoor(); rem = g ? GATE_Z - g.position.z : Infinity;
+    stopT = rem < 0.4 ? stopT + dt : 0;
+    if (g && !g.userData.opened && pending === 0 && ((st === 'idle' && stopT > 2.5) || (st === 'finishing' && rem < 2.5))) pending = 1; // 待命：在門前站一下，門自己開（同一個世界）
+    pending = Math.min(pending, 4);
+    while (pending > 0 && openNext()) pending--;
+    g = gateDoor(); rem = g ? Math.max(0, GATE_Z - g.position.z) : Infinity; AT.gate = g ? doors.indexOf(g) : -1;
+    speed += ((STATES[st] || STATES.idle).speed * SPEED_MUL - speed) * (1 - Math.exp(-dt / 1.5));
+    dOff = Math.max(0, Math.min(speed * dt, rem * (1 - Math.exp(-dt / 1.0))));
+    if (dt > 0) speed = Math.min(speed, dOff / dt + 0.02);           // 被門擋住時真的慢下來，門開了再慢慢加速
     offset += dOff;
   }
-  const stopped = stateName === 'waiting' && waitOff !== null && waitOff - offset < 0.4;
-  AT.wait += ((stopped ? 1 : 0) - AT.wait) * (1 - Math.exp(-dt / 0.7));
-  if (stateName !== 'waiting' && AT.wait < 0.01) AT.waitDoor = -1;
-  layoutDoors(FREEZE ? 0 : offset);
+  const stopped = rem < 0.4;
+  AT.wait += ((st === 'waiting' && stopped ? 1 : 0) - AT.wait) * (1 - Math.exp(-dt / 0.7));
+  const gg = st === 'waiting' ? 0.85 : st === 'thinking' ? 0.35 + 0.3 * Math.sin(t * 2.2) : st === 'absent' ? 0.3 : 0; // 門縫光：思考時一明一暗
+  AT.gateGlow += (gg - AT.gateGlow) * (1 - Math.exp(-dt / 0.6));
+  layoutDoors(FREEZE ? 0 : offset, dt);
   if (mixer) {
     let da = FREEZE ? 0 : dOff / 1.3;
     if (stopped && act && da < dt * 0.4) da = Math.min(dt * 0.4, toPass(act.time % act.getClip().duration, act.getClip().duration)); // 收腳站好
     // 回頭：先撤掉上一格加的角度（動作停住時 mixer 不會重寫骨頭，直接加會一直累積）
     if (head) { head.rotation.y -= turned; if (neck) neck.rotation.y -= turned * 0.45; }
     mixer.update(da);
-    look += ((stopped && AT.wait > 0.6 ? 1 : 0) - look) * (1 - Math.exp(-dt / 0.9));
+    look += ((AT.wait > 0.6 ? 1 : 0) - look) * (1 - Math.exp(-dt / 0.9));
     turned = look * LOOK;
     if (head) { head.rotation.y += turned; if (neck) neck.rotation.y += turned * 0.45; }
   }
-  // 剛穿過一扇門：近景滑門從靠內滑回原位；櫻花枝微微擺動
-  if (NEAR.l && !FREEZE) {
-    const since = AT.clock - AT.lastPass, e = since < 0 ? 1 : Math.min(1, since / 1.8), sl = 0.12 * (1 - e) ** 3;
-    NEAR.l.position.x = NEAR.lx + sl; NEAR.r.position.x = NEAR.rx - sl;
-  }
-  if (NEAR.br && !FREEZE) { NEAR.br.rotation.z = Math.sin(t * 0.6) * 0.014 + Math.sin(t * 1.7 + 1) * 0.005; NEAR.br.position.y = NEAR.by + Math.sin(t * 0.9) * 0.012; }
   surfaces(t);
 }
 function frame(now) {
@@ -573,8 +610,8 @@ function surfaces(t) {                                              // 石板、
 layoutDoors(0); surfaces(0);
 requestAnimationFrame(frame);
 
-window.theme = { P, camera, scene, renderer, doors, STATES, PARAMS: STATES, CONFIG, AT, get mixer() { return mixer; }, get act() { return act; }, ready: Promise.all([ready, girlReady]),
-  applyState, setSessions: (a) => { sessions = a || []; }, requestState: () => stateName, setState: (n) => { stateName = n; },
+window.theme = { P, camera, scene, renderer, doors, ENV, STATES, PARAMS: STATES, CONFIG, AT, get mixer() { return mixer; }, get act() { return act; }, ready: Promise.all([ready, girlReady]),
+  applyState, setSessions: (a) => { sessions = a || []; }, tool: () => { pending++; lastTool = AT.clock; }, requestState: () => stateName, setState: (n) => { stateName = n; },
   draw: () => { step(0, performance.now() / 1000); renderer.render(scene, camera); },
   tick: (sec = 1, fps = 30) => { for (let i = 0; i < sec * fps; i++) { simT += 1 / fps; step(1 / fps, simT); } renderer.render(scene, camera); } }; // 測試：手動推進時間（分頁在背景時 rAF 不跑）
 let simT = 100;
