@@ -1,0 +1,11 @@
+{
+  "name": "夢境之門",
+  "name_en": "Dream Doors",
+  "order": 64,
+  "entry": "index.html",
+  "enabled": false,
+  "bundled": false,
+  "description": "雲海上的石板步道，一扇接一扇的門往天邊排下去，每扇門後是不同的世界；執行時她小跑起來、門整排彈開，等你時停在一扇關著的門前回頭看。",
+  "description_en": "A stone walkway above the clouds with door after door to the horizon, each opening onto a different world. She breaks into a jog while Claude works and stops at a closed door to look back when it needs you.",
+  "tags": ["奇幻", "風格實驗"]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "霓虹隧道",
+  "name_en": "Neon Tunnel",
+  "order": 65,
+  "entry": "index.html",
+  "enabled": false,
+  "bundled": false,
+  "description": "雨夜開在一條長隧道裡，冷白頂燈一盞盞從頭頂掠過，車燈照著乾燥的柏油；執行時加速，收尾時衝出隧道，雨又打上擋風玻璃，城市夜景在前方。",
+  "description_en": "A rainy night drive through an endless tunnel, cool white ceiling lamps sweeping overhead and headlights on dry asphalt. It speeds up while Claude works and bursts out into the rain and the city lights at the finish.",
+  "tags": ["夜景", "無限系列"],
+  "preview": "preview.jpg"
+}

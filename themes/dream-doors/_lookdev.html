@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>夢境之門 · 審材質</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #222; font: 13px/1.45 system-ui, "Microsoft JhengHei", sans-serif; color: #eee; }
+  canvas { display: block; }
+  #ui { position: fixed; top: 10px; left: 10px; width: 250px; background: rgba(20,20,24,.86); border-radius: 8px; padding: 10px 12px; max-height: calc(100vh - 20px); overflow: auto; }
+  #ui h1 { font-size: 14px; margin: 0 0 6px; }
+  #ui label { display: block; margin: 7px 0 2px; color: #aab; font-size: 12px; }
+  #ui select, #ui input[type=range] { width: 100%; }
+  #ui .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  #ui button { flex: 1 1 auto; background: #3a3a44; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px 6px; cursor: pointer; font-size: 12px; }
+  #ui button.on { background: #6a5acd; border-color: #8b7cf0; }
+  #info { position: fixed; right: 10px; bottom: 10px; width: 330px; background: rgba(20,20,24,.86); border-radius: 8px; padding: 10px 12px; font-size: 12px; }
+  #info table { border-collapse: collapse; width: 100%; }
+  #info td, #info th { border-bottom: 1px solid #333; padding: 2px 4px; text-align: left; }
+  .ok { color: #7fd17f; } .no { color: #ff8a80; } .mid { color: #ffd27f; }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/" } }</script>
+</head>
+<body>
+<div id="ui">
+  <h1>夢境之門 · 審材質</h1>
+  <label>看哪個通道</label>
+  <div class="row" id="ch"></div>
+  <label>光</label>
+  <select id="light">
+    <option value="theme">主題光（逆光太陽＋半球光）</option>
+    <option value="studio">攝影棚（中性環境光）</option>
+    <option value="w0">世界：燈塔海岸（全景當環境光）</option>
+    <option value="w1">世界：燈籠街</option>
+    <option value="w2">世界：月夜湖</option>
+    <option value="w3">世界：雪地</option>
+    <option value="w4">世界：麥田</option>
+  </select>
+  <label><input type="checkbox" id="rake"> 低角度側光（看凹凸）</label>
+  <label>側光高度角 <span id="elv">8°</span></label><input type="range" id="el" min="1" max="90" value="8">
+  <label>側光方位角 <span id="azv">60°</span></label><input type="range" id="az" min="0" max="360" value="60">
+  <label>鏡頭</label>
+  <div class="row" id="cams"></div>
+  <label>門框</label>
+  <select id="frame"><option value="0">木框</option><option value="1">鐵框</option></select>
+  <label>左／右門板</label>
+  <div class="row"><select id="ll" style="flex:1"></select><select id="lr" style="flex:1"></select></div>
+  <label>開門角度 <span id="opv">0°</span></label><input type="range" id="op" min="0" max="115" value="0">
+  <label><input type="checkbox" id="balls" checked> 灰球＋鉻球（基準）</label>
+  <label><input type="checkbox" id="spin"> 門轉盤</label>
+  <p style="color:#889;font-size:11px;margin:8px 0 0">拖曳轉視角、滾輪縮放、右鍵拖曳平移。</p>
+</div>
+<div id="info"></div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { TILE, walkMaterial, worldUV, LEAVES, leafMaterial } from './materials.js';
+
+// 跟主題同一套輸出：不做色調映射、sRGB 輸出
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 500);
+const pmrem = new THREE.PMREMGenerator(renderer);
+
+// ── 和主題一樣的尺寸 ──
+const OW = 3.25, PH = 3.2, BEAM = 0.36, FRAME_H = PH + BEAM;
+
+// ── 地板：主題的步道材質（石板 canvas 貼圖＋固定粗糙度），長 70 m 看重複 ──
+const walkTop = walkMaterial().mat;                                  // 主題的步道材質（不含主題裡的光斑、中線磨亮、大尺度色差）
+const walkSide = new THREE.MeshLambertMaterial({ color: '#9c9389' });
+const floorG = new THREE.BoxGeometry(4.3, 0.4, 70); floorG.translate(0, -0.2, -27);
+const floor = new THREE.Mesh(worldUV(floorG), [walkSide, walkSide, walkTop, walkSide, walkSide, walkSide]);
+floor.receiveShadow = true; floor.name = '地板'; scene.add(floor);
+
+// ── 門：門框 GLB＋兩片門板（主題同一份材質） ──
+const door = new THREE.Group(); scene.add(door);
+const texL = new THREE.TextureLoader();
+const leafMats = LEAVES.map((n) => leafMaterial(n, texL));
+const leafG = new THREE.BoxGeometry(OW / 2, PH - 0.05, 0.07);
+const leaves = [-1, 1].map((s) => {
+  const pv = new THREE.Group(); pv.position.set(s * OW / 2, 0, 0);
+  const m = new THREE.Mesh(leafG, leafMats[0]); m.position.set(-s * OW / 4, (PH - 0.05) / 2, 0); m.castShadow = m.receiveShadow = true; m.name = '門板';
+  pv.add(m); door.add(pv); pv.userData = { s, m }; return pv;
+});
+const frames = [];
+function fitFrame(root) {                                            // 同主題：量門柱內緣，開口縮到 OW、高度 FRAME_H
+  root.updateMatrixWorld(true);
+  const xs = [], v = new THREE.Vector3(), box = new THREE.Box3().setFromObject(root);
+  root.traverse((o) => { if (!o.isMesh) return; const pos = o.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld); if (Math.abs(v.y - box.max.y * 0.45) < box.max.y * 0.2) xs.push(v.x); } });
+  const inner = Math.min(...xs.filter((x) => x > 0)) - Math.max(...xs.filter((x) => x < 0));
+  root.scale.set(OW / inner, FRAME_H / (box.max.y - box.min.y), FRAME_H / (box.max.y - box.min.y));
+  const g = new THREE.Group(); g.add(root);
+  root.traverse((o) => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.name = '門框'; o.material.transparent = false; } });
+  return g;
+}
+const gl = new GLTFLoader();
+const framesReady = Promise.all(['frame_wood', 'frame_iron'].map((n) => gl.loadAsync(`models/${n}.glb`))).then((a) => {
+  a.forEach((g) => { const f = fitFrame(g.scene); f.visible = false; door.add(f); frames.push(f); });
+  frames[0].visible = true; rememberMaterials(); applyChannel(); info();
+});
+
+// ── 基準：18% 灰球、鉻球 ──
+const balls = new THREE.Group(); scene.add(balls);
+const gray = new THREE.Mesh(new THREE.SphereGeometry(0.25, 48, 24), new THREE.MeshStandardMaterial({ color: new THREE.Color().setScalar(0.18), roughness: 0.6 })); gray.position.set(2.7, 0.25, 1.4); gray.name = '灰球';
+const chrome = new THREE.Mesh(new THREE.SphereGeometry(0.25, 48, 24), new THREE.MeshStandardMaterial({ color: '#fff', metalness: 1, roughness: 0.02 })); chrome.position.set(2.7, 0.25, 0.7); chrome.name = '鉻球';
+gray.castShadow = chrome.castShadow = true; balls.add(gray, chrome);
+
+// ── 光 ──
+const hemi = new THREE.HemisphereLight('#e6def4', '#d6bea4', 1.75); scene.add(hemi);
+const sun = new THREE.DirectionalLight('#ffd49a', 2.8); scene.add(sun, sun.target);
+const SUN_DIR = new THREE.Vector3(0.12, 0.42, -1).normalize();        // 主題的太陽方向（走道盡頭偏右，逆光）
+sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.03;
+Object.assign(sun.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 1, far: 80 });
+const rake = new THREE.DirectionalLight('#ffffff', 3); rake.castShadow = true; rake.shadow.mapSize.set(2048, 2048); rake.shadow.bias = -0.0004;
+Object.assign(rake.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 1, far: 80 }); scene.add(rake, rake.target); rake.visible = false;
+
+function studioEnv() {                                               // 自製攝影棚：灰色房間＋三片柔光板
+  const s = new THREE.Scene(), room = new THREE.Mesh(new THREE.BoxGeometry(20, 12, 20), new THREE.MeshBasicMaterial({ color: '#5a5a5e', side: THREE.BackSide }));
+  room.position.y = 4; s.add(room);
+  for (const [x, y, z, w, h, k] of [[-6, 6, 4, 5, 4, 5], [7, 5, -2, 4, 6, 3], [0, 9.9, 0, 8, 8, 2.2]]) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(k, k, k), side: THREE.DoubleSide }));
+    p.position.set(x, y, z); p.lookAt(0, 1.5, 0); s.add(p);
+  }
+  return pmrem.fromScene(s, 0.02).texture;
+}
+const envs = { studio: studioEnv() };
+const WN = ['coast', 'lantern', 'moonlake', 'snow', 'wheat'];
+const worldTex = WN.map((n) => { const t = texL.load(`tex/world_${n}.webp`); t.colorSpace = THREE.SRGBColorSpace; t.mapping = THREE.EquirectangularReflectionMapping; return t; });
+
+function setLight() {
+  const v = $('light').value;
+  if (v === 'theme') {
+    scene.environment = null; scene.background = new THREE.Color('#d9cfc8');
+    hemi.visible = true; hemi.intensity = 1.75; sun.visible = true; sun.intensity = 2.8;
+    sun.target.position.set(0, 0, -2); sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 40);
+  } else {
+    const env = v === 'studio' ? envs.studio : worldTex[+v.slice(1)];
+    scene.environment = env; scene.background = v === 'studio' ? new THREE.Color('#5a5a5e') : env;
+    hemi.visible = true; hemi.intensity = 0.35;                       // 門板是 Lambert，不吃環境光：留一點半球光才看得到
+    sun.visible = false;
+  }
+  rake.visible = $('rake').checked; setRake();
+}
+function setRake() {
+  const el = THREE.MathUtils.degToRad(+$('el').value), az = THREE.MathUtils.degToRad(+$('az').value);
+  $('elv').textContent = $('el').value + '°'; $('azv').textContent = $('az').value + '°';
+  rake.target.position.set(0, 0.8, 0);
+  rake.position.set(Math.cos(az) * Math.cos(el) * 30, Math.sin(el) * 30 + 0.8, -Math.sin(az) * Math.cos(el) * 30);
+}
+
+// ── 通道檢視：每個網格記住原本的材質，切換時換成檢視用材質 ──
+const orig = new Map();
+function rememberMaterials() { scene.traverse((o) => { if (o.isMesh && !orig.has(o)) orig.set(o, o.material); }); }
+const checker = (() => {                                             // UV 格子：8×8，格子上寫編號，看拉伸與比例
+  const c = document.createElement('canvas'); c.width = c.height = 512; const g = c.getContext('2d');
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { g.fillStyle = (x + y) % 2 ? '#e8e8e8' : '#4a7bd0'; g.fillRect(x * 64, y * 64, 64, 64);
+    g.fillStyle = (x + y) % 2 ? '#333' : '#fff'; g.font = '20px sans-serif'; g.fillText(String.fromCharCode(65 + y) + (x + 1), x * 64 + 14, y * 64 + 40); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+})();
+const MISSING = new THREE.MeshBasicMaterial({ color: '#ff2fa0' });     // 這個材質沒有這個通道（洋紅色）
+const CH = { full: '成品', albedo: '只看底色', rough: '粗糙度', normal: '法線', clay: '灰模', uv: 'UV 格子', light: '只看光' };
+let channel = 'full';
+function view(m) {
+  switch (channel) {
+    case 'full': return m;
+    case 'albedo': return new THREE.MeshBasicMaterial({ map: m.map || null, color: m.color || new THREE.Color('#fff') });
+    case 'rough':
+      if (m.roughnessMap) return new THREE.MeshBasicMaterial({ map: m.roughnessMap, color: new THREE.Color(0, 1, 0) }); // glTF：粗糙度在綠色通道
+      if (m.isMeshStandardMaterial) return new THREE.MeshBasicMaterial({ color: new THREE.Color().setScalar(m.roughness) });
+      return MISSING;
+    case 'normal': return new THREE.MeshNormalMaterial({ normalMap: m.normalMap || null });
+    case 'clay': return new THREE.MeshStandardMaterial({ color: new THREE.Color().setScalar(0.5), roughness: 0.6, normalMap: m.normalMap || null });
+    case 'uv': return new THREE.MeshBasicMaterial({ map: checker });
+    case 'light': return new THREE.MeshStandardMaterial({ color: '#fff', roughness: m.roughness ?? 1, roughnessMap: m.roughnessMap || null, normalMap: m.normalMap || null, metalness: 0 });
+  }
+}
+function applyChannel() {
+  for (const [o, m] of orig) o.material = Array.isArray(m) ? m.map(view) : view(m);
+  document.querySelectorAll('#ch button').forEach((b) => b.classList.toggle('on', b.dataset.k === channel));
+}
+
+// ── 每個材質有哪些貼圖、貼圖密度 ──
+function info() {
+  const rows = [];
+  const fm = []; frames.forEach((f) => f.traverse((o) => { if (o.isMesh) fm.push(o.material); }));
+  const yes = (b, t = '有') => b ? `<span class="ok">${t}</span>` : '<span class="no">沒有</span>';
+  rows.push(['地板頂面', 'Standard', yes(true), yes(!!walkTop.roughnessMap), yes(!!walkTop.normalMap), `${(1024 / TILE).toFixed(0)} px/m`]);
+  const lf = leafMats[0][4]; rows.push(['門板正面', 'Standard', yes(true), yes(!!lf.roughnessMap, '有（由圖算）'), yes(!!lf.normalMap, '有（由圖算）'), `${(512 / (OW / 2)).toFixed(0)} px/m`]);
+  fm.slice(0, 2).forEach((m, i) => rows.push([i ? '鐵框' : '木框', 'Standard', yes(!!m.map), yes(!!m.roughnessMap), yes(!!m.normalMap), m.map && m.map.image ? `${m.map.image.width}px` : '']));
+  $('info').innerHTML = `<b>貼圖盤點</b><table><tr><th>材質</th><th>類型</th><th>底色</th><th>粗糙度</th><th>法線</th><th>密度</th></tr>${rows.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
+  <p style="margin:6px 0 0;color:#889">洋紅色＝這個材質沒有這個通道。粗糙度：黑＝光滑、白＝粗。</p>`;
+}
+
+// ── 鏡頭：簡易軌道（左鍵轉、右鍵平移、滾輪縮放）──
+const orbit = { target: new THREE.Vector3(0, 1.4, -1), r: 7, th: 0.1, ph: 1.4 };
+const CAMS = {
+  主題: () => ({ pos: [0.64, 1.52, 6.05], tgt: [0.05, 1.5, 0] }),
+  近看門板: () => ({ pos: [0.55, 1.45, 1.35], tgt: [0.35, 1.35, 0] }),
+  低角度地板: () => ({ pos: [0.3, 0.28, 3.2], tgt: [0, 0, -3] }),
+  遠看重複: () => ({ pos: [0, 16, 14], tgt: [0, 0, -22] }),
+  門框特寫: () => ({ pos: [2.6, 1.8, 1.4], tgt: [1.75, 1.6, 0] }),
+};
+function setCam(k) {
+  const c = CAMS[k](); orbit.target.set(...c.tgt);
+  const d = new THREE.Vector3(...c.pos).sub(orbit.target); orbit.r = d.length(); orbit.ph = Math.acos(d.y / orbit.r); orbit.th = Math.atan2(d.x, d.z);
+  document.querySelectorAll('#cams button').forEach((b) => b.classList.toggle('on', b.textContent === k));
+}
+function placeCam() {
+  camera.position.set(orbit.target.x + orbit.r * Math.sin(orbit.ph) * Math.sin(orbit.th), orbit.target.y + orbit.r * Math.cos(orbit.ph), orbit.target.z + orbit.r * Math.sin(orbit.ph) * Math.cos(orbit.th));
+  camera.lookAt(orbit.target);
+}
+let drag = null;
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+renderer.domElement.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, b: e.button }; });
+addEventListener('pointerup', () => { drag = null; });
+addEventListener('pointermove', (e) => {
+  if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+  if (drag.b === 2) { const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0), up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1), k = orbit.r * 0.0015;
+    orbit.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k); }
+  else { orbit.th -= dx * 0.005; orbit.ph = THREE.MathUtils.clamp(orbit.ph - dy * 0.005, 0.05, Math.PI - 0.05); }
+});
+renderer.domElement.addEventListener('wheel', (e) => { orbit.r = THREE.MathUtils.clamp(orbit.r * Math.exp(e.deltaY * 0.001), 0.3, 120); e.preventDefault(); }, { passive: false });
+
+// ── 介面 ──
+function $(id) { return document.getElementById(id); }
+for (const [k, t] of Object.entries(CH)) { const b = document.createElement('button'); b.textContent = t; b.dataset.k = k; b.onclick = () => { channel = k; applyChannel(); }; $('ch').appendChild(b); }
+for (const k of Object.keys(CAMS)) { const b = document.createElement('button'); b.textContent = k; b.onclick = () => setCam(k); $('cams').appendChild(b); }
+const LN = { shoji: '格子窗', plank: '木板', vault: '保險庫', stained: '彩繪玻璃', painted: '彩繪木', red: '紅門' };
+for (const sel of ['ll', 'lr']) LEAVES.forEach((n, i) => $(sel).add(new Option(LN[n], i)));
+$('lr').value = 1;
+function setDoor() {
+  frames.forEach((f, i) => { f.visible = i === +$('frame').value; });
+  leaves[0].userData.m.material = leafMats[+$('ll').value]; leaves[1].userData.m.material = leafMats[+$('lr').value];
+  orig.set(leaves[0].userData.m, leaves[0].userData.m.material); orig.set(leaves[1].userData.m, leaves[1].userData.m.material); applyChannel();
+  $('opv').textContent = $('op').value + '°';
+  for (const p of leaves) p.rotation.y = -p.userData.s * THREE.MathUtils.degToRad(+$('op').value);
+}
+['frame', 'll', 'lr', 'op'].forEach((id) => $(id).addEventListener('input', setDoor));
+['light', 'rake'].forEach((id) => $(id).addEventListener('input', setLight));
+['el', 'az'].forEach((id) => $(id).addEventListener('input', setRake));
+$('balls').addEventListener('input', () => { balls.visible = $('balls').checked; });
+
+function resize() { renderer.setSize(innerWidth, innerHeight, false); renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+rememberMaterials(); setDoor(); setLight(); setCam('主題'); info();
+let last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = (now - last) / 1000; last = now;
+  if ($('spin').checked) door.rotation.y += dt * 0.4;
+  placeCam(); renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+// 測試介面：讓腳本切換、截圖
+window.lookdev = { ready: framesReady, set: (o = {}) => {
+  if (o.channel) { channel = o.channel; applyChannel(); }
+  for (const k of ['light', 'frame', 'll', 'lr', 'op', 'el', 'az']) if (o[k] !== undefined) $(k).value = o[k];
+  if (o.rake !== undefined) $('rake').checked = o.rake;
+  setDoor(); setLight(); if (o.cam) setCam(o.cam); placeCam(); renderer.render(scene, camera);
+} };
+</script>
+</body>
+</html>
