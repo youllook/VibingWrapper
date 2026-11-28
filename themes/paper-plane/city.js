@@ -231,6 +231,8 @@ export class SegmentSlot {
       this.mesh.setColorAt(k, colorOf(b, c));
     }
     this.mesh.count = n;
+    // 空橋底板（sy 0.6）：全域距離 D＝段號×段長−段內 z（世界 z＝s−D），給紙飛機挑橋俯衝
+    this.bridges = boxes.filter((b) => b.kind === 'bridge' && b.sy === 0.6).map((b) => ({ D: i * this.len - b.z, y: b.y }));
     this.mesh.instanceMatrix.needsUpdate = true;
     this.mesh.instanceColor.needsUpdate = true;
   }

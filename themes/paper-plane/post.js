@@ -1,7 +1,7 @@
 // 紙飛機穿城 · 動態模糊
 // 鏡頭固定、整座城市等速往 +Z 流，所以每個像素的運動向量可以精確算：
 // 由深度還原世界座標 → 沿 +Z 平移（速度 × 快門）→ 再投影回螢幕 → 沿向量取 10 個樣本平均。
-// 紙飛機不在這一關：它畫在模糊之後（見 main.js）。
+// 紙飛機不在這一關：它畫在模糊之後（見 main.js），靠這一關寫回的深度跟城市互相遮擋。
 import * as THREE from 'three';
 
 export function makeMotionBlur(renderer, camera) {
@@ -37,9 +37,10 @@ export function makeMotionBlur(renderer, camera) {
           }
         }
         gl_FragColor = col;
+        gl_FragDepth = z;                        // 場景深度寫回螢幕：之後畫的紙飛機會被空橋、大樓擋住
         #include <colorspace_fragment>
       }`,
-    depthTest: false, depthWrite: false,
+    depthTest: true, depthWrite: true, depthFunc: THREE.AlwaysDepth,
   });
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat); quad.frustumCulled = false;
   const pscene = new THREE.Scene(); pscene.add(quad);

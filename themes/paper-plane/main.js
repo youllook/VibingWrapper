@@ -86,6 +86,11 @@ planeScene.add(plane);
 camera.updateMatrixWorld(true);
 const planeAt = (u, v, d) => new THREE.Vector3(u * 2 - 1, 1 - v * 2, 0.5).unproject(camera).sub(camera.position).normalize().multiplyScalar(d).add(camera.position);
 const PLANE_POS = planeAt(PLANE.u, PLANE.v, PLANE.d);
+const CAM0 = camera.position.clone(), PDIR = PLANE_POS.clone().sub(CAM0).normalize();   // 飛機沿這條視線前後漂
+// 影子替身：同一個形狀放進城市場景，只投影、不畫顏色也不寫深度
+const planeShadow = new THREE.Mesh(plane.geometry, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
+planeShadow.castShadow = true; planeShadow.scale.setScalar(PLANE.s * 1.25);   // 軟影會吃掉邊，放大一點才讀得到 planeShadow.rotation.order = 'YXZ';
+scene.add(planeShadow);
 
 const mb = num('mb', 1) > 0 ? makeMotionBlur(renderer, camera) : null;
 
@@ -135,7 +140,10 @@ const COLS = ['sunC', 'hazeC', 'topC'];
 const cur = { ...STATES.idle }; COLS.forEach((k) => { cur[k] = new THREE.Color(STATES.idle[k]); });
 const _c = new THREE.Color(), _hd = new THREE.Color('#f5f5f9'), _hn = new THREE.Color('#46536f'), _gd = new THREE.Color('#dcdbe2'), _gn = new THREE.Color('#2b2e36');
 let night = 0, circleT = 0, circleW = 0, ph = 0;
-const camLag = { x: 0, y: 0, roll: 0, yaw: 0 };
+const camLag = { x: 0, y: 0, roll: 0, yaw: 0, pitch: 0 };
+// 上下穿梭的間隔（秒）：[最短, 最長]；等你不俯衝
+const DIVE_EVERY = { idle: [12, 20], thinking: [26, 40], working: [6, 10], finishing: [14, 20], waiting: [1e9, 1e9], absent: [18, 30] };
+let clk = 0, dive = null, nextDive = 5, rollT = -1, rollNext = 22, lastState = null, lastY = null, vyS = 0;
 function applyAtmos(dt) {
   const tgt = STATES[stateName] || STATES.idle;
   const h = clockHours(), clockNight = (h >= 19 || h < 6) ? 1 : h >= 18 ? h - 18 : h < 7 ? 7 - h : 0;
@@ -177,40 +185,79 @@ function step(now, dt) {
   if (!frozen) s += cur.speed * dt;
   TRAVEL.value = s;
   near.update(s); far.update(s);
-  // ── 飛行：S 形穿梭＋升降（兩組正弦疊加，不重複感），鏡頭延遲跟拍＋側傾 ──
+  // ── 飛行：S 形穿梭＋上下穿梭＋在畫面裡前後漂、轉身、偶爾翻滾；鏡頭延遲跟拍 ──
   ph += dt * cur.ag;
   if (Q.has('t') && frozen) ph = t * cur.ag;
+  clk += dt;
   const FLY = num('fly', 1), A = cur.amp * FLY, B = cur.alt * FLY, ag = cur.ag;   // ?fly=0：靜止構圖（比對目標圖用）
   const px = A * (0.62 * Math.sin(0.23 * ph) + 0.38 * Math.sin(0.51 * ph + 1.1));
   const vx = A * ag * (0.62 * 0.23 * Math.cos(0.23 * ph) + 0.38 * 0.51 * Math.cos(0.51 * ph + 1.1));
   const ax = -A * ag * ag * (0.62 * 0.0529 * Math.sin(0.23 * ph) + 0.38 * 0.2601 * Math.sin(0.51 * ph + 1.1));
   const py = B * (0.6 * Math.sin(0.19 * ph + 2.0) + 0.4 * Math.sin(0.43 * ph)) + cur.dip;
-  const vy = B * ag * (0.6 * 0.19 * Math.cos(0.19 * ph + 2.0) + 0.4 * 0.43 * Math.cos(0.43 * ph));
   const fwd = Math.max(cur.speed, 5);
+  if (stateName !== lastState) { if (stateName === 'finishing') rollNext = clk + 1.2; nextDive = Math.min(nextDive, clk + 3); lastState = stateName; }
+  // 上下穿梭：時候到了就挑前方一座空橋，算好時間俯衝 —— 高的橋鑽橋下、低的橋擦過橋面，再拉回巡航高度
+  const DW = 2.6, DH = 0.5, DD = 7;                           // 下降秒數、谷底停留、俯衝時往前拉開的距離
+  if (!dive && FLY > 0 && clk > nextDive) {
+    const v = Math.max(cur.speed, 2), zp = CAM0.z + PDIR.z * (PLANE.d + DD);
+    let best = null;
+    for (const sl of near.slots) for (const b of sl.bridges || []) {
+      const T = (b.D + zp - s) / v;
+      if (T > DW + DH + 0.3 && T < DW + 6 && (!best || T < best.T)) best = { T, y: b.y };
+    }
+    if (best) dive = { tp: clk + best.T, yd: best.y >= 33 ? best.y - 4.2 : Math.max(29, best.y + 7.5) };
+    else nextDive = clk + 1;
+  }
+  let env = 0;
+  if (dive) {
+    const u = clk - dive.tp, sm = (x) => { x = Math.min(Math.max(x, 0), 1); return x * x * (3 - 2 * x); };
+    env = u < -DH ? sm((u + DH + DW) / DW) : u <= DH ? 1 : 1 - sm((u - DH) / (DW * 1.3));
+    if (u > DH + DW * 1.3) { dive = null; const e = DIVE_EVERY[stateName] || DIVE_EVERY.idle; nextDive = clk + e[0] + Math.random() * (e[1] - e[0]); }
+  }
+  // 在畫面裡前後漂：慢慢往前拉開、被鏡頭追上；俯衝時拉得更遠
+  const d = PLANE.d + 3.5 * Math.sin(0.13 * ph + 0.4) * FLY + DD * env;
   // 等你：原地繞小圈（世界座標）
   circleT += dt * 0.9 * circleW;
   const ox = Math.cos(circleT) * 5 * circleW, oy = Math.sin(circleT) * 2.2 * circleW;
   const bob = 0.25 * Math.sin(t * 1.3);
-  plane.position.set(PLANE_POS.x + px + ox, PLANE_POS.y + py + oy + bob, PLANE_POS.z);
+  const bx = CAM0.x + PDIR.x * d, by = CAM0.y + PDIR.y * d, bz = CAM0.z + PDIR.z * d;
+  const cruiseY = by + py + oy + bob;
+  const x = THREE.MathUtils.lerp(bx + px + ox, -4 + px * 0.3, env * 0.7), y = THREE.MathUtils.lerp(cruiseY, dive ? dive.yd : cruiseY, env);
+  vyS += ((dt > 0 && lastY !== null ? (y - lastY) / dt : 0) - vyS) * (dt > 0 ? 1 - Math.exp(-dt / 0.25) : 1); lastY = y;
+  plane.position.set(x, y, bz);
+  // 翻滾：待命時偶爾一次、收尾時一定來一次
+  if (rollT < 0 && clk > rollNext && !dive && FLY > 0 && circleW < 0.5) rollT = 0;
+  let rollAng = 0;
+  if (rollT >= 0) {
+    rollT += dt; const k = Math.min(rollT / 1.5, 1);
+    rollAng = 360 * (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
+    if (k >= 1) { rollT = -1; rollNext = clk + 28 + Math.random() * 20; rollAng = 0; }
+  }
   const heading = THREE.MathUtils.radToDeg(Math.atan2(vx, fwd)) - Math.sin(circleT) * 30 * circleW;
   const turn = THREE.MathUtils.clamp(ax * 40, -40, 40) + Math.cos(circleT) * 30 * circleW;   // 轉彎往內側傾
-  const bank = PLANE.bank + turn + 2 * Math.sin(t * 0.9);
-  const pitch = PLANE.pitch + THREE.MathUtils.radToDeg(Math.atan2(vy, fwd)) * 1.4 + 3 * Math.cos(t * 1.3);
-  plane.rotation.set(THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(-PLANE.yaw - heading), THREE.MathUtils.degToRad(-bank));
-  // 鏡頭：落後約 1 秒跟上飛機的橫移與升降，跟著轉彎側傾一點、偏頭一點
-  const kc = dt > 0 ? 1 - Math.exp(-dt / 1.1) : 1;
-  camLag.x += ((px + ox) * 0.75 - camLag.x) * kc;
-  camLag.y += ((py + oy) * 0.6 - camLag.y) * kc;
+  const show = 16 * Math.sin(0.11 * ph + 0.7) * FLY;                                         // 慢慢轉身，露出機腹、龍骨、另一邊翼面
+  const bank = PLANE.bank + turn + 2 * Math.sin(t * 0.9) + rollAng;
+  const pitch = PLANE.pitch + THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(Math.atan2(vyS, fwd)) * 1.4, -50, 40) + 3 * Math.cos(t * 1.3);
+  plane.rotation.set(THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(-PLANE.yaw - heading + show), THREE.MathUtils.degToRad(-bank));
+  planeShadow.position.copy(plane.position); planeShadow.rotation.copy(plane.rotation);
+  // 鏡頭：落後約 1 秒跟上飛機的橫移與升降（俯衝時跟得多、快一點），再低頭把飛機留在畫面裡
+  const kc = dt > 0 ? 1 - Math.exp(-dt / 1.1) : 1, ky = dt > 0 ? 1 - Math.exp(-dt / 0.8) : 1;
+  const dy = y - (CAM0.y + PDIR.y * PLANE.d);
+  camLag.x += ((x - (CAM0.x + PDIR.x * PLANE.d)) * 0.75 - camLag.x) * kc;
+  camLag.y += (dy * THREE.MathUtils.lerp(0.6, 0.78, env) - camLag.y) * ky;
   camLag.roll += (turn * 0.28 - camLag.roll) * kc;
   camLag.yaw += (heading * 0.3 - camLag.yaw) * kc;
-  camera.position.set(CAM.x + camLag.x, CAM.y + camLag.y + 0.15 * Math.sin(t * 0.7), 0);
-  camera.rotation.set(THREE.MathUtils.degToRad(CAM.pitch), THREE.MathUtils.degToRad(-CAM.yaw - camLag.yaw), THREE.MathUtils.degToRad(CAM.roll - camLag.roll));
+  const camY = CAM.y + camLag.y + 0.15 * Math.sin(t * 0.7);
+  const aim = Math.atan2(y - camY, Math.hypot(x - CAM.x - camLag.x, bz)) - Math.atan2(PDIR.y, Math.hypot(PDIR.x, PDIR.z));
+  camLag.pitch += (aim * 0.8 - camLag.pitch) * ky;
+  camera.position.set(CAM.x + camLag.x, camY, 0);
+  camera.rotation.set(THREE.MathUtils.degToRad(CAM.pitch) + camLag.pitch, THREE.MathUtils.degToRad(-CAM.yaw - camLag.yaw), THREE.MathUtils.degToRad(CAM.roll - camLag.roll));
   draw();
 }
 function draw() {
   renderer.autoClear = true;
   if (mb) mb.render(scene, cur.speed * cur.mb); else renderer.render(scene, camera);
-  renderer.autoClear = false; renderer.clearDepth();
+  renderer.autoClear = false;                // 不清深度：模糊那一關已把城市深度寫回，飛機會被空橋擋住
   renderer.render(planeScene, camera);
   renderer.autoClear = true;
 }
@@ -221,6 +268,9 @@ window.theme = {
   draw, resizePost: () => mb && mb.resize(), cityReady: Promise.resolve(),
   requestState: () => stateName, setState: (n) => { stateName = n; },
   setSessions: (a) => { sessions = a || []; },
+  // 測試：立刻找橋俯衝／立刻翻滾；flight 看目前飛行狀態
+  dive: () => { nextDive = clk; }, roll: () => { rollNext = clk; },
+  get flight() { return { clk, dive, nextDive, rollT, y: plane.position.y, d: plane.position.distanceTo(camera.position) }; },
   shot: async (name = 'shot.png') => {
     renderer.setPixelRatio(1); renderer.setSize(1920, 1080, false); camera.aspect = 16 / 9; camera.updateProjectionMatrix(); if (mb) mb.resize();
     step(performance.now(), 0);
