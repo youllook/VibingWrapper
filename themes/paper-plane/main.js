@@ -11,15 +11,15 @@ const Q = new URLSearchParams(location.search);
 const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
 
 const CAM = {
-  yaw: num('yaw', -20), pitch: num('pitch', -9), roll: num('roll', 0), fov: num('fov', 60),
-  x: num('cx', -4), y: num('cy', 60),
+  yaw: num('yaw', -20), pitch: num('pitch', -12), roll: num('roll', 0), fov: num('fov', 60),
+  x: num('cx', 2), y: num('cy', 74),
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: Q.has('shot') });
 renderer.setPixelRatio(num('pr', 0.6));                       // 規格：半解析度
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = num('shadow', 1) > 0;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;            // PCF 才吃 radius（軟邊）
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -34,7 +34,7 @@ function paintSky(top, horizon) {
   g.fillStyle = gr; g.fillRect(0, 0, 4, 256); skyTex.needsUpdate = true;
 }
 scene.background = skyTex;
-scene.fog = new THREE.FogExp2('#f1efed', 0.0016);
+scene.fog = new THREE.FogExp2('#f3f2f5', 0.0016);
 
 const camera = new THREE.PerspectiveCamera(CAM.fov, 16 / 9, 0.5, 4000);
 camera.rotation.order = 'YXZ';
@@ -43,15 +43,16 @@ camera.rotation.set(THREE.MathUtils.degToRad(CAM.pitch), THREE.MathUtils.degToRa
 scene.add(camera);
 
 // 光：午後側光從右上後方來（街上投出長影）＋天光
-const hemi = new THREE.HemisphereLight('#f4f6fa', '#d6cdc2', 1.1);
+const hemi = new THREE.HemisphereLight('#f5f5f9', '#dcdbe2', num('hemi', 0.9));
 const sun = new THREE.DirectionalLight('#fff3e4', 2.0);
-const SUN_DIR = new THREE.Vector3(num('sx', 0.62), num('sy', 0.62), num('sz', 0.48)).normalize();
+const SUN_DIR = new THREE.Vector3(num('sx', 0.45), num('sy', 0.62), num('sz', 0.65)).normalize();
 sun.target.position.set(0, 0, -160);
 sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 700);
 sun.castShadow = true;
 Object.assign(sun.shadow.camera, { left: -230, right: 230, top: 230, bottom: -230, near: 100, far: 1500 });
 sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.6; sun.shadow.radius = 3;
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.6; sun.shadow.radius = 5; sun.shadow.blurSamples = 12;
+sun.shadow.intensity = num('shi', 0.72);                      // 目標圖的影子是淺灰、軟的
 scene.add(hemi, sun, sun.target);
 const planeHemi = hemi.clone(), planeSun = new THREE.DirectionalLight('#fff3e4', 2.0);
 planeSun.position.copy(SUN_DIR).multiplyScalar(100);
@@ -62,12 +63,13 @@ const cityMat = makeCityMaterial();
 const near = new Strip(scene, cityMat, { cap: 1600, build: buildSegment, len: SEG, behind: 70, ahead: 1300 });
 const far = new Strip(scene, cityMat, { cap: 200, build: buildFarSegment, len: FAR_SEG, behind: 300, ahead: 2400 });
 far.slots.forEach((sl) => { sl.mesh.castShadow = false; });
-const STYLE = { body: null, roof: 0.95, trim: 0.95, bridge: 0.95, rail: 0.95, far: 0.1 };
+// g：本體＝(樣式+0.5)/4（小數 .5）；配件＝0.55（樣式 2 素面、小數 .2，shader 靠小數分辨）；遠景＝細溝本體
+const STYLE = { roof: 0.55, trim: 0.55, bridge: 0.55, rail: 0.55, far: 0.875 };
 const colorOf = (b, c) => {
   // r＝紙色深淺、g＝立面樣式（0 溝槽／1 窗帶／2 格子／3 素面）、b＝種子；同一棟樓同一組參數
   const h = Math.abs(Math.sin(b.x * 12.9898 + b.z * 78.233) * 43758.5453) % 1;
-  const st = STYLE[b.kind] ?? (h < 0.35 ? 0.05 : h < 0.5 ? 0.3 : h < 0.6 ? 0.55 : 0.8);
-  return c.setRGB(0.5 + 0.5 * ((h * 7.3) % 1), st, (h * 13.1) % 1);
+  const st = b.kind === 'body' ? (b.style + 0.5) / 4 : STYLE[b.kind];
+  return c.setRGB(0.5 + 0.5 * ((h * 7.3) % 1), st, b.seed ?? (h * 13.1) % 1);
 };
 near.colorOf = colorOf; far.colorOf = colorOf;
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 6000).rotateX(-Math.PI / 2), makeGroundMaterial(STREET));
@@ -75,7 +77,7 @@ ground.position.z = -2500; ground.receiveShadow = true; scene.add(ground);
 
 // 紙飛機：位置用畫面座標（0–1）＋離鏡頭距離
 const plane = makePaperPlane(makePlaneMaterial());
-const PLANE = { u: num('pu', 0.40), v: num('pv', 0.60), d: num('pd', 15), s: num('ps', 3.3), yaw: num('pyaw', 35), bank: num('pbank', 10), pitch: num('ppitch', 18) };
+const PLANE = { u: num('pu', 0.40), v: num('pv', 0.60), d: num('pd', 15), s: num('ps', 3.9), yaw: num('pyaw', 35), bank: num('pbank', 10), pitch: num('ppitch', 18) };
 plane.scale.setScalar(PLANE.s);
 plane.rotation.order = 'YXZ';
 planeScene.add(plane);
@@ -103,11 +105,11 @@ addEventListener('resize', resize); resize();
 // speed m/s、fog 霧密度、sun 日光、sunC 日光色、hazeC 霧／地平線色、topC 天頂色、mb 快門（秒）
 // 飛行：amp 左右穿梭幅度 m、alt 升降幅度 m、ag 靈活度（節奏快慢）、dip 高度偏移 m、circle 盤旋（等你）
 const STATES = {
-  idle:      { speed: 14, fog: 0.0016, sun: 2.9, sunC: '#fff3e4', hazeC: '#f1efed', topC: '#e6e9ee', mb: 0.03, amp: 5, alt: 3,   ag: 1.0, dip: 0,    circle: 0 },
-  thinking:  { speed: 7,  fog: 0.0042, sun: 2.2, sunC: '#ffebd2', hazeC: '#f2ece3', topC: '#ece8e2', mb: 0.02, amp: 3, alt: 2,   ag: 0.6, dip: 1,    circle: 0 },
-  working:   { speed: 38, fog: 0.0013, sun: 3.0, sunC: '#fff6ea', hazeC: '#eff0f0', topC: '#e2e7ee', mb: 0.05, amp: 8, alt: 4.5, ag: 1.8, dip: -3,   circle: 0 },
+  idle:      { speed: 14, fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f3f2f5', topC: '#e8e8ee', mb: 0.03, amp: 5, alt: 3,   ag: 1.0, dip: 0,    circle: 0 },
+  thinking:  { speed: 7,  fog: 0.0042, sun: 2.1, sunC: '#ffebd2', hazeC: '#f2ece3', topC: '#ece8e2', mb: 0.02, amp: 3, alt: 2,   ag: 0.6, dip: 1,    circle: 0 },
+  working:   { speed: 38, fog: 0.0013, sun: 2.9, sunC: '#fff6ea', hazeC: '#eff0f0', topC: '#e2e7ee', mb: 0.05, amp: 8, alt: 4.5, ag: 1.8, dip: -3,   circle: 0 },
   finishing: { speed: 10, fog: 0.0011, sun: 2.8, sunC: '#ffe6c8', hazeC: '#f4ece2', topC: '#e9e6e6', mb: 0.025, amp: 4, alt: 3,   ag: 0.9, dip: 4,    circle: 0 },
-  waiting:   { speed: 2,  fog: 0.0016, sun: 2.9, sunC: '#fff3e4', hazeC: '#f1efed', topC: '#e6e9ee', mb: 0.0, amp: 0, alt: 1,   ag: 0.5, dip: 0,    circle: 1 },
+  waiting:   { speed: 2,  fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f3f2f5', topC: '#e8e8ee', mb: 0.0, amp: 0, alt: 1,   ag: 0.5, dip: 0,    circle: 1 },
   absent:    { speed: 5,  fog: 0.0020, sun: 0.5, sunC: '#9fb3d8', hazeC: '#2a3142', topC: '#1c2231', mb: 0.05, amp: 3, alt: 2,   ag: 0.6, dip: 0,    circle: 0 },
 };
 const SKY2STATE = { clear: 'idle', overcast: 'thinking', storm: 'working', clearing: 'finishing', waiting: 'waiting' };
@@ -129,7 +131,7 @@ setInterval(poll, 1000); poll();
 const NIGHT_ST = { sun: 0.45, sunC: '#9fb3d8', hazeC: '#2a3142', topC: '#161b28' };
 const COLS = ['sunC', 'hazeC', 'topC'];
 const cur = { ...STATES.idle }; COLS.forEach((k) => { cur[k] = new THREE.Color(STATES.idle[k]); });
-const _c = new THREE.Color(), _hd = new THREE.Color('#f4f6fa'), _hn = new THREE.Color('#46536f'), _gd = new THREE.Color('#cfc6bb'), _gn = new THREE.Color('#2b2e36');
+const _c = new THREE.Color(), _hd = new THREE.Color('#f5f5f9'), _hn = new THREE.Color('#46536f'), _gd = new THREE.Color('#dcdbe2'), _gn = new THREE.Color('#2b2e36');
 let night = 0, circleT = 0, circleW = 0, ph = 0;
 const camLag = { x: 0, y: 0, roll: 0, yaw: 0 };
 function applyAtmos(dt) {
@@ -142,10 +144,10 @@ function applyAtmos(dt) {
   night += (nt - night) * k;
   circleW += (tgt.circle - circleW) * k;
   NIGHT.value = night;
-  sun.intensity = planeSun.intensity = THREE.MathUtils.lerp(cur.sun, NIGHT_ST.sun, night);
+  sun.intensity = planeSun.intensity = THREE.MathUtils.lerp(cur.sun * num('sunk', 1), NIGHT_ST.sun, night);
   sun.color.copy(cur.sunC); planeSun.color.copy(cur.sunC);
   hemi.color.copy(_hd).lerp(_hn, night); hemi.groundColor.copy(_gd).lerp(_gn, night);
-  hemi.intensity = THREE.MathUtils.lerp(1.1, 0.55, night);
+  hemi.intensity = THREE.MathUtils.lerp(num('hemi', 0.9), 0.55, night);
   planeHemi.color.copy(hemi.color); planeHemi.groundColor.copy(hemi.groundColor); planeHemi.intensity = hemi.intensity;
   scene.fog.color.copy(cur.hazeC); scene.fog.density = cur.fog;
   paintSky(cur.topC, cur.hazeC);
@@ -176,7 +178,7 @@ function step(now, dt) {
   // ── 飛行：S 形穿梭＋升降（兩組正弦疊加，不重複感），鏡頭延遲跟拍＋側傾 ──
   ph += dt * cur.ag;
   if (Q.has('t') && frozen) ph = t * cur.ag;
-  const A = cur.amp, B = cur.alt, ag = cur.ag;
+  const FLY = num('fly', 1), A = cur.amp * FLY, B = cur.alt * FLY, ag = cur.ag;   // ?fly=0：靜止構圖（比對目標圖用）
   const px = A * (0.62 * Math.sin(0.23 * ph) + 0.38 * Math.sin(0.51 * ph + 1.1));
   const vx = A * ag * (0.62 * 0.23 * Math.cos(0.23 * ph) + 0.38 * 0.51 * Math.cos(0.51 * ph + 1.1));
   const ax = -A * ag * ag * (0.62 * 0.0529 * Math.sin(0.23 * ph) + 0.38 * 0.2601 * Math.sin(0.51 * ph + 1.1));

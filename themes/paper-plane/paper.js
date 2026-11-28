@@ -14,7 +14,7 @@ const NOISE = /* glsl */`
                mix(mix(h13(i + vec3(0,0,1)), h13(i + vec3(1,0,1)), f.x), mix(h13(i + vec3(0,1,1)), h13(i + vec3(1,1,1)), f.x), f.y), f.z);
   }
   // 紙纖維：細長的纖維（一個方向拉長的噪聲）＋細顆粒
-  float fiber(vec3 p){ return (vnoise(p * vec3(2.2, 9., 2.2)) - .5) * .05 + (vnoise(p * 23.) - .5) * .035 + (vnoise(p * .35) - .5) * .04; }
+  float fiber(vec3 p){ return (vnoise(p * 4.) - .5) * .022 + (vnoise(p * 23.) - .5) * .03 + (vnoise(p * .3) - .5) * .02; }
 `;
 
 export function makeCityMaterial() {
@@ -47,32 +47,51 @@ export function makeCityMaterial() {
         float yb = vUnit.y * vScl.y;                         // 這個盒子自己的離底高度
         float yt = (1. - vUnit.y) * vScl.y;                  // 到頂的距離
         float style = floor(vPrm.g * 4.);
+        bool body = fract(vPrm.g * 4.) > .4;                 // 大樓本體（簷口、柱、橋等配件是 .2）
+        float H = vScl.y, um = u * faceW;                    // um：離立面中線的距離（m）
         float shade = 1.;
-        float win = 0.;                                      // 窗帶（夜裡發光的位置）
-        if (side > .5 && style < 3.5) {
-          // 0 垂直溝槽、1 水平窗帶、2 格子、3 素面
-          if (style < .5 || style > 1.5) {
-            float P = 3. + vPrm.b * 3.;
+        float slot = 0.;                                     // 凹槽（白天陰影、夜裡窗燈）
+        if (side > .5 && body) {
+          if (style < .5 && faceW > 7. && H > 14.) {
+            // 0：立面中間三道直槽（凹進去：槽內暗、一側再暗一條當內壁陰影）
+            float sp = clamp(faceW * .1, 1.3, 2.6);
+            for (int k = -1; k <= 1; k++) {
+              float d = um - float(k) * sp;
+              float inV = step(abs(d), .32) * step(H * .16, yb) * step(H * .14, yt);
+              slot = max(slot, inV);
+              shade -= inV * (.16 + .14 * step(d, -.18));
+            }
+          } else if (style < 1.5 && faceW > 9. && H > 10.) {
+            // 1：上半部三道橫槽
+            for (int k = 0; k < 3; k++) {
+              float c = H - 3.2 - float(k) * 2.4;
+              float d = yb - c;
+              float inH = step(abs(d), .38) * step(abs(um), faceW * .36);
+              slot = max(slot, inH);
+              shade -= inH * (.16 + .14 * step(.2, d));
+            }
+          } else if (style > 2.5) {
+            // 3：細溝（舊的垂直溝槽，淡）
+            float P = 2.5 + vPrm.b * 2.;
             float f = abs(fract(hz / P) - .5);
-            shade -= .13 * smoothstep(.43, .47, f) * step(1.2, edge);
-          }
-          if (style > .5) {
-            float f = fract(vLoc.y / 3.6);
-            float band = smoothstep(.50, .53, f) * (1. - smoothstep(.80, .83, f)) * step(1.5, edge) * step(2.5, yb) * step(1.2, yt);
-            shade -= (style > 1.5 ? .04 : .07) * band;
-            win = band;
+            shade -= .07 * smoothstep(.44, .47, f) * step(1.2, edge);
           }
         }
+        // 倒角亮邊：立面左右邊緣一條細亮線（紙板摺角吃光）
+        shade += .045 * side * (1. - smoothstep(.05, .22, edge));
         // 切口亮邊：立面頂端一條薄薄的亮線（紙板切口吃光）
         shade += .05 * side * (1. - smoothstep(.06, .2, yt));
         // 盒子接地／接上一層的暗化＋街谷底部偏暗（假 AO）
-        float ao = mix(.80, 1., smoothstep(0., 3.5, yb)) * mix(.80, 1., smoothstep(0., 40., vLoc.y));
+        float ao = mix(.84, 1., smoothstep(0., 3.5, yb)) * mix(.86, 1., smoothstep(0., 40., vLoc.y));
         if (side < .5) ao *= 1.;
-        float tint = .93 + .07 * vPrm.r;
+        float tint = .955 + .045 * vPrm.r;
         diffuseColor.rgb *= tint * shade * ao * (1. + fiber(vLoc));
         // 夜：窗帶裡少數格子亮暖燈
+        // 夜：凹槽整條亮；其他立面藏一層 2.4×3.6 m 的窗格，少數亮燈
+        float fy = fract(vLoc.y / 3.6), fz = fract(hz / 2.4);
+        float grid = (body && side > .5) ? step(.25, fz) * step(fz, .75) * step(.3, fy) * step(fy, .75) * step(1.5, edge) * step(2.5, yb) : 0.;
         float cell = h13(floor(vec3(hz / 2.4, vLoc.y / 3.6, vPrm.b * 97.)));
-        vec3 winGlow = vec3(1., .78, .5) * win * step(.87, cell) * uNight * (.5 + .5 * cell);
+        vec3 winGlow = vec3(1., .78, .5) * uNight * (slot * .8 + grid * step(.88, cell) * (.5 + .5 * cell));
       `)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += winGlow * 0.9;`);

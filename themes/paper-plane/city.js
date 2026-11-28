@@ -15,7 +15,7 @@ export function rng(seed) {
 
 // 兩側規則（對 n03a）：左側近街高樓貼鏡頭，右側第一排較矮、後排高
 const SIDES = [
-  { dir: -1, rows: [{ h: [32, 95], d: [16, 24] }, { h: [50, 135], d: [18, 26] }, { h: [45, 150], d: [18, 26] }] },
+  { dir: -1, rows: [{ h: [24, 72], d: [18, 26] }, { h: [38, 105], d: [18, 26] }, { h: [45, 140], d: [18, 26] }] },
   { dir: 1, rows: [{ h: [14, 32], d: [14, 22] }, { h: [20, 50], d: [16, 24] }, { h: [30, 95], d: [18, 26] }] },
 ];
 const ROW_GAP = 8;               // 排與排之間的巷子
@@ -47,6 +47,7 @@ export function buildSegment(i) {
         const bw = Math.max(w - gap, 4);
         let h = r(row.h[0], row.h[1]);
         if (R() < 0.07) h *= 1.6;                    // 偶爾一棟地標
+        const fs = R(), style = fs < 0.38 ? 0 : fs < 0.62 ? 1 : fs < 0.9 ? 2 : 3, seed = R();   // 0 直槽三道、1 橫槽三道、2 素面、3 細溝
         const set = ri === 0 && R() < 0.5 ? r(1, 7) : 0;          // 第一排偶爾退縮，立面才不會像一道牆
         const cx = side.dir * (x0 + set + depth / 2), cz = z - bw / 2;
         const face = side.dir * (x0 + set);                       // 面向主街的立面 x
@@ -70,7 +71,7 @@ export function buildSegment(i) {
           }
         }
         for (const b of tiers) {
-          boxes.push({ ...b, kind: 'body' });
+          boxes.push({ ...b, kind: 'body', style, seed });
           // 簷口：每一段頂上一片略寬的薄板（紙板疊出來的厚邊）
           if (vis) boxes.push({ x: b.x, y: b.y + b.sy, z: b.z, sx: b.sx + 0.9, sy: 0.55, sz: b.sz + 0.9, kind: 'trim' });
         }
@@ -125,23 +126,37 @@ export function buildSegment(i) {
     for (const e of [-1, 1]) {
       const zz = z + e * (W / 2 - 0.15);
       boxes.push({ x: 0, y: y + 1.1, z: zz, sx: L, sy: 0.18, sz: 0.2, kind: 'trim' });       // 扶手
-      for (let x = -L / 2; x <= L / 2 + 0.01; x += 2.4) boxes.push({ x, y: y + 0.6, z: zz, sx: 0.22, sy: H - 1.1, sz: 0.22, kind: 'trim' });
+      for (let x = -L / 2; x <= L / 2 + 0.01; x += 4) {
+        boxes.push({ x, y: y + 0.6, z: zz, sx: 0.28, sy: H - 1.1, sz: 0.28, kind: 'trim' });
+        if (x < L / 2 - 1) {                              // 斜撐：盒子以底面中心為軸轉，從一根直桿底斜到下一根頂（左右交替成 V）
+          const a = Math.atan2(4, H - 1.1), odd = Math.round((x + L / 2) / 4) % 2;
+          boxes.push({ x: odd ? x + 4 : x, y: y + 0.6, z: zz, sx: 0.2, sy: Math.hypot(4, H - 1.1), sz: 0.2, kind: 'trim', roll: odd ? a : -a });
+        }
+      }
     }
   }
-  // 高架單軌：每 3 m 一節軌道梁，每 30 m 一根 T 形柱
+  // 高架單軌：每 3 m 一節粗梁（外加兩側薄唇），每 30 m 一座 Y 形墩
   const d0 = i * SEG;
   for (let s = 0; s < SEG; s += 3) {
     const xa = railX(d0 + s), xb = railX(d0 + s + 3);
     const len = Math.hypot(xb - xa, 3);
     // 盒子的 z 軸轉 θ 後是 (sinθ, cosθ)；梁沿 (xb−xa, −3)，所以 θ = atan2(−(xb−xa), 3)
-    const yaw = Math.atan2(-(xb - xa), 3);
-    boxes.push({ x: (xa + xb) / 2, y: RAIL_Y, z: -s - 1.5, sx: 2.2, sy: 1.5, sz: len + 0.05, kind: 'rail', yaw });
-    boxes.push({ x: (xa + xb) / 2, y: RAIL_Y + 1.5, z: -s - 1.5, sx: 0.7, sy: 0.35, sz: len + 0.05, kind: 'trim', yaw });
+    const yaw = Math.atan2(-(xb - xa), 3), xm = (xa + xb) / 2, zm = -s - 1.5;
+    boxes.push({ x: xm, y: RAIL_Y, z: zm, sx: 3.4, sy: 1.5, sz: len + 0.05, kind: 'rail', yaw });
+    const cx = Math.cos(yaw), sz2 = -Math.sin(yaw);       // 梁的橫向（局部 x 軸）在世界的方向
+    for (const e of [-1, 1]) boxes.push({ x: xm + e * 1.55 * cx, y: RAIL_Y + 1.5, z: zm + e * 1.55 * sz2, sx: 0.3, sy: 0.45, sz: len + 0.05, kind: 'trim', yaw });
     if (((d0 + s) % 30) < 3) {
-      boxes.push({ x: xa, y: 0, z: -s - 1.5, sx: 1.5, sy: RAIL_Y - 1.2, sz: 1.5, kind: 'rail' });
-      boxes.push({ x: xa, y: RAIL_Y - 1.2, z: -s - 1.5, sx: 4.2, sy: 1.2, sz: 2, kind: 'rail' });
+      const ph = RAIL_Y - 4.5;
+      boxes.push({ x: xa, y: 0, z: zm, sx: 1.6, sy: ph, sz: 1.6, kind: 'rail' });
+      for (const e of [-1, 1]) {                         // 兩支斜臂撐到梁的兩側
+        boxes.push({ x: xa + e * 0.95, y: ph - 0.4, z: zm, sx: 0.9, sy: 5.4, sz: 1.4, kind: 'rail', roll: -e * 0.5 });
+      }
+      boxes.push({ x: xa, y: RAIL_Y - 0.6, z: zm, sx: 4.2, sy: 0.6, sz: 1.8, kind: 'rail' });
     }
   }
+  // 中央分隔島（兩條矮帶）
+  boxes.push({ x: -0.9, y: 0, z: -SEG / 2, sx: 0.5, sy: 0.35, sz: SEG, kind: 'trim' });
+  boxes.push({ x: 0.9, y: 0, z: -SEG / 2, sx: 0.5, sy: 0.35, sz: SEG, kind: 'trim' });
   // 路燈：兩側人行道每 20 m 一支（桿＋往街心伸的臂）
   for (const dir of [-1, 1]) {
     for (let s = (d0 % 20 === 0 ? 0 : 20 - (d0 % 20)); s < SEG; s += 20) {
@@ -160,7 +175,7 @@ export function buildFarSegment(i) {
   const boxes = [];
   for (let k = 0; k < 90; k++) {
     const dir = R() < 0.5 ? -1 : 1;
-    const x = dir * r(75, 650), z = -r(0, FAR_SEG);
+    const x = dir * r(140, 650), z = -r(0, FAR_SEG);
     const w = r(10, 26), h = r(60, 240) * (R() < 0.1 ? 1.5 : 1);
     boxes.push({ x, y: 0, z, sx: w, sy: h, sz: w * r(0.7, 1.4), kind: 'far' });
     if (R() < 0.4) boxes.push({ x, y: h, z, sx: w * 0.6, sy: h * r(0.1, 0.3), sz: w * 0.6, kind: 'far' });
@@ -168,7 +183,7 @@ export function buildFarSegment(i) {
   return boxes;
 }
 
-const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+const _e = new THREE.Euler(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 
 // 一個可重複使用的段槽：InstancedMesh 一顆，換段號時重填
 export class SegmentSlot {
@@ -187,7 +202,7 @@ export class SegmentSlot {
     const c = new THREE.Color();
     for (let k = 0; k < n; k++) {
       const b = boxes[k];
-      _q.setFromAxisAngle(_up, b.yaw || 0);
+      _q.setFromEuler(_e.set(0, b.yaw || 0, b.roll || 0, 'YXZ'));
       _m.compose(_p.set(b.x, b.y, b.z), _q, _s.set(b.sx, b.sy, b.sz));
       this.mesh.setMatrixAt(k, _m);
       this.mesh.setColorAt(k, colorOf(b, c));
