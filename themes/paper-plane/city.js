@@ -25,6 +25,14 @@ export function railX(d) { return 6 + 9 * Math.sin(d / 260) + 3 * Math.sin(d / 9
 export const RAIL_Y = 24;
 
 const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);  // 原點在底面中心
+// 單位四角錐：底 1×1（y=0）、頂點 (0,1,0)；不共用頂點 → 平面著色，四條對角摺線分明
+const unitHip = (() => {
+  const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5], P = [0, 1, 0];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([D, C, P, C, B, P, B, A, P, A, D, P].flat()), 3));
+  g.computeVertexNormals();
+  return g;
+})();
 
 // 一個段：回傳 [{x,y,z,sx,sy,sz,kind}] 盒子清單（段內座標）
 export function buildSegment(i) {
@@ -96,6 +104,16 @@ export function buildSegment(i) {
             boxes.push({ x: b.x, y: b.y + b.sy + 0.3, z: b.z, sx: b.sx + 1.0, sy: 0.5, sz: b.sz + 1.0, kind: 'trim' });
           }
         }
+        // 紙摺屋頂：每一段頂上一個很淺的四角錐（四條對角摺線），像信封背面
+        let hip = null;
+        for (const b of tiers) {
+          const lip = vis || tower;
+          const hx = b.sx + (lip ? 0.6 : 0), hz = b.sz + (lip ? 0.6 : 0), hy = Math.min(hx, hz) * 0.16;
+          hip = { x: b.x, y: b.y + b.sy + (lip ? 0.8 : 0), z: b.z, sx: hx, sy: hy, sz: hz, kind: 'hip' };
+          boxes.push(hip);
+        }
+        // 屋頂物件要坐在斜面上：算該點的屋頂高度
+        const onHip = (px, pz) => hip.sy * Math.max(0, 1 - 2 * Math.max(Math.abs(px - hip.x) / hip.sx, Math.abs(pz - hip.z) / hip.sz));
         const base = tiers[0];
         if (vis) {
           const deco = R();
@@ -126,38 +144,24 @@ export function buildSegment(i) {
         for (let k = 0; k < n; k++) {
           // 機房／通風機：底座一片略寬的薄板，盒子本身用 'unit'（shader 刻百葉）
           const s = r(2, 5), ux = top.x + r(-0.3, 0.3) * top.sx, uz = top.z + r(-0.3, 0.3) * top.sz, uzs = s * r(0.8, 1.4);
-          if (vis) boxes.push({ x: ux, y: roofY, z: uz, sx: s + 0.6, sy: 0.3, sz: uzs + 0.6, kind: 'trim' });
-          boxes.push({ x: ux, y: roofY + (vis ? 0.3 : 0), z: uz, sx: s, sy: r(1.5, 4), sz: uzs, kind: 'unit' });
+          const uy = roofY + onHip(ux, uz) * 0.8;
+          if (vis) boxes.push({ x: ux, y: uy, z: uz, sx: s + 0.6, sy: 0.3, sz: uzs + 0.6, kind: 'trim' });
+          boxes.push({ x: ux, y: uy + (vis ? 0.3 : 0), z: uz, sx: s, sy: r(1.5, 4), sz: uzs, kind: 'unit' });
         }
         if (vis && R() < 0.3) {                                    // 水塔：四根腳＋桶身
-          const wx = top.x + r(-0.25, 0.25) * top.sx, wz = top.z + r(-0.25, 0.25) * top.sz;
-          for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) boxes.push({ x: wx + a * 1.1, y: roofY, z: wz + b * 1.1, sx: 0.25, sy: 2.5, sz: 0.25, kind: 'trim' });
-          boxes.push({ x: wx, y: roofY + 2.5, z: wz, sx: 3, sy: 3.2, sz: 3, kind: 'roof' });
+          const wx = top.x + r(-0.25, 0.25) * top.sx, wz = top.z + r(-0.25, 0.25) * top.sz, wy = roofY + onHip(wx, wz) * 0.6;
+          for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) boxes.push({ x: wx + a * 1.1, y: wy, z: wz + b * 1.1, sx: 0.25, sy: 2.5, sz: 0.25, kind: 'trim' });
+          boxes.push({ x: wx, y: wy + 2.5, z: wz, sx: 3, sy: 3.2, sz: 3, kind: 'roof' });
         }
         // 偶爾一根天線
-        if (R() < 0.12) boxes.push({ x: top.x, y: roofY, z: top.z, sx: 0.5, sy: r(10, 25), sz: 0.5, kind: 'roof' });
+        if (R() < 0.12) boxes.push({ x: top.x, y: roofY + hip.sy * 0.9, z: top.z, sx: 0.5, sy: r(10, 25), sz: 0.5, kind: 'roof' });
         z -= w;
       }
       x0 += depth + ROW_GAP;
     });
   }
-  // 空橋：六成的段有一座 —— 桁架：底板、頂板、兩側直桿與斜撐
-  if (R() < 0.6) {
-    const y = r(14, 38), z = -r(8, SEG - 8), L = STREET * 2, W = 4.5, H = 3.2;
-    boxes.push({ x: 0, y, z, sx: L, sy: 0.6, sz: W, kind: 'bridge' });
-    boxes.push({ x: 0, y: y + H - 0.5, z, sx: L, sy: 0.5, sz: W + 0.4, kind: 'bridge' });
-    for (const e of [-1, 1]) {
-      const zz = z + e * (W / 2 - 0.15);
-      boxes.push({ x: 0, y: y + 1.1, z: zz, sx: L, sy: 0.18, sz: 0.2, kind: 'trim' });       // 扶手
-      for (let x = -L / 2; x <= L / 2 + 0.01; x += 4) {
-        boxes.push({ x, y: y + 0.6, z: zz, sx: 0.28, sy: H - 1.1, sz: 0.28, kind: 'trim' });
-        if (x < L / 2 - 1) {                              // 斜撐：盒子以底面中心為軸轉，從一根直桿底斜到下一根頂（左右交替成 V）
-          const a = Math.atan2(4, H - 1.1), odd = Math.round((x + L / 2) / 4) % 2;
-          boxes.push({ x: odd ? x + 4 : x, y: y + 0.6, z: zz, sx: 0.2, sy: Math.hypot(4, H - 1.1), sz: 0.2, kind: 'trim', roll: odd ? a : -a });
-        }
-      }
-    }
-  }
+  // 空橋已移除（2026-11-28 用戶）；照舊吃掉兩個亂數，其他東西的排列才不會變
+  if (R() < 0.6) { R(); R(); }
   // 高架單軌：每 3 m 一節粗梁（外加兩側薄唇），每 30 m 一座 Y 形墩
   const d0 = i * SEG;
   for (let s = 0; s < SEG; s += 3) {
@@ -216,28 +220,33 @@ export class SegmentSlot {
     this.mesh.castShadow = this.mesh.receiveShadow = true;
     this.build = build; this.len = len; this.index = null;
     this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+    const hc = Math.ceil(cap / 5);
+    this.hip = new THREE.InstancedMesh(unitHip, material, hc);
+    this.hip.frustumCulled = false;
+    this.hip.castShadow = this.hip.receiveShadow = true;
+    this.hip.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(hc * 3), 3);
   }
   fill(i, colorOf) {
     this.index = i;
-    const boxes = this.build(i);
-    const n = Math.min(boxes.length, this.mesh.instanceMatrix.count);
-    if (boxes.length > n) console.warn('段', i, '盒子超過容量', boxes.length);
+    const all = this.build(i);
     const c = new THREE.Color();
-    for (let k = 0; k < n; k++) {
-      const b = boxes[k];
-      _q.setFromEuler(_e.set(0, b.yaw || 0, b.roll || 0, 'YXZ'));
-      _m.compose(_p.set(b.x, b.y, b.z), _q, _s.set(b.sx, b.sy, b.sz));
-      this.mesh.setMatrixAt(k, _m);
-      this.mesh.setColorAt(k, colorOf(b, c));
+    for (const [mesh, boxes] of [[this.mesh, all.filter((b) => b.kind !== 'hip')], [this.hip, all.filter((b) => b.kind === 'hip')]]) {
+      const n = Math.min(boxes.length, mesh.instanceMatrix.count);
+      if (boxes.length > n) console.warn('段', i, '超過容量', boxes.length);
+      for (let k = 0; k < n; k++) {
+        const b = boxes[k];
+        _q.setFromEuler(_e.set(0, b.yaw || 0, b.roll || 0, 'YXZ'));
+        _m.compose(_p.set(b.x, b.y, b.z), _q, _s.set(b.sx, b.sy, b.sz));
+        mesh.setMatrixAt(k, _m);
+        mesh.setColorAt(k, colorOf(b, c));
+      }
+      mesh.count = n;
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.instanceColor.needsUpdate = true;
     }
-    this.mesh.count = n;
-    // 空橋底板（sy 0.6）：全域距離 D＝段號×段長−段內 z（世界 z＝s−D），給紙飛機挑橋俯衝
-    this.bridges = boxes.filter((b) => b.kind === 'bridge' && b.sy === 0.6).map((b) => ({ D: i * this.len - b.z, y: b.y }));
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.mesh.instanceColor.needsUpdate = true;
   }
   // 全域距離 s：段 i 的段內 z=0 對應世界 z = s − i*len（往 +Z 流過來）
-  place(s) { this.mesh.position.z = s - this.index * this.len; }
+  place(s) { this.mesh.position.z = this.hip.position.z = s - this.index * this.len; }
 }
 
 // 一組段槽：維持 [s − behind, s + ahead] 範圍內的段
@@ -246,7 +255,7 @@ export class Strip {
     this.len = len; this.behind = behind;
     this.count = Math.ceil((behind + ahead) / len) + 1;
     this.slots = Array.from({ length: this.count }, () => new SegmentSlot(material, cap, build, len));
-    this.slots.forEach((sl) => scene.add(sl.mesh));
+    this.slots.forEach((sl) => scene.add(sl.mesh, sl.hip));
     this.colorOf = (b, c) => c.set(0xffffff);
   }
   update(s) {

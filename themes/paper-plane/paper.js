@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 export const NIGHT = { value: 0 };          // 0 白天 → 1 夜晚（窗燈）
 export const TRAVEL = { value: 0 };         // 全域行進距離 s（地面花紋用）
-export const CANYON = { value: 0.70 };      // 街谷底部的暗度（1＝不暗）
+export const CANYON = { value: 0.76 };      // 街谷底部的暗度（1＝不暗）
 
 const NOISE = /* glsl */`
   float h13(vec3 p){ p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
@@ -19,7 +19,7 @@ const NOISE = /* glsl */`
 `;
 
 export function makeCityMaterial() {
-  const m = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: false });
+  const m = new THREE.MeshLambertMaterial({ color: 0xfffefb, vertexColors: false });   // 米白紙
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uNight = NIGHT; sh.uniforms.uCanyon = CANYON;
     sh.vertexShader = sh.vertexShader
@@ -99,16 +99,32 @@ export function makeCityMaterial() {
           float jz = (.5 - abs(vUnit.z)) * vScl.z;
           shade -= .14 * (1. - smoothstep(.03, .09, jz));
         }
-        // 倒角亮邊：立面左右邊緣一條細亮線（紙板摺角吃光）
-        shade += .045 * side * (1. - smoothstep(.05, .22, edge));
-        // 切口亮邊：配件（簷口、女兒牆）頂端一條薄薄的亮線；本體頂端被簷口蓋住，改由上面的接觸陰影處理
-        shade += (body ? .02 : .07) * side * (1. - smoothstep(.04, .14, yt));
+        // 紙邊：每一條邊都有一道細亮的切口線（看得出紙板厚度）
+        float ew = .03 + fwidth(edge) * 1.5;
+        shade += .075 * side * (1. - smoothstep(ew, ew + .08, edge));
+        shade += (body ? .03 : .1) * side * (1. - smoothstep(.03, .12, yt));
+        shade += (body ? 0. : .06) * side * (1. - smoothstep(.03, .1, yb));                       // 配件底緣
+        if (side < .5 && n.y > 0.) {                                                             // 屋頂與四角錐的外框
+          float er = min((.5 - abs(vUnit.x)) * vScl.x, (.5 - abs(vUnit.z)) * vScl.z);
+          shade += .08 * (1. - smoothstep(.03, .03 + .08 + fwidth(er) * 1.5, er));
+        }
+        // 立面大摺痕：每面一道斜摺線（一側略亮、一側略暗，線上一道淺谷），像紙摺過再攤開
+        if (side > .5 && body && faceW > 6.) {
+          float fh = h13(vec3(vPrm.b * 91., n.x * 3. + 1., n.z * 5. + 2.));
+          float a = (fh > .5 ? .7854 : -.7854) + (fh - .5) * .6;
+          vec2 q = vec2(um, yb - H * (.3 + .4 * fract(fh * 7.)));
+          float dd = dot(q, vec2(-sin(a), cos(a)));
+          float aa2 = fwidth(dd);
+          shade += .028 * sign(dd) - .055 * (1. - smoothstep(.03, .03 + aa2 + .05, abs(dd)));
+        }
+        // 淺皺：大尺度的起伏明暗
+        shade += (abs(vnoise(vLoc * .45) - .5) - .25) * .05;
         // 盒子接地／接上一層的暗化＋街谷底部偏暗（假 AO）
         float ao = mix(.80, 1., smoothstep(0., 3.5, yb));                     // 接地／接上一層
         // 街谷：越低越暗（紙模的深巷吃不到天光），只算立面，屋頂不受影響
         ao *= mix(1., mix(uCanyon, 1., smoothstep(0., 70., vLoc.y)), side);
         float tint = .955 + .045 * vPrm.r;
-        diffuseColor.rgb *= tint * shade * ao * (1. + fiber(vLoc));
+        diffuseColor.rgb *= tint * shade * ao * (1. + fiber(vLoc) * 1.4);
         // 夜：窗帶裡少數格子亮暖燈
         // 夜：凹槽整條亮；其他立面藏一層 2.4×3.6 m 的窗格，少數亮燈
         float fy = fract(vLoc.y / 3.6), fz = fract(hz / 2.4);
@@ -124,7 +140,7 @@ export function makeCityMaterial() {
 
 // 地面：紙色＋跟著行進距離流動的人行道邊、車道虛線，讓速度讀得出來
 export function makeGroundMaterial(street) {
-  const m = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const m = new THREE.MeshLambertMaterial({ color: 0xfcfaf6 });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uS = TRAVEL; sh.uniforms.uCanyon = CANYON;
     sh.vertexShader = sh.vertexShader

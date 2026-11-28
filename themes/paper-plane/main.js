@@ -34,7 +34,7 @@ function paintSky(top, horizon) {
   g.fillStyle = gr; g.fillRect(0, 0, 4, 256); skyTex.needsUpdate = true;
 }
 scene.background = skyTex;
-scene.fog = new THREE.FogExp2('#f3f2f5', 0.0016);
+scene.fog = new THREE.FogExp2('#f4f3f2', 0.0016);
 
 const camera = new THREE.PerspectiveCamera(CAM.fov, 16 / 9, 0.5, 4000);
 camera.rotation.order = 'YXZ';
@@ -43,7 +43,7 @@ camera.rotation.set(THREE.MathUtils.degToRad(CAM.pitch), THREE.MathUtils.degToRa
 scene.add(camera);
 
 // 光：午後側光從右上後方來（街上投出長影）＋天光
-const hemi = new THREE.HemisphereLight('#f5f5f9', '#dcdbe2', num('hemi', 0.9));
+const hemi = new THREE.HemisphereLight('#f9f8f6', '#e2e0dc', num('hemi', 0.9));   // 偏暖：紙不是石膏
 const sun = new THREE.DirectionalLight('#fff3e4', 2.0);
 CANYON.value = num('canyon', CANYON.value);
 const SUN_DIR = new THREE.Vector3(num('sx', 0.45), num('sy', 0.62), num('sz', 0.65)).normalize();
@@ -53,7 +53,7 @@ sun.castShadow = true;
 Object.assign(sun.shadow.camera, { left: -230, right: 230, top: 230, bottom: -230, near: 100, far: 1500 });
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.6; sun.shadow.radius = 5; sun.shadow.blurSamples = 12;
-sun.shadow.intensity = num('shi', 0.72);                      // 目標圖的影子是淺灰、軟的
+sun.shadow.intensity = num('shi', 0.68);                      // 目標圖的影子是淺灰、軟的
 scene.add(hemi, sun, sun.target);
 const planeHemi = hemi.clone(), planeSun = new THREE.DirectionalLight('#fff3e4', 2.0);
 planeSun.position.copy(SUN_DIR).multiplyScalar(100);
@@ -66,7 +66,7 @@ const far = new Strip(scene, cityMat, { cap: 200, build: buildFarSegment, len: F
 far.slots.forEach((sl) => { sl.mesh.castShadow = false; });
 // g：本體＝(樣式+0.5)/4（小數 .5）；配件＝0.55（樣式 2 素面、小數 .2，shader 靠小數分辨）；遠景＝細溝本體
 // unit＝1.2/4（百葉機房）、beam＝3.2/4（單軌梁接縫）
-const STYLE = { roof: 0.55, trim: 0.55, bridge: 0.55, rail: 0.55, unit: 0.3, beam: 0.8, far: 0.875 };
+const STYLE = { roof: 0.55, trim: 0.55, hip: 0.55, rail: 0.55, unit: 0.3, beam: 0.8, far: 0.875 };
 const colorOf = (b, c) => {
   // r＝紙色深淺、g＝立面樣式（0 溝槽／1 窗帶／2 格子／3 素面）、b＝種子；同一棟樓同一組參數
   const h = Math.abs(Math.sin(b.x * 12.9898 + b.z * 78.233) * 43758.5453) % 1;
@@ -112,11 +112,11 @@ addEventListener('resize', resize); resize();
 // speed m/s、fog 霧密度、sun 日光、sunC 日光色、hazeC 霧／地平線色、topC 天頂色、mb 快門（秒）
 // 飛行：amp 左右穿梭幅度 m、alt 升降幅度 m、ag 靈活度（節奏快慢）、dip 高度偏移 m、circle 盤旋（等你）
 const STATES = {
-  idle:      { speed: 14, fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f3f2f5', topC: '#e8e8ee', mb: 0.02, amp: 5, alt: 3,   ag: 1.0, dip: 0,    circle: 0 },
+  idle:      { speed: 14, fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f4f3f2', topC: '#e8e8ee', mb: 0.02, amp: 5, alt: 3,   ag: 1.0, dip: 0,    circle: 0 },
   thinking:  { speed: 7,  fog: 0.0042, sun: 2.1, sunC: '#ffebd2', hazeC: '#f2ece3', topC: '#ece8e2', mb: 0.02, amp: 3, alt: 2,   ag: 0.6, dip: 1,    circle: 0 },
   working:   { speed: 38, fog: 0.0013, sun: 2.9, sunC: '#fff6ea', hazeC: '#eff0f0', topC: '#e2e7ee', mb: 0.05, amp: 8, alt: 4.5, ag: 1.8, dip: -3,   circle: 0 },
   finishing: { speed: 10, fog: 0.0011, sun: 2.8, sunC: '#ffe6c8', hazeC: '#f4ece2', topC: '#e9e6e6', mb: 0.025, amp: 4, alt: 3,   ag: 0.9, dip: 4,    circle: 0 },
-  waiting:   { speed: 2,  fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f3f2f5', topC: '#e8e8ee', mb: 0.0, amp: 0, alt: 1,   ag: 0.5, dip: 0,    circle: 1 },
+  waiting:   { speed: 2,  fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f4f3f2', topC: '#e8e8ee', mb: 0.0, amp: 0, alt: 1,   ag: 0.5, dip: 0,    circle: 1 },
   absent:    { speed: 5,  fog: 0.0020, sun: 0.5, sunC: '#9fb3d8', hazeC: '#2a3142', topC: '#1c2231', mb: 0.05, amp: 3, alt: 2,   ag: 0.6, dip: 0,    circle: 0 },
 };
 const SKY2STATE = { clear: 'idle', overcast: 'thinking', storm: 'working', clearing: 'finishing', waiting: 'waiting' };
@@ -138,7 +138,7 @@ setInterval(poll, 1000); poll();
 const NIGHT_ST = { sun: 0.45, sunC: '#9fb3d8', hazeC: '#2a3142', topC: '#161b28' };
 const COLS = ['sunC', 'hazeC', 'topC'];
 const cur = { ...STATES.idle }; COLS.forEach((k) => { cur[k] = new THREE.Color(STATES.idle[k]); });
-const _c = new THREE.Color(), _hd = new THREE.Color('#f5f5f9'), _hn = new THREE.Color('#46536f'), _gd = new THREE.Color('#dcdbe2'), _gn = new THREE.Color('#2b2e36');
+const _c = new THREE.Color(), _hd = new THREE.Color('#f9f8f6'), _hn = new THREE.Color('#46536f'), _gd = new THREE.Color('#e2e0dc'), _gn = new THREE.Color('#2b2e36');
 let night = 0, circleT = 0, circleW = 0, ph = 0;
 const camLag = { x: 0, y: 0, roll: 0, yaw: 0, pitch: 0 };
 // 上下穿梭的間隔（秒）：[最短, 最長]；等你不俯衝
@@ -202,18 +202,9 @@ function step(now, dt) {
   const py = B * (0.6 * Math.sin(0.19 * ph + 2.0) + 0.4 * Math.sin(0.43 * ph)) + cur.dip;
   const fwd = Math.max(cur.speed, 5);
   if (stateName !== lastState) { if (stateName === 'finishing') rollNext = clk + 1.2; nextDive = Math.min(nextDive, clk + 3); lastState = stateName; }
-  // 上下穿梭：時候到了就挑前方一座空橋，算好時間俯衝 —— 高的橋鑽橋下、低的橋擦過橋面，再拉回巡航高度
-  const DW = 3.2, DH = 0.5, DD = 7;                           // 下降秒數、谷底停留、俯衝時往前拉開的距離
-  if (!dive && FLY > 0 && clk > nextDive) {
-    const v = Math.max(cur.speed, 2), zp = CAM0.z + PDIR.z * (PLANE.d + DD);
-    let best = null;
-    for (const sl of near.slots) for (const b of sl.bridges || []) {
-      const T = (b.D + zp - s) / v;
-      if (T > DW + DH + 0.3 && T < DW + 6 && (!best || T < best.T)) best = { T, y: b.y };
-    }
-    if (best) dive = { tp: clk + best.T, yd: best.y >= 37 ? best.y - 4.5 : Math.max(33, best.y + 9) };   // 單軌頂 26 m，飛機最低 32.5（含機頭下壓）
-    else nextDive = clk + 1;
-  }
+  // 上下穿梭：時候到了就俯衝進街谷，在谷底停一下再拉回巡航高度（空橋已移除，深度隨機；單軌頂 26 m，最低 34）
+  const DW = 3.2, DH = 0.6, DD = 7;                           // 下降秒數、谷底停留、俯衝時往前拉開的距離
+  if (!dive && FLY > 0 && clk > nextDive) dive = { tp: clk + DW + DH, yd: 34 + Math.random() * 14 };
   let env = 0;
   if (dive) {
     const u = clk - dive.tp, sm = (x) => { x = Math.min(Math.max(x, 0), 1); return x * x * (3 - 2 * x); };
@@ -284,11 +275,6 @@ function step(now, dt) {
   plane.scale.setScalar(PLANE.s * (1 + 0.35 * wT));
   const fov = CAM.fov + 14 * wF;
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }                 // 大俯視時放大一點，才讀得到
-  // 鏡頭別鑽進空橋：附近的橋頂以上留 3 m
-  for (const sl of near.slots) for (const b of sl.bridges || []) {
-    const zw = s - b.D;
-    if (Math.abs(zw - camera.position.z) < 6) camera.position.y = Math.max(camera.position.y, b.y + 3.7 + 3);
-  }
   camera.position.y = Math.max(camera.position.y, 30);
   draw();
 }
