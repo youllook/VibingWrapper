@@ -537,12 +537,34 @@ let mixer = null, act = null, head = null, neck = null;
 // 小跑（2026-11-29 執行中）：Mixamo「Jogging」原地版烘進 girl.glb 的 jog 片段（E:/tmp/dream-doors-mixamo/bake_jog.py）；
 // 執行中且真的在跑時淡入，停在門前淡回 walk。移動速度照舊，只換動作
 let actJ = null, jogW = 0;
+// 手臂往外張，避免手插進長裙（2026-11-29 用戶截圖：走路時右手穿進裙子）。jog 片段的左手已在烘焙時外張 0.35 rad（避開側背包）
+const ARM_OUT = num('armout', 0.16), ARM_OUT_JOG_R = num('armoutjog', 0.2);
+const ARMS = { L: null, R: null, LH: null, RH: null, base: {} };
+const _pq = new THREE.Quaternion(), _qw = new THREE.Quaternion(), _va = new THREE.Vector3(), _vh = new THREE.Vector3(), _vo = new THREE.Vector3();
+function armsUndo() { for (const k of ['L', 'R']) if (ARMS[k] && ARMS.base[k]) ARMS[k].quaternion.copy(ARMS.base[k]); }
+function armsOut() {
+  if (!ARMS.L || !ARMS.R) return;
+  ARMS.L.parent.updateWorldMatrix(true, true);
+  for (const k of ['L', 'R']) {
+    const arm = ARMS[k], hand = ARMS[k + 'H'], other = ARMS[k === 'L' ? 'R' : 'L'];
+    (ARMS.base[k] ||= new THREE.Quaternion()).copy(arm.quaternion);
+    const ang = k === 'L' ? ARM_OUT * (1 - jogW) : ARM_OUT * (1 - jogW) + ARM_OUT_JOG_R * jogW;
+    if (ang < 1e-3) continue;
+    arm.getWorldPosition(_va); hand.getWorldPosition(_vh); other.getWorldPosition(_vo);
+    const down = _vh.sub(_va).normalize(), lat = _va.clone().sub(_vo).normalize();
+    const axis = down.cross(lat); if (axis.lengthSq() < 1e-8) continue;
+    _qw.setFromAxisAngle(axis.normalize(), ang);
+    arm.parent.getWorldQuaternion(_pq);
+    arm.quaternion.premultiply(_pq.clone().invert().multiply(_qw).multiply(_pq));
+  }
+}
 const JOG_M = num('jogm', 2.4);                                      // jog 片段每播 1 秒算跑了幾公尺（決定步頻）
 const girlReady = loader.loadAsync('models/girl.glb').then((g) => {
   const root = g.scene; root.rotation.y = Math.PI; root.position.set(P.gx, 0, -P.gz); root.scale.setScalar(P.gh / 1.5);
   root.traverse((o) => {
     if (o.isMesh) { o.frustumCulled = false; o.castShadow = true; if (IDS) o.material = M.girl; else { o.material.transparent = false; o.material.depthWrite = true; addRim(o.material, 1.4); } }
     if (o.isBone && /Head$/.test(o.name)) head = o; if (o.isBone && /Neck$/.test(o.name)) neck = o;
+    if (o.isBone) { const m = o.name.match(/(Left|Right)(Arm|Hand)$/); if (m) ARMS[m[1][0] + (m[2] === 'Hand' ? 'H' : '')] = o; }
   });
   scene.add(root);
   mixer = new THREE.AnimationMixer(root);
@@ -760,7 +782,9 @@ function step(dt, t) {
     const jt = actJ && (st === 'working' || Q.get('jog') === '1') ? THREE.MathUtils.clamp((speed - 0.6) / 1.2, 0, 1) : 0; // 停在門前時淡回走路
     jogW += (jt - jogW) * (1 - Math.exp(-dt / 0.5));
     if (actJ) { actJ.setEffectiveWeight(jogW); act.setEffectiveWeight(1 - jogW); }
+    armsUndo();                                                      // 先撤掉上一格的外張（mixer 停住時不會重寫骨頭）
     mixer.update(da);
+    armsOut();
     look += ((AT.wait > 0.6 ? 1 : 0) - look) * (1 - Math.exp(-dt / 0.9));
     turned = look * LOOK;
     if (head) { head.rotation.y += turned; if (neck) neck.rotation.y += turned * 0.45; }
