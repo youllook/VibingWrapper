@@ -17,7 +17,8 @@ const P = {
   ow: num('ow', 3.25), ph: num('ph', 3.2), post: num('post', 0.3), beam: num('beam', 0.36), over: num('over', 0.35),
   z1: num('z1', 6.05), sp: num('sp', 10.4), n: 18,
   open: num('open', 80),                                    // 第一扇門的開門角度（往遠處開）
-  wl: num('wl', -2.15), wr: num('wr', 2.15), nearR: num('nearr', 6.6), nearZ: num('nearz', 2.2), // 步道兩緣；近處右側平台
+  wl: num('wl', -2.15), wr: num('wr', 2.15), // 步道兩緣
+  landW: num('landw', 1.0), landD: num('landd', 3.5), landZ: num('landz', 0.35), landDrop: num('landdrop', 0.16), // 門右側的石台：寬、長、離門多遠開始、比步道低多少
   gx: num('gx', -0.79), gz: num('gz', 4.78), gh: num('gh', 1.5),
 };
 
@@ -55,7 +56,7 @@ const M = {
   girl: mat('#c06850', 'girl'), near: mat('#8a6a50', 'near'), portal: IDS ? mat(0, 'door') : new THREE.MeshBasicMaterial({ color: '#bfe3ff' }),
 };
 
-// ── 步道：一條長板＋近處右側平台（目標圖右下的步道比門框寬）。石板貼圖用世界座標 UV，走路時捲動 offset ──
+// ── 步道：一條長板（目標圖右下比門框寬的地面改成門旁的石台，見 makeDoor）。石板貼圖用世界座標 UV，走路時捲動 offset ──
 const WALK = IDS ? null : walkMaterial();                          // 石板顏色＋法線＋粗糙度（materials.js）
 const walkTop = IDS ? M.walk : WALK.mat;
 const walkSide = IDS ? M.walk : new THREE.MeshLambertMaterial({ color: '#9c9389' });
@@ -93,10 +94,6 @@ if (!IDS) walkTop.onBeforeCompile = (s) => {
   const L = P.z1 + P.sp * P.n + 20;
   const g = new THREE.BoxGeometry(P.wr - P.wl, 0.4, L); g.translate((P.wl + P.wr) / 2, -0.2, 2 - L / 2);
   const wm = new THREE.Mesh(worldUV(g), [walkSide, walkSide, walkTop, walkSide, walkSide, walkSide]); wm.receiveShadow = true; scene.add(wm);
-  const s = new THREE.Shape(); // 右側平台：從門框右緣往外擴，越近越寬
-  s.moveTo(P.wr, -P.z1); s.lineTo(P.wr, 3); s.lineTo(P.wr + P.nearR, 3); s.lineTo(P.wr + P.nearR * 0.15, -P.nearZ);
-  const pg = new THREE.ExtrudeGeometry(s, { depth: 0.4, bevelEnabled: false }); pg.rotateX(Math.PI / 2); // 形狀平面 xy → xz（y 往下長）
-  pg.computeVertexNormals(); const pm = new THREE.Mesh(worldUV(pg), [walkTop, walkSide]); pm.receiveShadow = true; scene.add(pm);
 }
 // 夜裡步道兩側的小燈（跟步道一起後退，位置和地上的光暈對齊）
 const LAMP_N = 26, lamps = IDS ? null : new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.24, 0.12), new THREE.MeshBasicMaterial({ color: '#ffc27a' }), LAMP_N * 2);
@@ -387,6 +384,13 @@ M.foot = IDS ? M.walk : (() => {                                     // 沿用�
   const w = WALK.mat;
   return new THREE.MeshStandardMaterial({ map: cut(w.map), normalMap: cut(w.normalMap), roughnessMap: cut(w.roughnessMap), roughness: 1, color: '#cfc7bd' });
 })();
+// 門右側的石台（目標圖右下比門框寬的那塊地面）：方正、比步道低一階，跟著門一起移動（不會像固定在鏡頭旁的地板）
+const LAND_G = new THREE.BoxGeometry(P.landW, 0.4, P.landD);
+M.land = IDS ? M.walk : (() => {
+  const rp = (t) => { const c = t.clone(); c.repeat.set(P.landW / TILE, P.landD / TILE); c.needsUpdate = true; return c; };
+  const w = WALK.mat, top = new THREE.MeshStandardMaterial({ map: rp(w.map), normalMap: rp(w.normalMap), roughnessMap: rp(w.roughnessMap), roughness: 1, color: '#e4ddd4' });
+  return [walkSide, walkSide, top, walkSide, walkSide, walkSide];
+})();
 function makeDoor() {
   const g = new THREE.Group(), half = P.ow / 2;
   const box = new THREE.Group();                                  // 模型載入前的方塊門框
@@ -395,6 +399,7 @@ function makeDoor() {
   const beam = new THREE.Mesh(new THREE.BoxGeometry(P.ow + 2 * P.post + 2 * P.over, P.beam, P.post * 1.3), M.frame);
   beam.position.y = P.ph + P.beam / 2; box.add(beam); g.add(box); g.userData.frame = box;
   // 門柱底座：石墩比門柱寬、伸出步道邊緣，門柱外緣才不會懸在雲上（步道維持擺景驗收的寬度）
+  { const l = new THREE.Mesh(LAND_G, M.land); l.position.set(P.wr + P.landW / 2, -0.2 - P.landDrop, P.landZ + P.landD / 2); l.receiveShadow = true; l.visible = false; g.add(l); g.userData.land = l; }
   for (const s of [-1, 1]) { const f = new THREE.Mesh(FOOT_G, M.foot); f.position.set(s * FOOT_X, FOOT_Y, 0); f.castShadow = f.receiveShadow = true; g.add(f); }
   g.userData.leaves = [-1, 1].map((s) => {
     const pivot = new THREE.Group(); pivot.position.set(s * half, 0, 0);
@@ -455,9 +460,9 @@ for (let i = 0; i < P.n; i++) { const d = makeDoor(); doors.push(d); scene.add(d
 const GATE_Z = -P.gz - 1.4;                                          // 關著的門會停在她面前 1.4 m
 // 第 i 扇門在第 k 輪的長相（freeze 時第 0、1 扇照目標圖：木框＋格子窗／櫻花木門、鐵框＋保險庫門）
 function styleOf(i, k) {
-  if (FREEZE && i === 0) return { frame: 0, l: 0, r: 1 };
+  if (FREEZE && i === 0) return { frame: 0, l: 0, r: 1, land: true };
   if (FREEZE && i === 1) return { frame: 1, l: 2, r: 2 };
-  return { frame: rnd(i, k + 5) < 0.6 ? 0 : 1, l: Math.floor(rnd(i, k + 9) * 6), r: Math.floor(rnd(i, k + 13) * 6) };
+  return { frame: rnd(i, k + 5) < 0.6 ? 0 : 1, l: Math.floor(rnd(i, k + 9) * 6), r: Math.floor(rnd(i, k + 13) * 6), land: !FREEZE && rnd(i, k + 21) < 0.45 };
 }
 function openDoor(d, w) {
   d.userData.opened = true; d.userData.world = w;
@@ -467,6 +472,7 @@ function dress(d, st) {                                              // 回收�
   if (frameModels.length && d.userData.frameType !== st.frame) {
     d.remove(d.userData.frame); d.userData.frame = frameModels[st.frame].clone(); d.add(d.userData.frame); d.userData.frameType = st.frame;
   }
+  if (d.userData.land) d.userData.land.visible = !!st.land;
   const [L, R] = d.userData.leaves; L.userData.mesh.material = leafMats[st.l]; R.userData.mesh.material = leafMats[st.r];
   for (const [p, n] of [[L, st.l], [R, st.r]]) {                   // 貼圖的門把若畫在樞紐那側就左右翻，門把一律在中間門縫
     const flip = HANDLE[LEAVES[n]] === p.userData.s;
