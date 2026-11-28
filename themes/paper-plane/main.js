@@ -195,6 +195,7 @@ window.theme = {
   CAM, PLANE, scene, camera, renderer, STATES, PARAMS: STATES, CONFIG, applyState,
   draw, resizePost: () => mb && mb.resize(), cityReady: Promise.resolve(),
   requestState: () => stateName, setState: (n) => { stateName = n; },
+  setSessions: (a) => { sessions = a || []; },
   shot: async (name = 'shot.png') => {
     renderer.setPixelRatio(1); renderer.setSize(1920, 1080, false); camera.aspect = 16 / 9; camera.updateProjectionMatrix(); if (mb) mb.resize();
     step(performance.now(), 0);
