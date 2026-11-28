@@ -392,12 +392,27 @@ function makeDoor() {
     const m = new THREE.Mesh(leafG, M.leaf); m.position.set(-s * (LW / 2 - TUCK), LH / 2, 0); m.castShadow = true; pivot.add(m); g.add(pivot);
     const bd = [0, 1].map((back) => { const b = new THREE.Mesh(BORDER[0], M.leaf); if (back) b.rotation.y = Math.PI; m.add(b); return b; });
     if (AO_MAT) for (const back of [0, 1]) { const a = new THREE.Mesh(aoG, AO_MAT); a.position.z = (back ? -1 : 1) * (LT / 2 + 0.002); if (back) a.rotation.y = Math.PI; a.renderOrder = 2; m.add(a); }
+    if (SHADE_MAT) {                                                // 只投影、看不見的替身門板：影子跟門反著開（夢裡的影子不必跟實物一致）
+      const sp = new THREE.Group(); sp.position.copy(pivot.position); sp.userData.s = s;
+      const sm = new THREE.Mesh(leafG, SHADE_MAT); sm.castShadow = true; sp.add(sm); g.add(sp); sp.userData.mesh = sm; pivot.userData.shade = sp;
+    }
     pivot.userData.s = s; pivot.userData.mesh = m; pivot.userData.border = bd; return pivot;
   });
   if (!IDS) { const gl = new THREE.Mesh(glowG, glowMat()); gl.position.set(0, 0.012, 1.6); gl.visible = false; g.add(gl); g.userData.glow = gl; }
   if (!IDS) { const lit = new THREE.Mesh(litG, litMat()); lit.position.set(0, P.ph / 2, 0.06); lit.visible = false; lit.renderOrder = 3; g.add(lit); g.userData.lit = lit; }
   g.userData.opened = false; g.userData.open = 0; g.userData.world = -1;
   return g;
+}
+const SHADE_MAT = SHADOW && !FREEZE ? new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }) : null;
+let shadeT = 0;
+function setShade(door, i, e, dt) {                                  // 關著的門投出半開、慢慢擺的影子；門越開，影子越關上
+  if (!SHADE_MAT) return;
+  const deg = (1 - e) * (52 + 22 * Math.sin(shadeT * 0.45 + i * 1.7));
+  for (const p of door.userData.leaves) {
+    const sp = p.userData.shade, m = p.userData.mesh; if (!sp) continue;
+    sp.rotation.y = -sp.userData.s * THREE.MathUtils.degToRad(deg * (p.userData.s > 0 ? 1 : 0.8));
+    sp.userData.mesh.position.copy(m.position); sp.userData.mesh.scale.copy(m.scale);
+  }
 }
 function setOpen(door, deg) {                                       // 門板永遠掛在門柱上，往遠處（−Z）開；全開約 115°，翻過門框外
   for (const p of door.userData.leaves) p.rotation.y = -p.userData.s * THREE.MathUtils.degToRad(deg);
@@ -455,6 +470,7 @@ function dress(d, st) {                                              // 回收�
 }
 const _ah = [], PASS_Z = -0.02;                                     // 門過了這裡就算穿過去（天空 shader 也從這裡開始不算它）
 function layoutDoors(offset, dt = 0) {
+  shadeT += dt;
   doors.forEach((d, i) => {
     const L = P.sp * P.n, raw = -(P.z1 + i * P.sp) + offset;      // 過了鏡頭後方 2 m 就回收到最遠處
     d.position.z = (((raw - 2) % L) + L) % L - L + 2;
@@ -468,8 +484,8 @@ function layoutDoors(offset, dt = 0) {
     const u = d.userData;
     if (!FREEZE) u.open = THREE.MathUtils.clamp(u.open + (u.opened ? 1 : -1) * dt / 1.1, 0, 1);
     const e = u.open * u.open * (3 - 2 * u.open);
-    setOpen(d, e * (FREEZE ? P.open : 112 + 6 * rnd(i, k + 1)));
-    if (SHADOW) for (const p of u.leaves) p.userData.mesh.castShadow = -d.position.z < 9; // 遠處的門板不投影（不然整條走道都在影子裡）
+    setOpen(d, e * (FREEZE ? P.open : 112 + 6 * rnd(i, k + 1))); setShade(d, i, e);
+    if (SHADOW) for (const p of u.leaves) { const near = -d.position.z < 9; p.userData.mesh.castShadow = near && !p.userData.shade; if (p.userData.shade) p.userData.shade.userData.mesh.castShadow = near; } // 遠處的門板不投影（不然整條走道都在影子裡）
     if (u.lit) {
       const opening = u.opened && u.open > 0 && u.open < 1 ? Math.sin(Math.PI * u.open) : 0; // 開門那一下湧出光
       const seam = i === AT.gate && !u.opened ? AT.gateGlow : 0;                              // 關著的門：門縫光
