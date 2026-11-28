@@ -534,6 +534,10 @@ const ready = Promise.all(['frame_wood', 'frame_iron'].map((n) => loader.loadAsy
 
 // ── 女孩：Tripo 生成＋Mixamo 骨架、Tripo 內建 walk（原地）；背對鏡頭往 −Z 走 ──
 let mixer = null, act = null, head = null, neck = null;
+// 小跑（2026-11-29 執行中）：Mixamo「Jogging」原地版烘進 girl.glb 的 jog 片段（E:/tmp/dream-doors-mixamo/bake_jog.py）；
+// 執行中且真的在跑時淡入，停在門前淡回 walk。移動速度照舊，只換動作
+let actJ = null, jogW = 0;
+const JOG_M = num('jogm', 2.4);                                      // jog 片段每播 1 秒算跑了幾公尺（決定步頻）
 const girlReady = loader.loadAsync('models/girl.glb').then((g) => {
   const root = g.scene; root.rotation.y = Math.PI; root.position.set(P.gx, 0, -P.gz); root.scale.setScalar(P.gh / 1.5);
   root.traverse((o) => {
@@ -541,7 +545,10 @@ const girlReady = loader.loadAsync('models/girl.glb').then((g) => {
     if (o.isBone && /Head$/.test(o.name)) head = o; if (o.isBone && /Neck$/.test(o.name)) neck = o;
   });
   scene.add(root);
-  mixer = new THREE.AnimationMixer(root); act = mixer.clipAction(g.animations[0]); act.play();
+  mixer = new THREE.AnimationMixer(root);
+  const clip = (n) => g.animations.find((a) => a.name === n);
+  act = mixer.clipAction(clip('walk') || g.animations[0]); act.play();
+  if (clip('jog')) { actJ = mixer.clipAction(clip('jog')); actJ.timeScale = 1.3 / JOG_M; actJ.setEffectiveWeight(0); actJ.play(); }
   if (FREEZE) mixer.setTime(num('gt', 0.6));
 });
 
@@ -691,13 +698,14 @@ function pickWorld(prev) {                                           // 每扇�
   const pool = (AT.night > 0.5 ? [0, 2, 3] : [0, 1, 2, 3, 4, 5]).filter((w) => w !== prev);
   return pool[Math.floor(Math.random() * pool.length)];
 }
-function openNext() {                                                // 打開前方最近一扇關著的門（前方最多 3 扇開著等她）
+const MAX_OPEN = num('maxopen', 2);
+function openNext() {                                                // 打開前方最近一扇關著的門（前方最多 2 扇開著等她；2026-11-29 用戶：三扇太多）
   let t = null, ahead = 0;
   for (const d of doors) {
     if (d.position.z >= GATE_Z + 0.3) continue;
     if (d.userData.opened) ahead++; else if (d.position.z > -60 && (!t || d.position.z > t.position.z)) t = d;
   }
-  if (!t || ahead >= 3) return false;
+  if (!t || ahead >= MAX_OPEN) return false;
   let prev = null;                                                   // 上一扇開著的門通往哪裡（新世界不重複）
   for (const d of doors) if (d.userData.opened && d.position.z > t.position.z && d.position.z < 0 && (!prev || d.position.z < prev.position.z)) prev = d;
   openDoor(t, t.userData.world >= 0 ? t.userData.world : pickWorld(prev ? prev.userData.world : ENV.cur));
@@ -749,6 +757,9 @@ function step(dt, t) {
     if (stopped && act && da < dt * 0.4) da = Math.min(dt * 0.4, toPass(act.time % act.getClip().duration, act.getClip().duration)); // 收腳站好
     // 回頭：先撤掉上一格加的角度（動作停住時 mixer 不會重寫骨頭，直接加會一直累積）
     if (head) { head.rotation.y -= turned; if (neck) neck.rotation.y -= turned * 0.45; }
+    const jt = actJ && (st === 'working' || Q.get('jog') === '1') ? THREE.MathUtils.clamp((speed - 0.6) / 1.2, 0, 1) : 0; // 停在門前時淡回走路
+    jogW += (jt - jogW) * (1 - Math.exp(-dt / 0.5));
+    if (actJ) { actJ.setEffectiveWeight(jogW); act.setEffectiveWeight(1 - jogW); }
     mixer.update(da);
     look += ((AT.wait > 0.6 ? 1 : 0) - look) * (1 - Math.exp(-dt / 0.9));
     turned = look * LOOK;
