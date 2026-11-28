@@ -18,14 +18,14 @@
 | 檔 | 來源 |
 |---|---|
 | `models/frame_wood.glb`、`frame_iron.glb` | Tripo 生成（專業版，可商用）→ glbprep |
-| `models/girl.glb` | Tripo 生成＋自動綁定（Mixamo 骨架），動作是 Tripo 內建的 walk（原地走）。長裙權重用 `E:/tmp/dream-doors/skirt_fix.mjs` 抹平過 |
+| `models/girl.glb` | Tripo 生成＋自動綁定（Mixamo 骨架），動作是 Tripo 內建的 walk（原地走）＋ Mixamo「Jogging」原地版烘成的 jog（執行中小跑，2026-11-29；`E:/tmp/dream-doors-mixamo/bake_jog.py`，Mixamo 原檔不能單獨散佈）。長裙權重用 `E:/tmp/dream-doors/skirt_fix.mjs` 抹平過 |
 | `tex/leaf_*.webp`、`world_*.webp`（含雲海世界 `world_clouds.webp`） | Codex 生圖（門板、門後世界全景）；`sakura_branch.webp` 目前沒用到 |
 | 石板、天空、雲海 | 程式生成（canvas／shader） |
 
 材質程式在 `materials.js`（石板三張貼圖、門板由圖算出法線與粗糙度），主題和審材質頁 `_lookdev.html` 共用；審查紀錄見 `docs/dream-doors/08-審材質.md`。
 
 ## 門的邏輯（C 版，詳見 `docs/dream-doors/07-門的邏輯C版.md`）
-- 門平常是關著的，她走到門前會停下。Claude 每做一步（`events.json` 裡的一次工具呼叫）就開一扇門；執行時沒有事件的話，每 2.4 秒開一扇。
+- 門平常是關著的，她走到門前會停下。她前方最多 2 扇門開著（`?maxopen=`，2026-11-29 從 3 改 2）。Claude 每做一步（`events.json` 裡的一次工具呼叫）就開一扇門；執行時沒有事件的話，每 2.4 秒開一扇。
 - 開著的門通往下一個世界：天空 shader 算出每條視線穿過了哪幾扇門洞，畫出最後一扇門後的世界。門過了鏡頭，四周就換成那個世界。
 - 門板一直掛在門柱上，全開約 115°。
 
