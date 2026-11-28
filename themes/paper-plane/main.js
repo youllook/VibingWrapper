@@ -232,7 +232,7 @@ function step(now, dt) {
   vyS += ((dt > 0 && lastY !== null ? (y - lastY) / dt : 0) - vyS) * (dt > 0 ? 1 - Math.exp(-dt / 0.25) : 1); lastY = y;
   plane.position.set(x, y, bz);
   // 翻滾：待命時偶爾一次、收尾時一定來一次
-  if (rollT < 0 && clk > rollNext && !dive && FLY > 0 && circleW < 0.5) rollT = 0;
+  if (rollT < 0 && clk > rollNext && !dive && FLY > 0 && circleW < 0.5 && viewW.fpv < 0.3) rollT = 0;   // 第一人稱時不翻滾（只看到機腹一閃而過）
   let rollAng = 0;
   if (rollT >= 0) {
     rollT += dt; const k = Math.min(rollT / 1.5, 1);
@@ -264,12 +264,12 @@ function step(now, dt) {
   _pT.set(topLag.x * 0.9 + 2, cruiseY + 38 + topLag.y, bz + 26);
   _tmpM.lookAt(_pT, _v.set(topLag.x * 0.9, y - 12, bz - 24), _up);
   _qT.setFromRotationMatrix(_tmpM).multiply(_q2.setFromAxisAngle(_zAx, THREE.MathUtils.degToRad(-turn * 0.12)));
-  // 第一人稱：在機尾後上方 12 m、順著飛行方向看，翼面留在畫面下緣；側傾只跟一半
+  // 第一人稱：貼在機尾後上方約 3 m（像坐在飛機上），翼面在畫面下緣；視角加寬 14°、順著飛行方向看，翼面留在畫面下緣；側傾只跟一半
   fpvLag.pitch += (THREE.MathUtils.clamp(Math.atan2(vyS, fwd), -0.8, 0.6) * 0.85 - fpvLag.pitch) * ky;
   fpvLag.yaw += (-Math.atan2(vx, fwd) * 0.9 - fpvLag.yaw) * kc;
   fpvLag.roll += (THREE.MathUtils.degToRad(-(turn + rollAng * 0.15) * 0.45) - fpvLag.roll) * ky;
-  _qF.setFromEuler(_eu.set(fpvLag.pitch - 0.16, fpvLag.yaw, fpvLag.roll, 'YXZ'));
-  _pF.set(0, 3.4, 12).applyQuaternion(_qF).add(plane.position);
+  _qF.setFromEuler(_eu.set(fpvLag.pitch + 0.02, fpvLag.yaw, fpvLag.roll, 'YXZ'));
+  _pF.set(0, 2.1, 2.2).applyQuaternion(_qF).add(plane.position);
   // 權重：auto 依時間輪播，?view= 鎖定
   const want = VIEW_LOCK || VIEW_SEQ[Math.floor(clk / VIEW_SEC) % VIEW_SEQ.length];
   const kv = dt > 0 ? 1 - Math.exp(-dt / 0.9) : 1;
@@ -281,7 +281,9 @@ function step(now, dt) {
   // 第一人稱時，飛機機頭轉回順著飛行方向（一般視角那 35° 斜擺是構圖用的）
   plane.rotation.y += THREE.MathUtils.degToRad(PLANE.yaw - show) * wF;
   planeShadow.rotation.copy(plane.rotation);
-  plane.scale.setScalar(PLANE.s * (1 + 0.35 * wT));                 // 大俯視時放大一點，才讀得到
+  plane.scale.setScalar(PLANE.s * (1 + 0.35 * wT));
+  const fov = CAM.fov + 14 * wF;
+  if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }                 // 大俯視時放大一點，才讀得到
   // 鏡頭別鑽進空橋：附近的橋頂以上留 3 m
   for (const sl of near.slots) for (const b of sl.bridges || []) {
     const zw = s - b.D;
