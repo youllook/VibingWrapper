@@ -59,10 +59,10 @@ planeScene.add(planeHemi, planeSun);
 
 // 城市
 const cityMat = makeCityMaterial();
-const near = new Strip(scene, cityMat, { cap: 700, build: buildSegment, len: SEG, behind: 70, ahead: 1300 });
+const near = new Strip(scene, cityMat, { cap: 1600, build: buildSegment, len: SEG, behind: 70, ahead: 1300 });
 const far = new Strip(scene, cityMat, { cap: 200, build: buildFarSegment, len: FAR_SEG, behind: 300, ahead: 2400 });
 far.slots.forEach((sl) => { sl.mesh.castShadow = false; });
-const STYLE = { body: null, roof: 0.95, bridge: 0.3, rail: 0.95, far: 0.1 };
+const STYLE = { body: null, roof: 0.95, trim: 0.95, bridge: 0.95, rail: 0.95, far: 0.1 };
 const colorOf = (b, c) => {
   // r＝紙色深淺、g＝立面樣式（0 溝槽／1 窗帶／2 格子／3 素面）、b＝種子；同一棟樓同一組參數
   const h = Math.abs(Math.sin(b.x * 12.9898 + b.z * 78.233) * 43758.5453) % 1;
@@ -101,14 +101,14 @@ addEventListener('resize', resize); resize();
 
 // ── 狀態 → 目標值 ──
 // speed m/s、fog 霧密度、sun 日光、sunC 日光色、hazeC 霧／地平線色、topC 天頂色、mb 快門（秒）
-// 飛機：bob 上下浮幅度、weave 左右擺、dip 高度偏移（畫面比例）、circle 盤旋半徑
+// 飛行：amp 左右穿梭幅度 m、alt 升降幅度 m、ag 靈活度（節奏快慢）、dip 高度偏移 m、circle 盤旋（等你）
 const STATES = {
-  idle:      { speed: 14, fog: 0.0016, sun: 2.9, sunC: '#fff3e4', hazeC: '#f1efed', topC: '#e6e9ee', mb: 0.03, bob: 0.25, weave: 0.004, dip: 0,     circle: 0 },
-  thinking:  { speed: 7,  fog: 0.0042, sun: 2.2, sunC: '#ffebd2', hazeC: '#f2ece3', topC: '#ece8e2', mb: 0.02, bob: 0.35, weave: 0.002, dip: 0,     circle: 0 },
-  working:   { speed: 38, fog: 0.0013, sun: 3.0, sunC: '#fff6ea', hazeC: '#eff0f0', topC: '#e2e7ee', mb: 0.05, bob: 0.15, weave: 0.012, dip: 0.025, circle: 0 },
-  finishing: { speed: 10, fog: 0.0011, sun: 2.8, sunC: '#ffe6c8', hazeC: '#f4ece2', topC: '#e9e6e6', mb: 0.025, bob: 0.3,  weave: 0.004, dip: -0.03, circle: 0 },
-  waiting:   { speed: 2,  fog: 0.0016, sun: 2.9, sunC: '#fff3e4', hazeC: '#f1efed', topC: '#e6e9ee', mb: 0.0,  bob: 0.2,  weave: 0,     dip: 0,     circle: 1 },
-  absent:    { speed: 5,  fog: 0.0020, sun: 0.5, sunC: '#9fb3d8', hazeC: '#2a3142', topC: '#1c2231', mb: 0.05, bob: 0.2,  weave: 0.002, dip: 0,     circle: 0 },
+  idle:      { speed: 14, fog: 0.0016, sun: 2.9, sunC: '#fff3e4', hazeC: '#f1efed', topC: '#e6e9ee', mb: 0.03, amp: 5, alt: 3,   ag: 1.0, dip: 0,    circle: 0 },
+  thinking:  { speed: 7,  fog: 0.0042, sun: 2.2, sunC: '#ffebd2', hazeC: '#f2ece3', topC: '#ece8e2', mb: 0.02, amp: 3, alt: 2,   ag: 0.6, dip: 1,    circle: 0 },
+  working:   { speed: 38, fog: 0.0013, sun: 3.0, sunC: '#fff6ea', hazeC: '#eff0f0', topC: '#e2e7ee', mb: 0.05, amp: 8, alt: 4.5, ag: 1.8, dip: -3,   circle: 0 },
+  finishing: { speed: 10, fog: 0.0011, sun: 2.8, sunC: '#ffe6c8', hazeC: '#f4ece2', topC: '#e9e6e6', mb: 0.025, amp: 4, alt: 3,   ag: 0.9, dip: 4,    circle: 0 },
+  waiting:   { speed: 2,  fog: 0.0016, sun: 2.9, sunC: '#fff3e4', hazeC: '#f1efed', topC: '#e6e9ee', mb: 0.0, amp: 0, alt: 1,   ag: 0.5, dip: 0,    circle: 1 },
+  absent:    { speed: 5,  fog: 0.0020, sun: 0.5, sunC: '#9fb3d8', hazeC: '#2a3142', topC: '#1c2231', mb: 0.05, amp: 3, alt: 2,   ag: 0.6, dip: 0,    circle: 0 },
 };
 const SKY2STATE = { clear: 'idle', overcast: 'thinking', storm: 'working', clearing: 'finishing', waiting: 'waiting' };
 const CONFIG = { polling: !Q.has('state'), clockHours: Q.has('day') ? 10.5 : Q.has('night') ? 22 : null };
@@ -130,13 +130,14 @@ const NIGHT_ST = { sun: 0.45, sunC: '#9fb3d8', hazeC: '#2a3142', topC: '#161b28'
 const COLS = ['sunC', 'hazeC', 'topC'];
 const cur = { ...STATES.idle }; COLS.forEach((k) => { cur[k] = new THREE.Color(STATES.idle[k]); });
 const _c = new THREE.Color(), _hd = new THREE.Color('#f4f6fa'), _hn = new THREE.Color('#46536f'), _gd = new THREE.Color('#cfc6bb'), _gn = new THREE.Color('#2b2e36');
-let night = 0, circleT = 0, circleW = 0;
+let night = 0, circleT = 0, circleW = 0, ph = 0;
+const camLag = { x: 0, y: 0, roll: 0, yaw: 0 };
 function applyAtmos(dt) {
   const tgt = STATES[stateName] || STATES.idle;
   const h = clockHours(), clockNight = (h >= 19 || h < 6) ? 1 : h >= 18 ? h - 18 : h < 7 ? 7 - h : 0;
   const nt = stateName === 'absent' ? 1 : clockNight;
   const k = 1 - Math.exp(-dt / 2.2);                  // 約 2 秒過渡
-  for (const key of ['speed', 'fog', 'sun', 'mb', 'bob', 'weave', 'dip']) cur[key] += (tgt[key] - cur[key]) * k;
+  for (const key of ['speed', 'fog', 'sun', 'mb', 'amp', 'alt', 'ag', 'dip']) cur[key] += (tgt[key] - cur[key]) * k;
   for (const key of COLS) cur[key].lerp(_c.set(tgt[key]).lerp(_c.clone().set(NIGHT_ST[key]), nt), k);
   night += (nt - night) * k;
   circleW += (tgt.circle - circleW) * k;
@@ -172,14 +173,34 @@ function step(now, dt) {
   if (!frozen) s += cur.speed * dt;
   TRAVEL.value = s;
   near.update(s); far.update(s);
-  // 飛機：浮、擺；等你時在畫面上繞小圈（側傾跟著轉）
+  // ── 飛行：S 形穿梭＋升降（兩組正弦疊加，不重複感），鏡頭延遲跟拍＋側傾 ──
+  ph += dt * cur.ag;
+  if (Q.has('t') && frozen) ph = t * cur.ag;
+  const A = cur.amp, B = cur.alt, ag = cur.ag;
+  const px = A * (0.62 * Math.sin(0.23 * ph) + 0.38 * Math.sin(0.51 * ph + 1.1));
+  const vx = A * ag * (0.62 * 0.23 * Math.cos(0.23 * ph) + 0.38 * 0.51 * Math.cos(0.51 * ph + 1.1));
+  const ax = -A * ag * ag * (0.62 * 0.0529 * Math.sin(0.23 * ph) + 0.38 * 0.2601 * Math.sin(0.51 * ph + 1.1));
+  const py = B * (0.6 * Math.sin(0.19 * ph + 2.0) + 0.4 * Math.sin(0.43 * ph)) + cur.dip;
+  const vy = B * ag * (0.6 * 0.19 * Math.cos(0.19 * ph + 2.0) + 0.4 * 0.43 * Math.cos(0.43 * ph));
+  const fwd = Math.max(cur.speed, 5);
+  // 等你：原地繞小圈（世界座標）
   circleT += dt * 0.9 * circleW;
-  const cu = Math.cos(circleT) * 0.06 * circleW, cv = Math.sin(circleT) * 0.035 * circleW;
-  const wu = Math.sin(t * 0.37) * cur.weave * 4;
-  plane.position.copy(planeAt(PLANE.u + cu + wu, PLANE.v + cv + cur.dip, PLANE.d));
-  plane.position.y += cur.bob * Math.sin(t * 1.3);
-  const bank = PLANE.bank + 2 * Math.sin(t * 0.9) + Math.cos(t * 0.37) * cur.weave * 900 + Math.cos(circleT) * 28 * circleW;
-  plane.rotation.set(THREE.MathUtils.degToRad(PLANE.pitch + 4 * Math.cos(t * 1.3) * cur.bob), THREE.MathUtils.degToRad(-PLANE.yaw - Math.sin(circleT) * 25 * circleW), THREE.MathUtils.degToRad(-bank));
+  const ox = Math.cos(circleT) * 5 * circleW, oy = Math.sin(circleT) * 2.2 * circleW;
+  const bob = 0.25 * Math.sin(t * 1.3);
+  plane.position.set(PLANE_POS.x + px + ox, PLANE_POS.y + py + oy + bob, PLANE_POS.z);
+  const heading = THREE.MathUtils.radToDeg(Math.atan2(vx, fwd)) - Math.sin(circleT) * 30 * circleW;
+  const turn = THREE.MathUtils.clamp(ax * 40, -40, 40) + Math.cos(circleT) * 30 * circleW;   // 轉彎往內側傾
+  const bank = PLANE.bank + turn + 2 * Math.sin(t * 0.9);
+  const pitch = PLANE.pitch + THREE.MathUtils.radToDeg(Math.atan2(vy, fwd)) * 1.4 + 3 * Math.cos(t * 1.3);
+  plane.rotation.set(THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(-PLANE.yaw - heading), THREE.MathUtils.degToRad(-bank));
+  // 鏡頭：落後約 1 秒跟上飛機的橫移與升降，跟著轉彎側傾一點、偏頭一點
+  const kc = dt > 0 ? 1 - Math.exp(-dt / 1.1) : 1;
+  camLag.x += ((px + ox) * 0.75 - camLag.x) * kc;
+  camLag.y += ((py + oy) * 0.6 - camLag.y) * kc;
+  camLag.roll += (turn * 0.28 - camLag.roll) * kc;
+  camLag.yaw += (heading * 0.3 - camLag.yaw) * kc;
+  camera.position.set(CAM.x + camLag.x, CAM.y + camLag.y + 0.15 * Math.sin(t * 0.7), 0);
+  camera.rotation.set(THREE.MathUtils.degToRad(CAM.pitch), THREE.MathUtils.degToRad(-CAM.yaw - camLag.yaw), THREE.MathUtils.degToRad(CAM.roll - camLag.roll));
   draw();
 }
 function draw() {

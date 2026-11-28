@@ -49,25 +49,66 @@ export function buildSegment(i) {
         if (R() < 0.07) h *= 1.6;                    // 偶爾一棟地標
         const set = ri === 0 && R() < 0.5 ? r(1, 7) : 0;          // 第一排偶爾退縮，立面才不會像一道牆
         const cx = side.dir * (x0 + set + depth / 2), cz = z - bw / 2;
+        const face = side.dir * (x0 + set);                       // 面向主街的立面 x
+        const vis = ri === 0 || (ri === 1 && R() < 0.5);          // 看得到的才加細節（省實例）
+        // 裙樓：比塔身寬一點、往街凸出 1.5 m
+        if (vis && R() < 0.4) {
+          const ph = r(5, 9);
+          boxes.push({ x: cx - side.dir * 0.75, y: 0, z: cz, sx: depth + 1.5, sy: ph, sz: bw + 0.6, kind: 'body' });
+          boxes.push({ x: cx - side.dir * 0.75, y: ph, z: cz, sx: depth + 2.1, sy: 0.5, sz: bw + 1.2, kind: 'trim' });
+        }
         // 主體：可能分兩段退縮
         const split = R() < 0.55;
         const h1 = split ? h * r(0.45, 0.7) : h;
-        boxes.push({ x: cx, y: 0, z: cz, sx: depth, sy: h1, sz: bw, kind: 'body' });
+        const tiers = [{ x: cx, y: 0, z: cz, sx: depth, sy: h1, sz: bw }];
         if (split) {
           const k = r(0.6, 0.85);
-          boxes.push({ x: cx + side.dir * depth * (1 - k) * 0.3, y: h1, z: cz, sx: depth * k, sy: h - h1, sz: bw * r(0.6, 0.9), kind: 'body' });
+          tiers.push({ x: cx + side.dir * depth * (1 - k) * 0.3, y: h1, z: cz, sx: depth * k, sy: h - h1, sz: bw * r(0.6, 0.9) });
           if (R() < 0.35) {
             const t = r(0.35, 0.55);
-            boxes.push({ x: cx, y: h, z: cz, sx: depth * t, sy: h * r(0.12, 0.25), sz: bw * t, kind: 'body' });
+            tiers.push({ x: cx, y: h, z: cz, sx: depth * t, sy: h * r(0.12, 0.25), sz: bw * t });
           }
         }
-        // 屋頂機房、小盒子
-        const top = boxes[boxes.length - 1];
-        const roofY = top.y + top.sy;
-        const n = Math.floor(r(0, 3.5));
+        for (const b of tiers) {
+          boxes.push({ ...b, kind: 'body' });
+          // 簷口：每一段頂上一片略寬的薄板（紙板疊出來的厚邊）
+          if (vis) boxes.push({ x: b.x, y: b.y + b.sy, z: b.z, sx: b.sx + 0.9, sy: 0.55, sz: b.sz + 0.9, kind: 'trim' });
+        }
+        const base = tiers[0];
+        if (vis) {
+          const deco = R();
+          if (deco < 0.3) {
+            // 水平腰線：每 12–18 m 一條外凸薄板
+            const step = r(12, 18);
+            for (let y = step; y < base.sy - 4; y += step) boxes.push({ x: base.x, y, z: base.z, sx: base.sx + 0.6, sy: 0.35, sz: base.sz + 0.6, kind: 'trim' });
+          } else if (deco < 0.58) {
+            // 直向壁柱：面街立面上一排外凸的細柱
+            const n = Math.max(2, Math.floor(base.sz / r(3, 4.5)));
+            for (let k = 0; k <= n; k++) {
+              const zz = base.z - base.sz / 2 + (k / n) * base.sz;
+              boxes.push({ x: face - side.dir * 0.45, y: 0, z: zz, sx: 0.9, sy: base.sy, sz: 0.5, kind: 'trim' });
+            }
+          }
+        }
+        // 屋頂：女兒牆、水塔、機房
+        const top = tiers[tiers.length - 1];
+        const roofY = top.y + top.sy + (vis ? 0.55 : 0);
+        if (vis && R() < 0.7) {
+          const t = 0.3, hh = 1.1;
+          boxes.push({ x: top.x - top.sx / 2 + t / 2, y: roofY, z: top.z, sx: t, sy: hh, sz: top.sz, kind: 'trim' });
+          boxes.push({ x: top.x + top.sx / 2 - t / 2, y: roofY, z: top.z, sx: t, sy: hh, sz: top.sz, kind: 'trim' });
+          boxes.push({ x: top.x, y: roofY, z: top.z - top.sz / 2 + t / 2, sx: top.sx, sy: hh, sz: t, kind: 'trim' });
+          boxes.push({ x: top.x, y: roofY, z: top.z + top.sz / 2 - t / 2, sx: top.sx, sy: hh, sz: t, kind: 'trim' });
+        }
+        const n = Math.floor(r(0, vis ? 4.5 : 2.5));
         for (let k = 0; k < n; k++) {
           const s = r(2, 5);
           boxes.push({ x: top.x + r(-0.3, 0.3) * top.sx, y: roofY, z: top.z + r(-0.3, 0.3) * top.sz, sx: s, sy: r(1.5, 4), sz: s * r(0.8, 1.4), kind: 'roof' });
+        }
+        if (vis && R() < 0.3) {                                    // 水塔：四根腳＋桶身
+          const wx = top.x + r(-0.25, 0.25) * top.sx, wz = top.z + r(-0.25, 0.25) * top.sz;
+          for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) boxes.push({ x: wx + a * 1.1, y: roofY, z: wz + b * 1.1, sx: 0.25, sy: 2.5, sz: 0.25, kind: 'trim' });
+          boxes.push({ x: wx, y: roofY + 2.5, z: wz, sx: 3, sy: 3.2, sz: 3, kind: 'roof' });
         }
         // 偶爾一根天線
         if (R() < 0.12) boxes.push({ x: top.x, y: roofY, z: top.z, sx: 0.5, sy: r(10, 25), sz: 0.5, kind: 'roof' });
@@ -76,18 +117,38 @@ export function buildSegment(i) {
       x0 += depth + ROW_GAP;
     });
   }
-  // 空橋：約三成的段有一座
+  // 空橋：六成的段有一座 —— 桁架：底板、頂板、兩側直桿與斜撐
   if (R() < 0.6) {
-    const y = r(14, 38), z = -r(8, SEG - 8);
-    boxes.push({ x: 0, y, z, sx: STREET * 2, sy: 3.2, sz: 4.5, kind: 'bridge' });
+    const y = r(14, 38), z = -r(8, SEG - 8), L = STREET * 2, W = 4.5, H = 3.2;
+    boxes.push({ x: 0, y, z, sx: L, sy: 0.6, sz: W, kind: 'bridge' });
+    boxes.push({ x: 0, y: y + H - 0.5, z, sx: L, sy: 0.5, sz: W + 0.4, kind: 'bridge' });
+    for (const e of [-1, 1]) {
+      const zz = z + e * (W / 2 - 0.15);
+      boxes.push({ x: 0, y: y + 1.1, z: zz, sx: L, sy: 0.18, sz: 0.2, kind: 'trim' });       // 扶手
+      for (let x = -L / 2; x <= L / 2 + 0.01; x += 2.4) boxes.push({ x, y: y + 0.6, z: zz, sx: 0.22, sy: H - 1.1, sz: 0.22, kind: 'trim' });
+    }
   }
-  // 高架單軌：每 3 m 一節軌道梁，每 30 m 一根柱
+  // 高架單軌：每 3 m 一節軌道梁，每 30 m 一根 T 形柱
   const d0 = i * SEG;
   for (let s = 0; s < SEG; s += 3) {
     const xa = railX(d0 + s), xb = railX(d0 + s + 3);
     const len = Math.hypot(xb - xa, 3);
-    boxes.push({ x: (xa + xb) / 2, y: RAIL_Y, z: -s - 1.5, sx: 2.6, sy: 1.6, sz: len + 0.05, kind: 'rail', yaw: Math.atan2(xb - xa, 3) });
-    if (((d0 + s) % 30) < 3) boxes.push({ x: xa, y: 0, z: -s - 1.5, sx: 1.6, sy: RAIL_Y, sz: 1.6, kind: 'rail' });
+    // 盒子的 z 軸轉 θ 後是 (sinθ, cosθ)；梁沿 (xb−xa, −3)，所以 θ = atan2(−(xb−xa), 3)
+    const yaw = Math.atan2(-(xb - xa), 3);
+    boxes.push({ x: (xa + xb) / 2, y: RAIL_Y, z: -s - 1.5, sx: 2.2, sy: 1.5, sz: len + 0.05, kind: 'rail', yaw });
+    boxes.push({ x: (xa + xb) / 2, y: RAIL_Y + 1.5, z: -s - 1.5, sx: 0.7, sy: 0.35, sz: len + 0.05, kind: 'trim', yaw });
+    if (((d0 + s) % 30) < 3) {
+      boxes.push({ x: xa, y: 0, z: -s - 1.5, sx: 1.5, sy: RAIL_Y - 1.2, sz: 1.5, kind: 'rail' });
+      boxes.push({ x: xa, y: RAIL_Y - 1.2, z: -s - 1.5, sx: 4.2, sy: 1.2, sz: 2, kind: 'rail' });
+    }
+  }
+  // 路燈：兩側人行道每 20 m 一支（桿＋往街心伸的臂）
+  for (const dir of [-1, 1]) {
+    for (let s = (d0 % 20 === 0 ? 0 : 20 - (d0 % 20)); s < SEG; s += 20) {
+      const x = dir * (STREET - 1.2);
+      boxes.push({ x, y: 0, z: -s, sx: 0.25, sy: 7.5, sz: 0.25, kind: 'trim' });
+      boxes.push({ x: x - dir * 1.2, y: 7.3, z: -s, sx: 2.4, sy: 0.2, sz: 0.3, kind: 'trim' });
+    }
   }
   return boxes;
 }

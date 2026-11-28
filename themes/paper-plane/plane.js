@@ -8,6 +8,9 @@ export function makePaperPlane(material) {
   const tri = [
     N, L, T, N, T, Rr,                 // 左右主翼
     KN, T, K, N, T, KN,                // 龍骨（兩片貼合，DoubleSide 會看到兩面）
+    // 翼尖往上摺的小立片（winglet）
+    L, [-0.6, 0.2, 0.42], [-0.52, 0.065, 0.2],
+    Rr, [0.52, 0.065, 0.2], [0.6, 0.2, 0.42],
   ];
   const pos = new Float32Array(tri.flat());
   const g = new THREE.BufferGeometry();

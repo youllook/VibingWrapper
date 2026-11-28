@@ -115,7 +115,7 @@ export function makePlaneMaterial() {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n vP = position;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>\n varying vec3 vP; ${NOISE}`)
-      .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= 1. + fiber(vP * 4.) * 1.2;');
+      .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= (1. + fiber(vP * 4.) * 1.2) * (1. - .22 * (1. - smoothstep(.004, .02, abs(vP.x))));');   // 中線摺痕
   };
   return m;
 }
