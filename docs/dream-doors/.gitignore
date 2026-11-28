@@ -1,0 +1,10 @@
+# 大檔不進 git（公開 repo）；備份在 E:\tmp\dream-doors-archive\_codex\
+# 保留：target.png、_codex/layers/L*.png（check.js 驗收要用）、Tripo 輸入圖的 JPG 版
+# 門板／世界／櫻花原圖已轉 WebP 放 themes/dream-doors/tex/
+_codex/doors/*.png
+_codex/girl/*.png
+_codex/worlds/*.png
+_codex/*/target.png
+_codex/**/*.log
+_codex/**/.done
+shots/
