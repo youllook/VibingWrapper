@@ -16,7 +16,7 @@ const CAM = {
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: Q.has('shot') });
-renderer.setPixelRatio(num('pr', 0.6));                       // 規格：半解析度
+renderer.setPixelRatio(num('pr', 0.75));                      // 0.6 太糊、板縫會糊掉；0.75 仍省一半像素
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = num('shadow', 1) > 0;
 renderer.shadowMap.type = THREE.PCFShadowMap;            // PCF 才吃 radius（軟邊）
@@ -65,7 +65,8 @@ const near = new Strip(scene, cityMat, { cap: 1600, build: buildSegment, len: SE
 const far = new Strip(scene, cityMat, { cap: 200, build: buildFarSegment, len: FAR_SEG, behind: 300, ahead: 2400 });
 far.slots.forEach((sl) => { sl.mesh.castShadow = false; });
 // g：本體＝(樣式+0.5)/4（小數 .5）；配件＝0.55（樣式 2 素面、小數 .2，shader 靠小數分辨）；遠景＝細溝本體
-const STYLE = { roof: 0.55, trim: 0.55, bridge: 0.55, rail: 0.55, far: 0.875 };
+// unit＝1.2/4（百葉機房）、beam＝3.2/4（單軌梁接縫）
+const STYLE = { roof: 0.55, trim: 0.55, bridge: 0.55, rail: 0.55, unit: 0.3, beam: 0.8, far: 0.875 };
 const colorOf = (b, c) => {
   // r＝紙色深淺、g＝立面樣式（0 溝槽／1 窗帶／2 格子／3 素面）、b＝種子；同一棟樓同一組參數
   const h = Math.abs(Math.sin(b.x * 12.9898 + b.z * 78.233) * 43758.5453) % 1;
@@ -106,7 +107,7 @@ addEventListener('resize', resize); resize();
 // speed m/s、fog 霧密度、sun 日光、sunC 日光色、hazeC 霧／地平線色、topC 天頂色、mb 快門（秒）
 // 飛行：amp 左右穿梭幅度 m、alt 升降幅度 m、ag 靈活度（節奏快慢）、dip 高度偏移 m、circle 盤旋（等你）
 const STATES = {
-  idle:      { speed: 14, fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f3f2f5', topC: '#e8e8ee', mb: 0.03, amp: 5, alt: 3,   ag: 1.0, dip: 0,    circle: 0 },
+  idle:      { speed: 14, fog: 0.0016, sun: 2.8, sunC: '#fffaf3', hazeC: '#f3f2f5', topC: '#e8e8ee', mb: 0.02, amp: 5, alt: 3,   ag: 1.0, dip: 0,    circle: 0 },
   thinking:  { speed: 7,  fog: 0.0042, sun: 2.1, sunC: '#ffebd2', hazeC: '#f2ece3', topC: '#ece8e2', mb: 0.02, amp: 3, alt: 2,   ag: 0.6, dip: 1,    circle: 0 },
   working:   { speed: 38, fog: 0.0013, sun: 2.9, sunC: '#fff6ea', hazeC: '#eff0f0', topC: '#e2e7ee', mb: 0.05, amp: 8, alt: 4.5, ag: 1.8, dip: -3,   circle: 0 },
   finishing: { speed: 10, fog: 0.0011, sun: 2.8, sunC: '#ffe6c8', hazeC: '#f4ece2', topC: '#e9e6e6', mb: 0.025, amp: 4, alt: 3,   ag: 0.9, dip: 4,    circle: 0 },

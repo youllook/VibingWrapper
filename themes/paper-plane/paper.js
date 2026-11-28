@@ -77,11 +77,32 @@ export function makeCityMaterial() {
             float f = abs(fract(hz / P) - .5);
             shade -= .07 * smoothstep(.44, .47, f) * step(1.2, edge);
           }
+          // 立面板縫：每層 3.6 m 一條橫縫、約 4 m 一條直縫（凹槽裡不畫）；fwidth 抗鋸齒，遠處自然淡掉
+          if (style < 2.5) {
+            float pw = faceW / max(1., floor(faceW / 4. + .5));
+            float dv = abs(fract(um / pw + .5) - .5) * pw, dh = abs(fract(yb / 3.6) - .5) * 3.6;
+            float aa = fwidth(um) + fwidth(yb);
+            float seam = max(1. - smoothstep(.04, .04 + aa, dv), 1. - smoothstep(.04, .04 + aa, dh));
+            seam *= step(.6, edge) * step(1., yb) * step(.9, yt) * (1. - slot) * (1. - smoothstep(.5, 2.5, aa * 4.));
+            shade -= .075 * seam;
+          }
+          // 簷口下的接觸陰影：立面最上方 1 m 漸暗
+          shade -= .08 * (1. - smoothstep(0., 1., yt));
+        }
+        if (side > .5 && !body && style > .5 && style < 1.5 && yb > .25 && yt > .25 && edge > .25) {
+          // 機房百葉：等距橫條，條下一道暗縫
+          float lv = fract(yb / .32);
+          shade -= .13 * step(.62, lv) + .05;
+        }
+        if (!body && style > 2.5) {
+          // 單軌梁：每節兩端一條接縫
+          float jz = (.5 - abs(vUnit.z)) * vScl.z;
+          shade -= .14 * (1. - smoothstep(.03, .09, jz));
         }
         // 倒角亮邊：立面左右邊緣一條細亮線（紙板摺角吃光）
         shade += .045 * side * (1. - smoothstep(.05, .22, edge));
-        // 切口亮邊：立面頂端一條薄薄的亮線（紙板切口吃光）
-        shade += .05 * side * (1. - smoothstep(.06, .2, yt));
+        // 切口亮邊：配件（簷口、女兒牆）頂端一條薄薄的亮線；本體頂端被簷口蓋住，改由上面的接觸陰影處理
+        shade += (body ? .02 : .07) * side * (1. - smoothstep(.04, .14, yt));
         // 盒子接地／接上一層的暗化＋街谷底部偏暗（假 AO）
         float ao = mix(.80, 1., smoothstep(0., 3.5, yb));                     // 接地／接上一層
         // 街谷：越低越暗（紙模的深巷吃不到天光），只算立面，屋頂不受影響
@@ -120,6 +141,16 @@ export function makeGroundMaterial(street) {
         s -= .06 * (1. - smoothstep(.0, .25, abs(ax - ${(street - 4.5).toFixed(1)})));                 // 人行道邊
         float dash = step(.5, fract(d / 9.)) * (1. - smoothstep(.08, .2, abs(ax - 6.)));
         s -= .05 * dash;
+        float sw = ${(street - 4.5).toFixed(1)};
+        float aa = fwidth(d) + fwidth(vW.x);
+        // 人行道分縫：每 3 m 一條橫縫
+        s -= .05 * step(sw, ax) * step(ax, ${street.toFixed(1)}) * (1. - smoothstep(.03, .03 + aa, abs(fract(d / 3.) - .5) * 3.));
+        // 車道分縫：每 12 m 一條
+        s -= .035 * step(ax, sw) * (1. - smoothstep(.04, .04 + aa, abs(fract(d / 12.) - .5) * 12.));
+        // 排水格柵：路緣內側每 15 m 一塊 0.5×1 m，內有細條
+        float gz = abs(fract(d / 15.) - .5) * 15., gx = abs(ax - (sw - .45));
+        float grate = step(gz, .5) * step(gx, .25);
+        s -= grate * (.08 + .07 * step(.5, fract(d / .12)));
         s *= mix(.70, 1., smoothstep(0., 7., ${street.toFixed(1)} - ax)) * mix(uCanyon + .16, uCanyon + .04, step(${street.toFixed(1)}, ax)); // 靠牆腳偏暗（假 AO）；街底整片偏灰、巷子更暗
         diffuseColor.rgb *= s * (1. + fiber(p));
       `);
@@ -136,7 +167,7 @@ export function makePlaneMaterial() {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n vP = position;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>\n varying vec3 vP; ${NOISE}`)
-      .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= (1. + fiber(vP * 4.) * 1.2) * (1. - .22 * (1. - smoothstep(.004, .02, abs(vP.x))));');   // 中線摺痕
+      .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= (1. + fiber(vP * 4.) * 1.2 + (vnoise(vP * 90.) - .5) * .05) * (1. - .22 * (1. - smoothstep(.004, .02, abs(vP.x))));');   // 中線摺痕
   };
   return m;
 }

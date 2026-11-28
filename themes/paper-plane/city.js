@@ -90,7 +90,11 @@ export function buildSegment(i) {
         for (const b of tiers) {
           boxes.push({ ...b, kind: 'body', style, seed });
           // 簷口：每一段頂上一片略寬的薄板（紙板疊出來的厚邊）
-          if (vis || tower) boxes.push({ x: b.x, y: b.y + b.sy, z: b.z, sx: b.sx + 0.9, sy: 0.55, sz: b.sz + 0.9, kind: 'trim' });
+          if (vis || tower) {
+            // 簷口加厚成兩層紙板：下層薄、上層寬（對 Codex 細節版）
+            boxes.push({ x: b.x, y: b.y + b.sy, z: b.z, sx: b.sx + 0.5, sy: 0.3, sz: b.sz + 0.5, kind: 'trim' });
+            boxes.push({ x: b.x, y: b.y + b.sy + 0.3, z: b.z, sx: b.sx + 1.0, sy: 0.5, sz: b.sz + 1.0, kind: 'trim' });
+          }
         }
         const base = tiers[0];
         if (vis) {
@@ -110,7 +114,7 @@ export function buildSegment(i) {
         }
         // 屋頂：女兒牆、水塔、機房
         const top = tiers[tiers.length - 1];
-        const roofY = top.y + top.sy + (vis ? 0.55 : 0);
+        const roofY = top.y + top.sy + (vis || tower ? 0.8 : 0);
         if (vis && R() < 0.7) {
           const t = 0.3, hh = 1.1;
           boxes.push({ x: top.x - top.sx / 2 + t / 2, y: roofY, z: top.z, sx: t, sy: hh, sz: top.sz, kind: 'trim' });
@@ -120,8 +124,10 @@ export function buildSegment(i) {
         }
         const n = Math.floor(r(0, vis ? 4.5 : 2.5));
         for (let k = 0; k < n; k++) {
-          const s = r(2, 5);
-          boxes.push({ x: top.x + r(-0.3, 0.3) * top.sx, y: roofY, z: top.z + r(-0.3, 0.3) * top.sz, sx: s, sy: r(1.5, 4), sz: s * r(0.8, 1.4), kind: 'roof' });
+          // 機房／通風機：底座一片略寬的薄板，盒子本身用 'unit'（shader 刻百葉）
+          const s = r(2, 5), ux = top.x + r(-0.3, 0.3) * top.sx, uz = top.z + r(-0.3, 0.3) * top.sz, uzs = s * r(0.8, 1.4);
+          if (vis) boxes.push({ x: ux, y: roofY, z: uz, sx: s + 0.6, sy: 0.3, sz: uzs + 0.6, kind: 'trim' });
+          boxes.push({ x: ux, y: roofY + (vis ? 0.3 : 0), z: uz, sx: s, sy: r(1.5, 4), sz: uzs, kind: 'unit' });
         }
         if (vis && R() < 0.3) {                                    // 水塔：四根腳＋桶身
           const wx = top.x + r(-0.25, 0.25) * top.sx, wz = top.z + r(-0.25, 0.25) * top.sz;
@@ -159,7 +165,7 @@ export function buildSegment(i) {
     const len = Math.hypot(xb - xa, 3);
     // 盒子的 z 軸轉 θ 後是 (sinθ, cosθ)；梁沿 (xb−xa, −3)，所以 θ = atan2(−(xb−xa), 3)
     const yaw = Math.atan2(-(xb - xa), 3), xm = (xa + xb) / 2, zm = -s - 1.5;
-    boxes.push({ x: xm, y: RAIL_Y, z: zm, sx: 3.4, sy: 1.5, sz: len + 0.05, kind: 'rail', yaw });
+    boxes.push({ x: xm, y: RAIL_Y, z: zm, sx: 3.4, sy: 1.5, sz: len + 0.05, kind: 'beam', yaw });   // 'beam'：shader 在兩端刻接縫
     const cx = Math.cos(yaw), sz2 = -Math.sin(yaw);       // 梁的橫向（局部 x 軸）在世界的方向
     for (const e of [-1, 1]) boxes.push({ x: xm + e * 1.55 * cx, y: RAIL_Y + 1.5, z: zm + e * 1.55 * sz2, sx: 0.3, sy: 0.45, sz: len + 0.05, kind: 'trim', yaw });
     if (((d0 + s) % 30) < 3) {

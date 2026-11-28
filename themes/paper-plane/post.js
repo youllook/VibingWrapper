@@ -12,7 +12,7 @@ export function makeMotionBlur(renderer, camera) {
     uniforms: {
       tColor: { value: rt.texture }, tDepth: { value: rt.depthTexture },
       uProjInv: { value: new THREE.Matrix4() }, uViewInv: { value: new THREE.Matrix4() }, uPV: { value: new THREE.Matrix4() },
-      uDz: { value: 0 }, uMaxPx: { value: 28 }, uRes: { value: size.clone() },
+      uDz: { value: 0 }, uMaxPx: { value: 20 }, uRes: { value: size.clone() },
     },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }',
     fragmentShader: /* glsl */`
