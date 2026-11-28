@@ -18,7 +18,7 @@
 | 檔 | 來源 |
 |---|---|
 | `models/frame_wood.glb`、`frame_iron.glb` | Tripo 生成（專業版，可商用）→ glbprep |
-| `models/girl.glb` | Tripo 生成＋自動綁定（Mixamo 骨架），動作是 Tripo 內建的 walk（原地走）＋ Mixamo「Jogging」原地版烘成的 jog（執行中小跑，2026-11-29；`E:/tmp/dream-doors-mixamo/bake_jog.py`，Mixamo 原檔不能單獨散佈）。長裙權重用 `E:/tmp/dream-doors/skirt_fix.mjs` 抹平過 |
+| `models/girl.glb` | Tripo 生成＋自動綁定（Mixamo 骨架），動作是 Tripo 內建的 walk（原地走）＋ Mixamo「Jogging」原地版烘成的 jog（執行中小跑，2026-11-29；`E:/tmp/dream-doors-mixamo/bake_jog.py`，左手臂往外張 0.35 rad 避開側背包；Mixamo 原檔不能單獨散佈）。小跑穿模修正 `E:/tmp/dream-doors-mixamo/weightfix.mjs`：側背包只跟骨盆、左手旁的裙子補抹平。重新匯出女孩要依序跑 skirt_fix → bake_jog → glbprep → weightfix。長裙權重用 `E:/tmp/dream-doors/skirt_fix.mjs` 抹平過 |
 | `tex/leaf_*.webp`、`world_*.webp`（含雲海世界 `world_clouds.webp`） | Codex 生圖（門板、門後世界全景）；`sakura_branch.webp` 目前沒用到 |
 | 石板、天空、雲海 | 程式生成（canvas／shader） |
 
