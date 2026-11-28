@@ -17,7 +17,7 @@ const P = {
   ow: num('ow', 3.25), ph: num('ph', 3.2), post: num('post', 0.3), beam: num('beam', 0.36), over: num('over', 0.35),
   z1: num('z1', 6.05), sp: num('sp', 10.4), n: 18,
   open: num('open', 80),                                    // 第一扇門的開門角度（往遠處開）
-  wl: num('wl', -2.5), wr: num('wr', 2.5), nearR: num('nearr', 6.6), nearZ: num('nearz', 2.2), // 步道兩緣；近處右側平台
+  wl: num('wl', -2.15), wr: num('wr', 2.15), nearR: num('nearr', 6.6), nearZ: num('nearz', 2.2), // 步道兩緣；近處右側平台
   gx: num('gx', -0.79), gz: num('gz', 4.78), gh: num('gh', 1.5),
 };
 
@@ -380,6 +380,13 @@ function litMat() {                                                  // 門縫�
 }
 // 給門用的狀態：夜、時鐘、她面前那扇關著的門（第幾扇）與門縫光亮度、等你
 const AT = { night: 0, clock: 0, gate: -1, gateGlow: 0, wait: 0 };
+const FOOT_X = P.ow / 2 + 0.455, FOOT_Y = -0.4 + 0.53 / 2;         // 石墩內緣貼齊門柱內緣（不擋門板），外緣到 ±2.53，包住約 ±2.35 的門柱外緣
+const FOOT_G = new THREE.BoxGeometry(0.9, 0.53, 0.66);             // 寬 90 cm、深 66 cm、頂面比步道高 13 cm、底與步道底齊
+M.foot = IDS ? M.walk : (() => {                                     // 沿用步道石板貼圖，只取一小塊（一面約一塊石頭），比步道略暗
+  const cut = (t) => { const c = t.clone(); c.repeat.set(0.28, 0.17); c.offset.set(0.31, 0.27); c.needsUpdate = true; return c; };
+  const w = WALK.mat;
+  return new THREE.MeshStandardMaterial({ map: cut(w.map), normalMap: cut(w.normalMap), roughnessMap: cut(w.roughnessMap), roughness: 1, color: '#cfc7bd' });
+})();
 function makeDoor() {
   const g = new THREE.Group(), half = P.ow / 2;
   const box = new THREE.Group();                                  // 模型載入前的方塊門框
@@ -387,6 +394,8 @@ function makeDoor() {
   for (const s of [-1, 1]) { const m = new THREE.Mesh(post, M.frame); m.position.set(s * (half + P.post / 2), P.ph / 2, 0); m.castShadow = true; box.add(m); }
   const beam = new THREE.Mesh(new THREE.BoxGeometry(P.ow + 2 * P.post + 2 * P.over, P.beam, P.post * 1.3), M.frame);
   beam.position.y = P.ph + P.beam / 2; box.add(beam); g.add(box); g.userData.frame = box;
+  // 門柱底座：石墩比門柱寬、伸出步道邊緣，門柱外緣才不會懸在雲上（步道維持擺景驗收的寬度）
+  for (const s of [-1, 1]) { const f = new THREE.Mesh(FOOT_G, M.foot); f.position.set(s * FOOT_X, FOOT_Y, 0); f.castShadow = f.receiveShadow = true; g.add(f); }
   g.userData.leaves = [-1, 1].map((s) => {
     const pivot = new THREE.Group(); pivot.position.set(s * half, 0, 0);
     const m = new THREE.Mesh(leafG, M.leaf); m.position.set(-s * (LW / 2 - TUCK), LH / 2, 0); m.castShadow = true; pivot.add(m); g.add(pivot);
