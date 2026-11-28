@@ -3,6 +3,8 @@
 // 網址參數：?freeze=1（停住、門照目標圖擺）&ids=1（分層遮罩）&ref=0.5（疊目標圖）；擺景參數見 P。
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { TILE, walkMaterial, worldUV, LEAVES, leafMaterial } from './materials.js';
+import { createPost } from './post.js';
 
 const Q = new URLSearchParams(location.search);
 const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
@@ -53,34 +55,8 @@ const M = {
 };
 
 // ── 步道：一條長板＋近處右側平台（目標圖右下的步道比門框寬）。石板貼圖用世界座標 UV，走路時捲動 offset ──
-const TILE = 3.2;                                                  // 貼圖一張＝4×4 塊 0.8 m 石板
-function stoneTex() {
-  const S = 1024, N = 4, cs = S / N, c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
-  let seed = 11; const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  g.fillStyle = '#a0968a'; g.fillRect(0, 0, S, S);                 // 石縫
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const x = (i * cs + (j % 2) * cs / 2) % S, y = j * cs, v = 196 + r() * 34, w = r() * 8 - 4;
-    for (const xx of [x, x - S]) {
-      g.fillStyle = `rgb(${v + 10 | 0},${v + 3 + w | 0},${v - 8 + w | 0})`; g.fillRect(xx + 3, y + 3, cs - 6, cs - 6);
-      const gr = g.createLinearGradient(xx, y, xx + cs, y + cs); gr.addColorStop(0, 'rgba(255,250,240,0.10)'); gr.addColorStop(1, 'rgba(40,30,20,0.10)');
-      g.fillStyle = gr; g.fillRect(xx + 3, y + 3, cs - 6, cs - 6);
-    }
-  }
-  for (let k = 0; k < 60; k++) { g.fillStyle = `rgba(70,60,50,${0.015 + r() * 0.025})`; g.beginPath(); g.ellipse(r() * S, r() * S, 30 + r() * 90, 20 + r() * 60, r() * 3, 0, 7); g.fill(); }
-  const id = g.getImageData(0, 0, S, S), d = id.data; for (let k = 0; k < d.length; k += 4) { const n = (r() - 0.5) * 16; d[k] += n; d[k + 1] += n; d[k + 2] += n; }
-  g.putImageData(id, 0, 0);
-  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
-}
-function worldUV(geo) {                                             // 網格放原點，頂點座標＝世界座標
-  const p = geo.attributes.position, n = geo.attributes.normal, uv = new Float32Array(p.count * 2);
-  for (let i = 0; i < p.count; i++) {
-    const x = p.getX(i), y = p.getY(i), z = p.getZ(i), ny = Math.abs(n.getY(i)), nx = Math.abs(n.getX(i));
-    if (ny > 0.5) { uv[i * 2] = x / TILE; uv[i * 2 + 1] = -z / TILE; } else if (nx > 0.5) { uv[i * 2] = -z / TILE; uv[i * 2 + 1] = y / TILE; } else { uv[i * 2] = x / TILE; uv[i * 2 + 1] = y / TILE; }
-  }
-  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); return geo;
-}
-const stone = IDS ? null : stoneTex();
-const walkTop = IDS ? M.walk : new THREE.MeshStandardMaterial({ map: stone, roughness: 0.42, metalness: 0 });
+const WALK = IDS ? null : walkMaterial();                          // 石板顏色＋法線＋粗糙度（materials.js）
+const walkTop = IDS ? M.walk : WALK.mat;
 const walkSide = IDS ? M.walk : new THREE.MeshLambertMaterial({ color: '#9c9389' });
 // 步道頂面再加兩層：陽光的斑駁（只乘在太陽光上，跟步道一起捲）、夜裡兩側小燈照出的光暈
 const LAMP_SP = 2.6;
@@ -94,11 +70,20 @@ if (!IDS) walkTop.onBeforeCompile = (s) => {
     float ch(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
     float cn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
       return mix(mix(ch(i), ch(i+vec2(1,0)), f.x), mix(ch(i+vec2(0,1)), ch(i+1.), f.x), f.y); }`)
+    // 大尺度色差（幾十公尺一個起伏），打散 3.2 m 的貼圖重複
+    .replace('#include <map_fragment>', `#include <map_fragment>
+    vec2 mp = vec2(vWp.x, vWp.z - uScroll);
+    diffuseColor.rgb *= .9 + .2 * (cn(mp * .045) * .65 + cn(mp * .17 + 3.) * .35);`)
+    // 走道中線被踩亮（粗糙度降低），兩側邊緣較霧
+    .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+    roughnessFactor *= mix(.62, 1.08, smoothstep(.35, 1.9, abs(vWp.x + .1)));`)
     .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
     vec2 cp = vec2(vWp.x + vWp.z * .22, vWp.z - uScroll);          // 斜向拉長的光斑（光從右後方斜射）
     float ck = cn(cp * vec2(1.1, .32)) * .62 + cn(cp * vec2(2.6, .9) + 7.) * .38;
-    float cookie = mix(.38, 1.3, smoothstep(.34, .66, ck));
-    reflectedLight.directDiffuse *= cookie; reflectedLight.directSpecular *= cookie;
+    float cookie = mix(.42, 1.3, smoothstep(.36, .64, ck));
+    float pink = smoothstep(.62, .82, cn(cp * vec2(.7, .22) + 11.)) * smoothstep(.9, 1.2, cookie);
+    vec3 tint = mix(vec3(1.1, .96, .8), vec3(1.15, .72, .95), pink * 1.2);
+    reflectedLight.directDiffuse *= cookie * tint; reflectedLight.directSpecular *= cookie * tint;
     float lz = mod(vWp.z - uScroll, ${LAMP_SP.toFixed(1)}) - ${(LAMP_SP / 2).toFixed(1)};
     float pool = exp(-(pow(vWp.x - uLampX.x, 2.) * 2.2 + lz * lz * 1.6)) + exp(-(pow(vWp.x - uLampX.y, 2.) * 2.2 + lz * lz * 1.6));
     reflectedLight.directDiffuse += vec3(1., .66, .36) * pool * uNight * 1.4 * diffuseColor.rgb;`);
@@ -128,10 +113,12 @@ const WORLDS = [ // 全景地平線在圖中的高度（由上往下比例）、
   { n: 'snow', hor: 0.46, c: '#e6eeff' }, { n: 'wheat', hor: 0.53, c: '#ffc46a' },
 ];
 const WORLD_C = ['#ffe8cc', ...WORLDS.map((w) => w.c)].map((c) => new THREE.Color(c));
+const PANOS = [...WORLDS.map((w) => w.n), 'clouds'];                // 圖集各列；最後一列＝雲海世界（2026-11-28 Codex 畫，比程式畫的雲更像畫）
+const SKY_PROC = Q.get('sky') === 'proc';                         // ?sky=proc：雲海世界改回程式畫的天空與雲海
 const ATLAS = IDS ? null : (() => {
-  const W = 2048, H = 878, c = document.createElement('canvas'); c.width = W; c.height = H * WORLDS.length;
+  const W = 2048, H = 878, c = document.createElement('canvas'); c.width = W; c.height = H * PANOS.length;
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.NoColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; // 天空 shader 直接輸出 sRGB
-  WORLDS.forEach((w, r) => { const im = new Image(); im.onload = () => { c.getContext('2d').drawImage(im, 0, r * H, W, H); t.needsUpdate = true; }; im.src = `tex/world_${w.n}.webp`; });
+  PANOS.forEach((n, r) => { const im = new Image(); im.onload = () => { c.getContext('2d').drawImage(im, 0, r * H, W, H); t.needsUpdate = true; }; im.src = `tex/world_${n}.webp`; });
   return t;
 })();
 // 每個世界的光：太陽色、太陽強度倍率、天光、地面反光、天光強度、霧色、nn＝本身就是夜景（不再套夜色）
@@ -143,19 +130,28 @@ const PAL = [
   { sun: '#fff4ea', k: 0.95, sky: '#e6eeff', gnd: '#e0e6f0', h: 1.9,  fog: '#e4ecf6', nn: 0 }, // 雪地
   { sun: '#ffb860', k: 1.1,  sky: '#ffe2bc', gnd: '#d8b080', h: 1.7,  fog: '#f4d6a8', nn: 0 }, // 麥田
 ].map((q) => ({ ...q, sun: new THREE.Color(q.sun), sky: new THREE.Color(q.sky), gnd: new THREE.Color(q.gnd), fog: new THREE.Color(q.fog) }));
-const ENV = { cur: 0, next: 0, blend: 0 };                         // 鏡頭所在的世界、前方下一個世界、光線過渡比例
+const ENV = { cur: 0, next: 0, blend: 0 };
+// 每個世界的全景轉成環境貼圖（PMREM），石板、門框、門板、女孩的反光與環境光跟著世界走；世界 0 用雲海全景
+const ENVMAP = [];
+if (!IDS && Q.get('envmap') !== '0') {
+  const pm = new THREE.PMREMGenerator(renderer), ldr = new THREE.TextureLoader();
+  ['clouds', ...WORLDS.map((w) => w.n)].forEach((n, i) => ldr.load(`tex/world_${n}.webp`, (t) => {
+    t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace;
+    ENVMAP[i] = pm.fromEquirectangular(t).texture; t.dispose();
+  }));
+}                         // 鏡頭所在的世界、前方下一個世界、光線過渡比例
 
 // ── 天空＋雲海：一顆跟著鏡頭的球，shader 算漸層天空、高空薄雲、腳下雲海（雲海用世界座標捲動，跟步道同速）──
 const SUN = new THREE.Vector3(0.14, 0.06, -1).normalize();            // 天空裡的太陽：走道盡頭偏右、貼著地平線
 const skyU = { uT: { value: 0 }, uScroll: { value: 0 }, uSun: { value: SUN }, uNight: { value: 0 }, uGold: { value: 0 },
   uAtlas: { value: ATLAS }, uEnv0: { value: 0 }, uCam: { value: camera.position }, uDN: { value: 0 },
   uDZ: { value: new Float32Array(8) }, uDW: { value: new Float32Array(8).fill(-1) },
-  uHor: { value: WORLDS.map((w) => w.hor) }, uNN: { value: PAL.map((q) => q.nn) } };
+  uHor: { value: [...WORLDS.map((w) => w.hor), 0.51] }, uNN: { value: PAL.map((q) => q.nn) } };
 if (!IDS) {
   const m = new THREE.ShaderMaterial({ uniforms: skyU, side: THREE.BackSide, depthWrite: false,
     vertexShader: `varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
     fragmentShader: `varying vec3 vDir; uniform float uT, uScroll, uNight, uGold; uniform vec3 uSun;
-      uniform sampler2D uAtlas; uniform float uEnv0, uDN; uniform vec3 uCam; uniform float uDZ[8]; uniform float uDW[8]; uniform float uHor[5]; uniform float uNN[6];
+      uniform sampler2D uAtlas; uniform float uEnv0, uDN; uniform vec3 uCam; uniform float uDZ[8]; uniform float uDW[8]; uniform float uHor[6]; uniform float uNN[6];
       float h(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
       float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
         return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+1.), f.x), f.y); }
@@ -168,18 +164,23 @@ if (!IDS) {
       }
       vec3 cloudWorld(vec3 d){                                      // 世界 0：天空＋雲海
         float sd = max(dot(d, uSun), 0.);
-        vec3 zen = mix(vec3(.26,.50,.90), vec3(.03,.06,.17), uNight);
-        vec3 hor = mix(mix(vec3(1.,.89,.80), vec3(1.,.76,.52), uGold), vec3(.15,.18,.33), uNight);
-        vec3 col = mix(hor, zen, pow(clamp(d.y,0.,1.), .5));
-        col += mix(vec3(1.,.80,.56), vec3(1.,.62,.32), uGold) * (pow(sd, 6.) * .4 + pow(sd, 90.) * .9) * (1. - uNight);
+        vec3 zen = mix(vec3(.17,.40,.86), vec3(.03,.06,.17), uNight);             // 天頂：飽和的藍（目標圖）
+        vec3 hor = mix(mix(vec3(1.,.85,.72), vec3(1.,.72,.48), uGold), vec3(.15,.18,.33), uNight); // 地平線：暖桃色
+        vec3 col = mix(hor, zen, pow(clamp(d.y,0.,1.), .38));
+        col += mix(vec3(1.,.80,.56), vec3(1.,.62,.32), uGold) * (pow(sd, 10.) * .35 + pow(sd, 120.) * 1.6) * (1. - uNight);
         vec3 MD = normalize(vec3(.42,.26,-1.)); float md = max(dot(d, MD), 0.);   // 夜：月亮＋星星
         col += vec3(.80,.86,1.) * (smoothstep(.99955, .99975, md) * 1.1 + pow(md, 90.) * .22) * uNight;
         if (d.y > 0.) col += vec3(.85,.9,1.) * step(.997, h(floor(d.xz / (d.y + .25) * 260.))) * uNight * smoothstep(.05, .3, d.y);
-        if (d.y > 0.) {
-          vec2 p = d.xz / (d.y + .12) * 1.1 + vec2(uT*.003, 0.);
-          float c = smoothstep(.52, .86, fbm(p));
-          vec3 cl = mix(mix(vec3(1.,.97,.94), vec3(1.,.82,.62), pow(sd,2.) + uGold * .5), vec3(.22,.26,.40), uNight);
-          col = mix(col, cl, c * .8 * smoothstep(0., .1, d.y));
+        if (d.y > 0.) {                                             // 積雲：一團團、迎光面金邊、背光面藍灰
+          vec2 p = d.xz / (d.y + .10) * .9 + vec2(uT*.003, 0.);
+          float raw = fbm(p) * .7 + fbm(p * .35 + 4.) * .5;
+          float c = smoothstep(.58, .82, raw);
+          float l2 = fbm(p + uSun.xz * .12) * .7 + fbm((p + uSun.xz * .12) * .35 + 4.) * .5;
+          float lit = clamp(.55 + (raw - l2) * 3.5, 0., 1.);
+          vec3 cl = mix(vec3(.66,.70,.86), vec3(1.,.98,.95), lit);
+          cl += vec3(1.,.72,.42) * (pow(sd, 3.) * .55 + uGold * .35) * lit;
+          cl = mix(cl, vec3(.22,.26,.40) * (.6 + .4 * lit), uNight);
+          col = mix(col, cl, c * .92 * smoothstep(.0, .07, d.y) * (1. - smoothstep(.55, .9, d.y) * .5));
         }
         // 雲海：鏡頭下方的高度場（雲底 −46 m、雲頂最高 −8 m），沿視線步進找交點，用高度場梯度當法線打光 → 一團團隆起的積雲
         if (d.y < .02) {
@@ -199,11 +200,11 @@ if (!IDS) {
           vec3 nn = normalize(vec3(-(cloudH(p + vec2(e, 0.)) - cloudH(p - vec2(e, 0.))) * A, 2. * e, -(cloudH(p + vec2(0., e)) - cloudH(p - vec2(0., e))) * A));
           vec3 L = normalize(vec3(uSun.x, .55, uSun.z));
           float dif = clamp(dot(nn, L) * .6 + .45, 0., 1.), rim = pow(1. - clamp(dot(nn, -d), 0., 1.), 3.);
-          vec3 cc = mix(vec3(.60,.60,.84), vec3(1.,.96,.90), dif * (.5 + .5 * hc));
+          vec3 cc = mix(vec3(.56,.56,.82), vec3(1.,.97,.92), dif * (.45 + .55 * hc));
           cc += vec3(1.,.68,.38) * (rim * .6 + pow(sd, 1.5) * dif * 1.0 + hc * dif * .3) * (1. + uGold * .7);   // 雲頂金邊
           cc = mix(cc, cc * vec3(.26,.31,.52) + vec3(.02,.03,.07) + vec3(.35,.4,.55) * rim * .4, uNight);
           cc = mix(vec3(.46,.56,.84), cc, smoothstep(0., .15, hc));   // 雲縫露出更低、更藍的雲層
-          float fog = 1. - exp(-t * .0015);
+          float fog = 1. - exp(-t * .0010);
           cc = mix(cc, hor * vec3(1.,.98,.97), fog);
           col = mix(col, cc, smoothstep(.02, -.002, d.y));
         }
@@ -212,7 +213,7 @@ if (!IDS) {
       vec3 pano(int r, vec3 d){                                     // 世界 1–5：全景（水平約 126°、垂直約 54°）
         float az = atan(d.x, -d.z), el = asin(clamp(d.y, -1., 1.));
         float vl = clamp(1. - (uHor[r] - el / .943), .004, .996), u = clamp(.5 + az / 2.2, .002, .998);
-        return texture2D(uAtlas, vec2(u, (float(4 - r) + vl) / 5.)).rgb;
+        return texture2D(uAtlas, vec2(u, (float(5 - r) + vl) / 6.)).rgb;
       }
       void main(){
         vec3 d = normalize(vDir);
@@ -225,13 +226,17 @@ if (!IDS) {
           w = uDW[i];
         }
         vec3 col;
-        if (w < .5) col = cloudWorld(d);
+        if (w < .5 && ${SKY_PROC}) col = cloudWorld(d);
         else {
-          int r = int(w + .5) - 1; col = pano(r, d);
-          col = mix(col, col * vec3(.30,.36,.60) + vec3(.01,.015,.04), uNight * (1. - uNN[r + 1]));
+          int r = w < .5 ? 5 : int(w + .5) - 1; col = pano(r, d);
+          float lum = dot(col, vec3(.3, .55, .15));                   // 夜：先降飽和再壓暗偏藍，免得藍到發亮
+          col = mix(col, mix(vec3(lum), col, .45) * vec3(.32,.38,.58) + vec3(.01,.015,.035), uNight * (1. - uNN[r == 5 ? 0 : r + 1]));
           col = mix(col, col * vec3(1.1,.94,.78), uGold * .5);
         }
-        gl_FragColor = vec4(col, 1.);
+        vec3 lin = pow(max(col, 0.), vec3(2.2));
+        lin *= 1. + 3. * smoothstep(.95, 1., max(lin.r, max(lin.g, lin.b))) * pow(max(dot(d, uSun), 0.), 400.);   // 只有太陽核心推過 1，後製才會發光
+        gl_FragColor = vec4(lin, 1.);
+        #include <colorspace_fragment>
       }` });
   const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 48, 24), m); sky.position.copy(camera.position); sky.renderOrder = -1; scene.add(sky);
 }
@@ -251,22 +256,30 @@ if (!IDS) {
 // ── 門：門框（Tripo 兩款，載入前先用方塊）＋兩片往遠處開的門板（方塊＋正面貼圖，樞紐在門柱內緣）＋門後世界的入口面 ──
 const rnd = (i, k) => { const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return x - Math.floor(x); };
 const FRAME_H = P.ph + P.beam;                                   // 門框總高
-const LEAVES = ['shoji', 'plank', 'vault', 'stained', 'painted', 'red'];
 const texL = new THREE.TextureLoader();
-const leafMats = LEAVES.map((n) => {
-  if (IDS) return M.leaf;
-  const t = texL.load(`tex/leaf_${n}.webp`); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-  const face = new THREE.MeshLambertMaterial({ map: t }), edge = new THREE.MeshLambertMaterial({ color: '#6b5340' });
-  return [edge, edge, edge, edge, face, face];                   // BoxGeometry 的六面：±x ±y ±z
-});
+// 輪廓光：逆光時物體邊緣的金邊（菲涅耳），顏色跟太陽走
+const RIM = { value: new THREE.Color(0, 0, 0) };
+function addRim(m, k) {
+  if (!m || IDS || m.userData.rim) return; m.userData.rim = true;
+  m.onBeforeCompile = (s) => {
+    s.uniforms.uRim = RIM;
+    s.fragmentShader = s.fragmentShader.replace('#include <common>', `#include <common>
+uniform vec3 uRim;`)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+      { float fr = pow(clamp(1. - abs(dot(normal, normalize(vViewPosition))), 0., 1.), 3.); reflectedLight.directDiffuse += uRim * fr * ${k.toFixed(2)}; }`);
+  };
+  m.customProgramCacheKey = () => 'rim' + k; m.needsUpdate = true;
+}
+const leafMats = LEAVES.map((n) => IDS ? M.leaf : leafMaterial(n, texL));
+leafMats.forEach((a) => Array.isArray(a) && addRim(a[4], 0.5));
 const leafG = new THREE.BoxGeometry(P.ow / 2, P.ph - 0.05, 0.07);
 function glowMat() {                                               // 開著的門往鏡頭這邊灑出那個世界的光
   return new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     uniforms: { color: { value: new THREE.Color() }, op: { value: 1 } },
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
     fragmentShader: `uniform vec3 color; uniform float op; varying vec2 vUv;
-      void main(){ float a = pow(vUv.y, 2.2) * smoothstep(0., .25, vUv.x) * smoothstep(1., .75, vUv.x);
-        gl_FragColor = vec4(color * a * op * .9, 1.);
+      void main(){ float a = pow(clamp(vUv.y, 0., 1.), 2.2) * smoothstep(0., .25, vUv.x) * smoothstep(1., .75, vUv.x);
+        gl_FragColor = vec4(color * a * op * .28, 1.);
         #include <colorspace_fragment>
       }` });
 }
@@ -316,7 +329,7 @@ function fitFrame(root) {
   const inner = Math.min(...xs.filter((x) => x > 0)) - Math.max(...xs.filter((x) => x < 0));
   const sy = FRAME_H / (box.max.y - box.min.y), sx = P.ow / inner;
   const g = new THREE.Group(); root.scale.set(sx, sy, sy); g.add(root);
-  root.traverse((o) => { if (o.isMesh) { o.material = IDS ? M.frame : o.material; o.castShadow = true; if (!IDS) { o.material.transparent = false; o.material.depthWrite = true; } } });
+  root.traverse((o) => { if (o.isMesh) { o.material = IDS ? M.frame : o.material; o.castShadow = true; if (!IDS) { o.material.transparent = false; o.material.depthWrite = true; addRim(o.material, 0.6); } } });
   return g;
 }
 const doors = [];
@@ -390,7 +403,7 @@ let mixer = null, act = null, head = null, neck = null;
 const girlReady = loader.loadAsync('models/girl.glb').then((g) => {
   const root = g.scene; root.rotation.y = Math.PI; root.position.set(P.gx, 0, -P.gz); root.scale.setScalar(P.gh / 1.5);
   root.traverse((o) => {
-    if (o.isMesh) { o.frustumCulled = false; o.castShadow = true; if (IDS) o.material = M.girl; else { o.material.transparent = false; o.material.depthWrite = true; } }
+    if (o.isMesh) { o.frustumCulled = false; o.castShadow = true; if (IDS) o.material = M.girl; else { o.material.transparent = false; o.material.depthWrite = true; addRim(o.material, 1.4); } }
     if (o.isBone && /Head$/.test(o.name)) head = o; if (o.isBone && /Neck$/.test(o.name)) neck = o;
   });
   scene.add(root);
@@ -403,7 +416,7 @@ const PET_G = 220, PET_A = 140, petals = [];
 let petalMesh = null;
 if (!IDS) {
   const pg = new THREE.PlaneGeometry(0.085, 0.06);
-  petalMesh = new THREE.InstancedMesh(pg, new THREE.MeshLambertMaterial({ side: THREE.DoubleSide, emissive: '#5a2a35', emissiveIntensity: 0.5 }), PET_G + PET_A);
+  petalMesh = new THREE.InstancedMesh(pg, new THREE.MeshLambertMaterial({ side: THREE.DoubleSide, emissive: '#ffb0c4', emissiveIntensity: 0.1 }), PET_G + PET_A);
   const col = new THREE.Color();
   for (let i = 0; i < PET_G + PET_A; i++) {
     const air = i >= PET_G, nearDoor = rnd(i, 3) < 0.55;             // 一半聚在門口（從門縫掉出來的）
@@ -435,19 +448,24 @@ if (Q.has('ref')) {
   document.body.appendChild(im);
 }
 
+// 最後一道畫面處理（post.js）：光暈、光束、柔和高光、調色、暗角、顆粒；?post=0 關掉
+const POST = !IDS && Q.get('post') !== '0' ? createPost(renderer, scene, camera, SUN) : null;
+const _ds = new THREE.Vector2();
+function render(t = performance.now() / 1000) { if (POST) POST.render(t); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } }
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  if (POST) { renderer.getDrawingBufferSize(_ds); POST.setSize(_ds.x, _ds.y); }
 }
 addEventListener('resize', resize); resize();
 
 // ── 狀態 → 氛圍目標值（每秒讀 state.json；?state= 可固定一種）──
 // speed m/s（走到關著的門前會自己停）、sun 陽光、gold 天色轉金、glow 消失點白光、petals 空中花瓣數、night 夜
 const STATES = {
-  idle:      { speed: 1.3, sun: 2.8, gold: 0,    glow: 1.0, petals: 40,  night: 0 },
+  idle:      { speed: 1.3, sun: 2.4, gold: 0,    glow: 1.0, petals: 40,  night: 0 },
   thinking:  { speed: 1.0, sun: 2.2, gold: 0,    glow: 0.8, petals: 30,  night: 0 },
-  working:   { speed: 2.6, sun: 2.9, gold: 0,    glow: 1.3, petals: 140, night: 0 },
-  finishing: { speed: 0.8, sun: 2.9, gold: 1,    glow: 1.6, petals: 60,  night: 0 },
-  waiting:   { speed: 1.0, sun: 2.4, gold: 0.25, glow: 1.0, petals: 25,  night: 0 },
+  working:   { speed: 2.6, sun: 2.5, gold: 0,    glow: 1.3, petals: 140, night: 0 },
+  finishing: { speed: 0.8, sun: 2.6, gold: 1,    glow: 1.6, petals: 60,  night: 0 },
+  waiting:   { speed: 1.0, sun: 2.2, gold: 0.25, glow: 1.0, petals: 25,  night: 0 },
   absent:    { speed: 0.9, sun: 0.5, gold: 0,    glow: 0.3, petals: 20,  night: 1 },
 };
 const SKY2STATE = { clear: 'idle', overcast: 'thinking', storm: 'working', clearing: 'finishing', waiting: 'waiting' };
@@ -493,6 +511,10 @@ function applyAtmos(dt) {
   AT.night = n;
   sun.intensity = lerp(cur.sun * lerp(pa.k, pb.k, b), 0.9, nEff);
   sun.color.lerpColors(pa.sun, pb.sun, b).lerp(C.sunGold, g * 0.7).lerp(C.sunNight, nEff);
+  RIM.value.copy(sun.color).multiplyScalar(sun.intensity * 0.32);
+  const em = ENVMAP[b > 0.5 ? ENV.next : ENV.cur];
+  if (em && scene.environment !== em) scene.environment = em;
+  scene.environmentIntensity = 0.55 * (1 - 0.75 * nEff);
   hemi.intensity = lerp(lerp(pa.h, pb.h, b), 0.9, nEff);
   hemi.color.lerpColors(pa.sky, pb.sky, b).lerp(C.skyNight, nEff); hemi.groundColor.lerpColors(pa.gnd, pb.gnd, b).lerp(C.gndNight, nEff);
   if (scene.fog) scene.fog.color.lerpColors(pa.fog, pb.fog, b).lerp(C.fogGold, g).lerp(C.fogNight, nEff);
@@ -585,12 +607,12 @@ function frame(now) {
   if (now - lastDraw < 1000 / 30 - 2) return; lastDraw = now;          // 規格：30 fps 上限
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   step(dt, now / 1000);
-  renderer.render(scene, camera);
+  render(now / 1000);
 }
 const _m = new THREE.Matrix4();
 function surfaces(t) {                                              // 石板、雲海、花瓣、小燈跟著走路距離捲動
   const off = FREEZE ? 0 : offset;
-  if (stone) stone.offset.y = (off / TILE) % 1;
+  if (WALK) for (const t of WALK.maps) t.offset.y = (off / TILE) % 1;
   walkU.uScroll.value = off % (LAMP_SP * 20000);
   skyU.uScroll.value = off % 5000; skyU.uT.value = FREEZE ? 0 : t;
   updatePetals(off % LOOP, FREEZE ? 2 : t);
@@ -612,8 +634,8 @@ requestAnimationFrame(frame);
 
 window.theme = { P, camera, scene, renderer, doors, ENV, STATES, PARAMS: STATES, CONFIG, AT, get mixer() { return mixer; }, get act() { return act; }, ready: Promise.all([ready, girlReady]),
   applyState, setSessions: (a) => { sessions = a || []; }, tool: () => { pending++; lastTool = AT.clock; }, requestState: () => stateName, setState: (n) => { stateName = n; },
-  draw: () => { step(0, performance.now() / 1000); renderer.render(scene, camera); },
-  tick: (sec = 1, fps = 30) => { for (let i = 0; i < sec * fps; i++) { simT += 1 / fps; step(1 / fps, simT); } renderer.render(scene, camera); } }; // 測試：手動推進時間（分頁在背景時 rAF 不跑）
+  draw: () => { step(0, performance.now() / 1000); render(); }, POST, resize,
+  tick: (sec = 1, fps = 30) => { for (let i = 0; i < sec * fps; i++) { simT += 1 / fps; step(1 / fps, simT); } render(simT); } }; // 測試：手動推進時間（分頁在背景時 rAF 不跑）
 let simT = 100;
 window.theme.mask = (w = 480, h = 270) => {
   const rt = new THREE.WebGLRenderTarget(w, h); const a = camera.aspect; camera.aspect = 16 / 9; camera.updateProjectionMatrix();

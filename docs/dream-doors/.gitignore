@@ -4,6 +4,7 @@
 _codex/doors/*.png
 _codex/girl/*.png
 _codex/worlds/*.png
+_codex/sky/*.png
 _codex/*/target.png
 _codex/**/*.log
 _codex/**/.done
